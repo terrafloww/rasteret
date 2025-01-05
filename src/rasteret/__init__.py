@@ -17,6 +17,4 @@ def version():
     """Return the version of the rasteret package."""
     return get_version("rasteret")
 
-__version__ = version()
-
 __all__ = ["Collection", "Rasteret", "CloudConfig", "AWSProvider", "DataSources"]
