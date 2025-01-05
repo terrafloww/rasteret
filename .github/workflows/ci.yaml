@@ -1,12 +1,19 @@
 name: CI
-
 on:
   push:
     branches:
       - main
+    paths:
+      - requirements.txt
+      - 'src/**'
+      - 'examples/**'
   pull_request:
     branches:
       - main
+    paths:
+      - requirements.txt
+      - 'src/**'
+      - 'examples/**'
 
 jobs:
   build:
