@@ -44,7 +44,7 @@ def main():
         custom_name=custom_name,
         data_source=data_source,
         output_dir=workspace_dir,
-        date_range=date_range
+        date_range=date_range,
     )
 
     # Create index if collection is not present
@@ -56,7 +56,7 @@ def main():
             # add platform filter for Landsat 9, 8, 7, 5, 4 if needed,
             # else remove it for all platforms
             # This is unique to Landsat STAC endpoint
-            platform={"in": ["LANDSAT_8"]}
+            platform={"in": ["LANDSAT_8"]},
         )
 
     # List existing collections
@@ -74,7 +74,7 @@ def main():
         # for separate processing of each geometry
         geometries=[aoi1_polygon, aoi2_polygon],
         bands=["B4", "B5"],
-        cloud_cover_lt=20
+        cloud_cover_lt=20,
     )
 
     print("\nInput dataset:")
