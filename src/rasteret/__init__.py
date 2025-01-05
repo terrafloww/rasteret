@@ -13,7 +13,6 @@ from rasteret.logging import setup_logger
 # Set up logging
 setup_logger("INFO")
 
-
 def version():
     """Return the version of the rasteret package."""
     return get_version("rasteret")
