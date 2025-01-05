@@ -7,7 +7,7 @@ Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs), optimized for Sent
 
 ## 🚀 Features
 - Fast byte-range based COG access
-- STAC Geoparquet creation with extra metadata columns 
+- STAC Geoparquet creation with COG internal metadata columns 
 - Paid public data support (AWS S3 Landsat)
 - Xarray and GeoDataFrame outputs
 - Parallel data loading
@@ -30,6 +30,10 @@ pip install rasteret
 ```
 
 ## 🏃‍♂️ Quick Start
+
+1. Define Areas of Interest
+
+Create polygons for your regions of interest:
 
 ```python
 from pathlib import Path
@@ -58,73 +62,84 @@ aoi2_polygon = Polygon([
 
 # get total bounds of all polygons above
 bbox = aoi1_polygon.union(aoi2_polygon).bounds
+```
 
+2. Configure Rasteret
 
-# 2. Setup variables for Rasteret
+Set up basic parameters for data collection:
 
-# give your own custom name for STAC collection
+```python
+# Collection configuration
 custom_name = "bangalore"
-
-# choose date range for which STAC Items are required
-date_range = ("2024-01-01", "2024-01-31")
-
-# choose either LANDSAT or SENTINEL2 from DataSources
+date_range = ("2024-01-01", "2024-12-31")
 data_source = DataSources.LANDSAT
 
-# choose a workspace directory where all STAC related data will be saved
+# Set up workspace
 workspace_dir = Path.home() / "rasteret_workspace"
 workspace_dir.mkdir(exist_ok=True)
+)
+```
+3. Initialize and Create Collection
 
-# 3. Initialize Rasteret
+Set up Rasteret processor and create a local collection:
+Containing internal COG metadata of scenes, and its STAC metadata
+
+```python
+# Initialize processor
 processor = Rasteret(
-    data_source=data_source
+    data_source=data_source,
     output_dir=workspace_dir,
     name=custom_name,
     date_range=date_range
 )
 
-# Create a local geoparquet based cache that contains COG metadata columns
-# and all STAC columns too. pystac_client filters can be provided here as well
-# such as cloud_cover, platform name etc.
-processor.create_index(
-    bbox=bbox,
-    date_range=date_range,
-    cloud_cover_lt=90, # Filter scenes with < 90% cloud cover
-    platform={"in": ["LANDSAT_8"]} 
+# Create local collection if not exists
+if processor._collection is None:
+    processor.create_collection(
+        bbox=bbox,
+        date_range=date_range,
+        cloud_cover_lt=90,
+        platform={"in": ["LANDSAT_8"]} 
     )
+```
 
-# 4. Query for bands in scenes that pass the filters on local geoparquet
-# and return images as xarray dataset
+4. Query and Process Data
+
+Query the collection and process data:
+
+```python
+# Query collection with filters
 ds = processor.get_xarray(
-    # passing multiple geometries will return xarray dataset with multiple dimensions
-    # and each geometry/AOIs respective timeseries
     geometries=[aoi1_polygon,aoi2_polygon],
-    bands=["B4", "B5"],  # Choose multiple bands if required
-
-    # extra filters 
-    cloud_cover_lt=20,  # Filter scenes with < 20% cloud cover
-    date_range=["2024-01-01", "2024-01-31"],  # Date range filter [start date , end date]
-    bbox=bbox,  # Spatial filter using a bbox is possible
-    )
+    bands=["B4", "B5"],
+    cloud_cover_lt=20,
+    date_range=["2024-01-10", "2024-01-30"]
 )
 
-# 5. Calculate NDVI
+# Calculate NDVI
 ndvi_ds = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
 
-# 6. Save each date as geotiff file from xarray
-# each geometry gets a separate folder if there are multiple geometries
+# Save results from xarray to geotiff files
 output_files = save_per_geometry(ndvi_ds, output_dir, prefix="ndvi")
 
 for geom_id, filepath in output_files.items():
     print(f"Geometry {geom_id}: {filepath}")
-
 ```
 
 ## Why this library?
 
-Details on why this library was made, and how it reads multiple COGs fast and efficient -
+Details on why this library was made, and how it reads multiple COGs efficiently and fast -
 [Read the blog post here](https://blog.terrafloww.com/efficient-cloud-native-raster-data-access-an-alternative-to-rasterio-gdal/)
 
+The aim of this library is to reduce the number of API calls to S3 objects (COGs), which
+will result in lesser time consumed for random file access and hence faster time series analysis without needing to convert COGs to other formats like Zarr or NetCDF.
+
+It also reduces the cost incurred by readers of paid data sources like Landsat on AWS where GET and LIST requests are significantly reduced due to local collection of COG internal metadata.
+
+Benchmarks -
+
+- Rasteret vs Zarr coming soon
+- [Rasteret vs Rasterio](docs/comparison.md)
 ## 🌍 Supported Data Sources
 - Sentinel-2 Level 2A
 - Landsat Collection 2 Level 2 SR
@@ -133,7 +148,7 @@ Details on why this library was made, and how it reads multiple COGs fast and ef
 Apache 2.0 License
 
 ## 🤝 Contributing
-Contributions welcome! Please read our contributing guidelines.
+Contributions welcome! 
 
 ## ⚠️ Known Limitations
 - High memory usage for large areas
