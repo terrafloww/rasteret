@@ -1,22 +1,19 @@
 # 🛰️ Rasteret
 
-"""
-Work-in-progress library. The APIs are subject to change, and as such, documentation is not yet available.
-"""
+Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs), optimized for Sentinel-2 and Landsat data.
 
-Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs), optimized for Sentinel-2 and Landsat 9 data.
+    > **Note:** Work-in-progress library. The APIs are subject to change, and as such, documentation is not yet available.
 
 ## 🚀 Features
 - Fast byte-range based COG access
-- STAC integration with GeoParquet indexing 
-- Cloud provider support (AWS S3)
+- STAC Geoparquet creation with extra metadata columns 
+- Paid public data support (AWS S3 Landsat)
 - Xarray and GeoDataFrame outputs
 - Parallel data loading
 - Simple high-level API
 
 ## 📋 Prerequisites
-- Python ≥3.8
-- GDAL
+- Python ≥3.10
 - AWS credentials (for accessing paid AWS buckets)
 
 ### ⚙️ AWS Credentials Setup
@@ -99,7 +96,6 @@ for geom_id, filepath in output_files.items():
 ## 🌍 Supported Data Sources
 - Sentinel-2 Level 2A
 - Landsat Collection 2 Level 2 SR
-
 
 ## 📝 License
 Apache 2.0 License
