@@ -58,7 +58,7 @@ class Rasteret:
                     f"Data source '{data_source}' requires valid AWS credentials"
                 )
 
-        # Generate name if not provided
+        # Generate name
         if custom_name and date_range:
             custom_name = Collection.create_name(
                 custom_name=custom_name, date_range=date_range, data_source=data_source
@@ -131,7 +131,7 @@ class Rasteret:
             )
             raise ValueError(error_msg)
 
-    def create_index(
+    def create_collection(
         self, bbox: List[float], date_range: List[str], force: bool = False, **filters
     ) -> None:
         """

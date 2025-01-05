@@ -11,8 +11,8 @@ Processing a year of Sentinel-2 data (20 scenes) for NDVI calculation:
 
 | Implementation | Processing Time | Memory Usage |
 |----------------|----------------|--------------|
-| Rasteret | ~8 seconds | Optimized |
-| Rasterio Direct | ~24 seconds | Higher |
+| Rasteret | ~8 seconds | High |
+| Rasterio Direct | ~24 seconds | Low |
 
 ### Key Differences
 
@@ -41,7 +41,7 @@ Both implementations produce identical NDVI values, validating the accuracy of R
 - Data processing: ~7.4s
 - Total time: ~8.0s
 - Average per scene: ~0.4s
-- Memory usage: Optimized (~200MB)
+- Memory usage: High (~200MB)
 
 #### Traditional Rasterio
 - STAC search: ~2s
@@ -49,15 +49,16 @@ Both implementations produce identical NDVI values, validating the accuracy of R
 - Total time: ~24.6s (with GDAL configs set for ideal performance)
 - Total time: ~44.6s (without GDAL configs set)
 - Average per scene: ~1.2s to ~2.2s
-- Memory usage: Higher (~500MB)
+- Memory usage: Low (~70MB)
 
 ### Performance Breakdown
 
 1. **Metadata Phase**
    - Rasteret's one-time metadata creation enables faster subsequent queries
-   - STAC filtering is 3x faster with pre-cached metadata
+   - STAC filtering is 3x faster in rasteret
 
 2. **Data Processing**
    - Rasteret: ~0.4s per scene
    - Rasterio: ~1.2s per scene
    - 3x improvement in per-scene processing
+   - Order of magnitude lesser API calls due to locally available COG and STAC metadata
