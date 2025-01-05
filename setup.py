@@ -35,6 +35,7 @@ setup(
             "pytest-asyncio>=0.23.2",
             "pytest-cov>=4.1.0",
             "black>=23.12.1",
+            "ruff==0.8.6",
             "isort>=5.13.2",
             "flake8>=7.0.0",
             "httpx[http2]",
