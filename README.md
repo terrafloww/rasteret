@@ -2,7 +2,8 @@
 
 Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs), optimized for Sentinel-2 and Landsat data.
 
-    > **Note:** Work-in-progress library. The APIs are subject to change, and as such, documentation is not yet available.
+> [!WARNING]  
+> Work-in-progress library. The APIs are subject to change, and as such, documentation is not yet available.
 
 ## 🚀 Features
 - Fast byte-range based COG access
