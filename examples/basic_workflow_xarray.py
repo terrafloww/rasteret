@@ -33,13 +33,14 @@ def main():
     # get total bounds of all polygons above for stac search and stac index creation
     bbox = aoi1_polygon.union(aoi2_polygon).bounds
 
-
     # 2. List existing collections
     print("1. Available Collections")
     print("----------------------")
     collections = Rasteret.list_collections(workspace_dir=workspace_dir)
     for c in collections:
-        print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
+        print(
+            f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes"
+        )
 
     # 3. Try loading existing collection or create new
     try:
@@ -51,13 +52,13 @@ def main():
             custom_name=custom_name,
             data_source=data_source,
             output_dir=workspace_dir,
-            date_range=date_range
+            date_range=date_range,
         )
         processor.create_collection(
             bbox=bbox,
             date_range=date_range,
             cloud_cover_lt=20,
-            platform={"in": ["LANDSAT_8"]}
+            platform={"in": ["LANDSAT_8"]},
         )
 
     print("\n3. Processing Data")

@@ -8,11 +8,11 @@ from shapely.geometry import Polygon
 from rasteret import Rasteret
 from rasteret.constants import DataSources
 
+
 def main():
-    
     """Demonstrate core workflows with Rasteret."""
     # 1. Setup workspace and parameters
-    
+
     workspace_dir = Path.home() / "rasteret_workspace"
     workspace_dir.mkdir(exist_ok=True)
 
@@ -25,19 +25,19 @@ def main():
     print("----------------------")
     collections = Rasteret.list_collections(workspace_dir=workspace_dir)
     for c in collections:
-        print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
+        print(
+            f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes"
+        )
 
     # 3. Define areas of interest
     print("\n2. Defining Areas of Interest")
     print("---------------------------")
-    aoi1_polygon = Polygon([
-        (77.55, 13.01), (77.58, 13.01), (77.58, 13.08), 
-        (77.55, 13.08), (77.55, 13.01)
-    ])
-    aoi2_polygon = Polygon([
-        (77.56, 13.02), (77.59, 13.02), (77.59, 13.09), 
-        (77.56, 13.09), (77.56, 13.02)
-    ])
+    aoi1_polygon = Polygon(
+        [(77.55, 13.01), (77.58, 13.01), (77.58, 13.08), (77.55, 13.08), (77.55, 13.01)]
+    )
+    aoi2_polygon = Polygon(
+        [(77.56, 13.02), (77.59, 13.02), (77.59, 13.09), (77.56, 13.09), (77.56, 13.02)]
+    )
     bbox = aoi1_polygon.union(aoi2_polygon).bounds
 
     # 4. Load or create collection
@@ -50,13 +50,13 @@ def main():
             custom_name=custom_name,
             data_source=data_source,
             output_dir=workspace_dir,
-            date_range=date_range
+            date_range=date_range,
         )
         processor.create_collection(
             bbox=bbox,
             date_range=date_range,
             cloud_cover_lt=20,
-            platform={"in": ["LANDSAT_8"]}
+            platform={"in": ["LANDSAT_8"]},
         )
 
     # 5. Process data

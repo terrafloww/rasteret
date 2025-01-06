@@ -13,25 +13,26 @@ logger = setup_logger()
 @dataclass
 class CloudConfig:
     """Storage configuration for data source"""
+
     provider: str
     requester_pays: bool = False
     region: str = "us-west-2"
     url_patterns: Dict[str, str] = None
 
     @classmethod
-    def get_config(cls, data_source: str) -> Optional['CloudConfig']:
+    def get_config(cls, data_source: str) -> Optional["CloudConfig"]:
         """Get cloud configuration for data source."""
         CONFIGS = {
             "landsat-c2l2-sr": cls(
                 provider="aws",
                 requester_pays=True,
                 region="us-west-2",
-                url_patterns={"https://landsatlook.usgs.gov/data/": "s3://usgs-landsat/"},
+                url_patterns={
+                    "https://landsatlook.usgs.gov/data/": "s3://usgs-landsat/"
+                },
             ),
             "sentinel-2-l2a": cls(
-                provider="aws", 
-                requester_pays=False, 
-                region="us-west-2"
+                provider="aws", requester_pays=False, region="us-west-2"
             ),
         }
         return CONFIGS.get(data_source.lower())
