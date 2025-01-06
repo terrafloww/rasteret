@@ -125,7 +125,7 @@ ndvi_ds = xr.Dataset(
 )
 
 # Save results from xarray to geotiff files
-output_files = save_per_geometry(ndvi_ds, output_dir, prefix="ndvi")
+output_files = save_per_geometry(ndvi_ds, output_dir, prefix="ndvi", data_var="NDVI")
 
 for geom_id, filepath in output_files.items():
     print(f"Geometry {geom_id}: {filepath}")
