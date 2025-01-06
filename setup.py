@@ -11,7 +11,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="rasteret",
-    version="0.1.0",
+    version="0.1.1",
     author="Sidharth Subramaniam",
     author_email="sid@terrafloww.com",
     description="Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs)",
