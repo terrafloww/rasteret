@@ -27,7 +27,7 @@ setup(
         "Topic :: Scientific/Engineering :: GIS",
         "Topic :: Scientific/Engineering :: Image Processing",
     ],
-    python_requires=">3.10<3.12",
+    python_requires=">=3.10,<3.12",
     install_requires=requirements,
     extras_require={
         "dev": [
