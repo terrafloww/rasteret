@@ -118,6 +118,11 @@ ds = processor.get_xarray(
 
 # Calculate NDVI
 ndvi_ds = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
+ndvi_ds = xr.Dataset(
+    {"NDVI": ndvi},
+    coords=ds.coords,
+    attrs=ds.attrs,
+)
 
 # Save results from xarray to geotiff files
 output_files = save_per_geometry(ndvi_ds, output_dir, prefix="ndvi")
