@@ -76,7 +76,8 @@ bbox = aoi1_polygon.union(aoi2_polygon).bounds
 
 2. Configure Rasteret
 
-Set up basic parameters for data collection:
+Set up basic parameters for data collection, and check for existing collection
+in your workspace directory, if they were created earlier.
 
 ```python
 # Collection configuration
@@ -88,43 +89,50 @@ data_source = DataSources.LANDSAT
 workspace_dir = Path.home() / "rasteret_workspace"
 workspace_dir.mkdir(exist_ok=True)
 )
+
+# List existing collections
+collections = Rasteret.list_collections()
+for c in collections:
+    print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
+
 ```
 3. Initialize and Create Collection
 
-Set up Rasteret processor and create a local collection:
+Create or Load a local collection:
 Containing internal COG metadata of scenes, and its STAC metadata
 
 ```python
-# Initialize processor
-processor = Rasteret(
-    data_source=data_source,
-    output_dir=workspace_dir,
-    custom_name=custom_name,
-    date_range=date_range
-)
-
-# Create local collection if not exists
-if processor._collection is None:
+# Try loading existing collection
+try:
+    # example name
+    processor = Rasteret.load_collection("bangalore_202401-12_landsat")
+except ValueError:
+    # Create new collection
+    processor = Rasteret(
+        custom_name="bangalore",
+        data_source=DataSources.LANDSAT,
+        date_range=("2024-01-01", "2024-01-31")
+    )
     processor.create_collection(
         bbox=bbox,
-        date_range=date_range,
-        cloud_cover_lt=90,
-        platform={"in": ["LANDSAT_8"]} 
+        cloud_cover_lt=20,
+        platform={"in": ["LANDSAT_8"]}
     )
 ```
 
-4. Query and Process Data
+4. Query collection and Process Data
 
-Query the collection and process data:
 
 ```python
-# Query collection with filters
+# Query collection with filters to get the data you want
 ds = processor.get_xarray(
     geometries=[aoi1_polygon,aoi2_polygon],
     bands=["B4", "B5"],
     cloud_cover_lt=20,
     date_range=["2024-01-10", "2024-01-30"]
 )
+
+# returns an xarray dataset with the data for the geometries and bands specified
 
 # Calculate NDVI
 ndvi_ds = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
@@ -134,12 +142,14 @@ ndvi_ds = xr.Dataset(
     attrs=ds.attrs,
 )
 
-# Save results from xarray to geotiff files
+# Save results from xarray to geotiff files, each geometry's data will be stored in
+# its own folder
 output_files = save_per_geometry(ndvi_ds, output_dir, file_prefix="ndvi", data_var="NDVI")
 
 for geom_id, filepath in output_files.items():
     print(f"Geometry {geom_id}: {filepath}")
 ```
+
 
 ## Why this library?
 
