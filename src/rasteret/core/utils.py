@@ -194,7 +194,7 @@ def calculate_scale_offset(
 
 
 def save_per_geometry(
-    ds: xr.Dataset, output_dir: Path, prefix: str = "geometry"
+    ds: xr.Dataset, output_dir: Path, file_prefix: str = "ndvi",  data_var: str = "NDVI"
 ) -> Dict[int, List[Path]]:
     """Save each geometry's timeseries as separate GeoTIFFs."""
     output_dir = Path(output_dir)
@@ -217,7 +217,7 @@ def save_per_geometry(
         # Process each timestamp
         for t in range(len(geom_ds.time)):
             # Extract 2D array for this timestamp
-            time_data = geom_ds.NDVI.isel(time=t)
+            time_data = geom_ds[data_var].isel(time=t)
             timestamp = pd.Timestamp(geom_ds.time[t].values)
 
             # Create 2D dataset
@@ -232,7 +232,7 @@ def save_per_geometry(
                 ds_2d.rio.write_transform(ds.rio.transform(), inplace=True)
 
             # Save as GeoTIFF
-            outfile = geom_dir / f"{prefix}_{timestamp.strftime('%Y%m%d')}.tif"
+            outfile = geom_dir / f"{file_prefix}_{timestamp.strftime('%Y%m%d')}.tif"
             ds_2d.rio.to_raster(outfile)
             outputs.setdefault(geom_id, []).append(outfile)
 
