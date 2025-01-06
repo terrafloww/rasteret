@@ -19,6 +19,16 @@ Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs), optimized for Sent
 
 ### ⚙️ AWS Credentials Setup
 For accessing paid AWS buckets:
+
+(Prefferable) You can set up your AWS credentials by creating a `~/.aws/credentials` file with the following content:
+
+```
+[default]
+aws_access_key_id = your_access_key
+aws_secret_access_key = your_secret_key
+```
+
+Alternatively, you can set the credentials as environment variables:
 ```bash
 export AWS_ACCESS_KEY_ID='your_access_key'
 export AWS_SECRET_ACCESS_KEY='your_secret_key'
