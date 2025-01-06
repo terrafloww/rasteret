@@ -14,7 +14,7 @@ Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs), optimized for Sent
 - Simple high-level API
 
 ## 📋 Prerequisites
-- Python ≥3.10
+- Python 3.10.x,3.11.x
 - AWS credentials (for accessing paid AWS buckets)
 
 ### ⚙️ AWS Credentials Setup
@@ -89,7 +89,7 @@ Containing internal COG metadata of scenes, and its STAC metadata
 processor = Rasteret(
     data_source=data_source,
     output_dir=workspace_dir,
-    name=custom_name,
+    custom_name=custom_name,
     date_range=date_range
 )
 
