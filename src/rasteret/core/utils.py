@@ -192,7 +192,7 @@ def calculate_scale_offset(
 
 
 def save_per_geometry(
-    ds: xr.Dataset, output_dir: Path, file_prefix: str = "ndvi",  data_var: str = "NDVI"
+    ds: xr.Dataset, output_dir: Path, file_prefix: str = "ndvi", data_var: str = "NDVI"
 ) -> Dict[int, List[Path]]:
     """Save each geometry's timeseries as separate GeoTIFFs."""
     output_dir = Path(output_dir)

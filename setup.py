@@ -42,5 +42,5 @@ setup(
         ]
     },
     include_package_data=True,
-    zip_safe=False
-    )
+    zip_safe=False,
+)
