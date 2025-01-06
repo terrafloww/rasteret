@@ -96,7 +96,9 @@ def main():
     output_dir.mkdir(exist_ok=True)
 
     # Save per geometry, give prefix for output files in this case "ndvi"
-    output_files = save_per_geometry(ndvi_ds, output_dir, file_prefix="ndvi", data_var="NDVI")
+    output_files = save_per_geometry(
+        ndvi_ds, output_dir, file_prefix="ndvi", data_var="NDVI"
+    )
 
     print("\nProcessed NDVI files:")
     for geom_id, filepath in output_files.items():
