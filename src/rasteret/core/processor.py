@@ -72,7 +72,7 @@ class Rasteret:
         self.output_dir = Path(output_dir or Path.home() / "rasteret_workspace")
         self.custom_name = custom_name
         self.date_range = date_range
-        
+
         # Initialize cloud config early
         self.cloud_config = CloudConfig.get_config(str(data_source))
         self._cloud_provider = None if not self.cloud_config else AWSProvider()
@@ -101,9 +101,9 @@ class Rasteret:
         """Ensure collection exists and is loaded with proper partitioning."""
         if not self.custom_name:
             raise ValueError("custom_name is required")
-            
+
         stac_path = self.output_dir / f"{self.custom_name}_stac"
-        
+
         if self._collection is None:
             if stac_path.exists():
                 self._collection = Collection.from_local(stac_path)
@@ -111,8 +111,11 @@ class Rasteret:
                 raise ValueError(f"Collection not found: {stac_path}")
 
     def create_collection(
-        self, bbox: List[float], date_range: Optional[Tuple[str, str]] = None, 
-        force: bool = False, **filters
+        self,
+        bbox: List[float],
+        date_range: Optional[Tuple[str, str]] = None,
+        force: bool = False,
+        **filters,
     ) -> None:
         """Create or load STAC index."""
         if not self.custom_name:
@@ -120,13 +123,11 @@ class Rasteret:
 
         # Create standardized collection name with date range
         collection_name = Collection.create_name(
-            self.custom_name,
-            date_range or self.date_range,
-            str(self.data_source)
+            self.custom_name, date_range or self.date_range, str(self.data_source)
         )
-        
+
         stac_path = self.output_dir / f"{collection_name}_stac"
-        
+
         if stac_path.exists() and not force:
             self._collection = Collection.from_local(stac_path)
             logger.info(f"Loading existing collection: {collection_name}")
@@ -139,14 +140,12 @@ class Rasteret:
             output_dir=stac_path,
             cloud_provider=self.provider,
             cloud_config=self.cloud_config,
-            name=collection_name
+            name=collection_name,
         )
 
         self._collection = asyncio.run(
             indexer.build_index(
-                bbox=bbox,
-                date_range=date_range or self.date_range,
-                query=filters
+                bbox=bbox, date_range=date_range or self.date_range, query=filters
             )
         )
 
@@ -154,62 +153,72 @@ class Rasteret:
             logger.info(f"Created collection: {collection_name}")
 
     @classmethod
-    def list_collections(cls, workspace_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    def list_collections(
+        cls, workspace_dir: Optional[Path] = None
+    ) -> List[Dict[str, Any]]:
         """List collections with metadata."""
         workspace_dir = workspace_dir or Path.home() / "rasteret_workspace"
         collections = []
-        
+
         for stac_dir in workspace_dir.glob("*_stac"):
             try:
                 # Parse name for data source
-                name = stac_dir.name.replace('_stac', '')
-                data_source = name.split('_')[-1].upper()
-                
+                name = stac_dir.name.replace("_stac", "")
+                data_source = name.split("_")[-1].upper()
+
                 # Read dataset
                 dataset = ds.dataset(str(stac_dir))
                 table = dataset.to_table()
                 df = table.to_pandas()
-                
+
                 # Get date range from data
-                if 'datetime' in df.columns:
-                    start_date = pd.to_datetime(df['datetime'].min()).strftime('%Y-%m-%d')
-                    end_date = pd.to_datetime(df['datetime'].max()).strftime('%Y-%m-%d')
+                if "datetime" in df.columns:
+                    start_date = pd.to_datetime(df["datetime"].min()).strftime(
+                        "%Y-%m-%d"
+                    )
+                    end_date = pd.to_datetime(df["datetime"].max()).strftime("%Y-%m-%d")
                     date_range = f"{start_date} to {end_date}"
                 else:
                     date_range = ""
-                    
-                collections.append({
-                    'name': name,
-                    'data_source': data_source,
-                    'date_range': date_range,
-                    'size': len(df),
-                    'created': datetime.fromtimestamp(stac_dir.stat().st_ctime).strftime('%Y-%m-%d %H:%M:%S')
-                })
-                
+
+                collections.append(
+                    {
+                        "name": name,
+                        "data_source": data_source,
+                        "date_range": date_range,
+                        "size": len(df),
+                        "created": datetime.fromtimestamp(
+                            stac_dir.stat().st_ctime
+                        ).strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
+
             except Exception as e:
                 logger.debug(f"Failed to read collection {stac_dir}: {e}")
-                
+
         return collections
 
     @classmethod
-    def load_collection(cls, collection_name: str, workspace_dir: Optional[Path] = None) -> 'Rasteret':
+    def load_collection(
+        cls, collection_name: str, workspace_dir: Optional[Path] = None
+    ) -> "Rasteret":
         """Load collection by name."""
         workspace_dir = workspace_dir or Path.home() / "rasteret_workspace"
         stac_path = workspace_dir / f"{collection_name.replace('_stac', '')}_stac"
-        
+
         if not stac_path.exists():
             raise ValueError(f"Collection not found: {collection_name}")
-        
+
         # Get data source from name
-        data_source = collection_name.split('_')[-1].upper()
-        
+        data_source = collection_name.split("_")[-1].upper()
+
         # Create processor
         processor = cls(
             data_source=getattr(DataSources, data_source, data_source),
             output_dir=workspace_dir,
-            custom_name=collection_name
+            custom_name=collection_name,
         )
-        
+
         # Load collection
         processor._collection = Collection.from_local(stac_path)
 
