@@ -44,13 +44,21 @@ class Collection:
     """
 
     def __init__(
-        self, dataset: ds.Dataset, name: str, description: Optional[str] = None
+        self,
+        dataset: Optional[ds.Dataset] = None,
+        name: str = "",
+        description: str = "",
+        data_source: str = "",
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
     ):
-        """Initialize collection with dataset and name."""
+        """Initialize Collection."""
         self.dataset = dataset
         self.name = name
         self.description = description
-        self._storage_path = None
+        self.data_source = data_source
+        self.start_date = start_date
+        self.end_date = end_date
         self._validate_parquet_dataset()
 
     @classmethod
@@ -187,91 +195,73 @@ class Collection:
         filtered_dataset = self.dataset.filter(filter_expr)
         return Collection(dataset=filtered_dataset, name=self.name)
 
-    def to_geodataframe(self) -> gpd.GeoDataFrame:
-        """
-        Convert collection to GeoDataFrame for analysis.
-
-        Returns:
-            GeoDataFrame with scene metadata and geometries
-        """
-        if len(self.dataset.to_table()) == 0:
-            return gpd.GeoDataFrame()
-
-        df = self.dataset.to_table().to_pandas()
-        return gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
     @classmethod
-    def list_collections(cls, output_dir: Union[str, Path]) -> List[Dict[str, Any]]:
-        """List valid parquet collections with year/month partitioning."""
-        path = Path(output_dir)
+    def list_collections(cls, workspace_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+        """List collections with metadata."""
+        if workspace_dir is None:
+            workspace_dir = Path.home() / "rasteret_workspace"
+            
         collections = []
-
-        # Skip these folders
-        IGNORE_FOLDERS = {".git", "__pycache__", "temp"}
-
-        for collection_dir in path.iterdir():
-            if not collection_dir.is_dir() or collection_dir.name in IGNORE_FOLDERS:
-                continue
-
-            # Only process _stac folders
-            if not collection_dir.name.endswith("_stac"):
-                continue
-
+        
+        # Look for _stac directories
+        for stac_dir in workspace_dir.glob("*_stac"):
             try:
-                # Now pass only numeric subfolders to ds.dataset
-                dataset = ds.dataset(
-                    str(collection_dir),
-                    format="parquet",
-                    partitioning=ds.HivePartitioning(
-                        pa.schema([("year", pa.int32()), ("month", pa.int32())])
-                    ),
-                    exclude_invalid_files=True,
-                    filesystem=pa.fs.LocalFileSystem(),
-                )
-
-                # Validate dataset has data
-                if dataset.files:
-                    table = dataset.to_table()
-                    collections.append(
-                        {
-                            "name": collection_dir.name,
-                            "size": len(table),
-                            "created": collection_dir.stat().st_ctime,
-                        }
+                dataset = ds.dataset(str(stac_dir))
+                table = dataset.to_table()
+                df = table.to_pandas()
+                
+                # Get collection name without _stac suffix
+                name = stac_dir.name.replace('_stac', '')
+                
+                # Get date range from data
+                if 'datetime' in df.columns:
+                    date_range = (
+                        pd.to_datetime(df['datetime'].min()).strftime('%Y-%m-%d'),
+                        pd.to_datetime(df['datetime'].max()).strftime('%Y-%m-%d')
                     )
-
+                else:
+                    date_range = None
+                    
+                # Get data source from name
+                data_source = name.split('_')[-1] if '_' in name else 'unknown'
+                
+                collections.append({
+                    'name': name,
+                    'data_source': data_source,
+                    'date_range': date_range,
+                    'size': len(df),
+                    'created': stac_dir.stat().st_ctime
+                })
+                
             except Exception as e:
-                logger.debug(f"Skipping {collection_dir}: {str(e)}")
+                logger.debug(f"Failed to read collection {stac_dir}: {e}")
                 continue
-
+                
         return collections
 
-    def save_to_parquet(
-        self, path: Union[str, Path], partition_by: List[str] = ["year", "month"]
-    ) -> None:
-        """Save collection to local storage as partitioned dataset."""
+    def save_to_parquet(self, path: Union[str, Path], partition_by: List[str] = ["year", "month"]) -> None:
+        """Save collection with enhanced metadata."""
         path = Path(path)
-
         path.mkdir(parents=True, exist_ok=True)
 
         if self.dataset is None:
             raise ValueError("No Pyarrow dataset provided")
-        elif len(self.dataset.to_table()) == 0:
-            raise ValueError("No data to save")
-        elif not partition_by:
-            raise ValueError("Partition columns required")
-        elif any(col not in self.dataset.schema.names for col in partition_by):
-            raise ValueError("Partition columns not found in schema")
-        elif not path.is_dir():
-            raise ValueError("Invalid directory path")
 
-        # Get table and add metadata
         table = self.dataset.to_table()
+        
+        # Enhanced metadata with fallbacks
         custom_metadata = {
-            b"description": (
-                self.description.encode("utf-8") if self.description else b""
-            ),
+            b"description": self.description.encode("utf-8") if self.description else b"",
             b"created": str(datetime.now()).encode("utf-8"),
+            b"custom_name": self.name.encode("utf-8") if self.name else b"",
+            b"data_source": self.data_source.encode("utf-8") if self.data_source else b"unknown",
+            b"date_range": (
+                f"{self.start_date.isoformat()},{self.end_date.isoformat()}".encode("utf-8")
+                if self.start_date and self.end_date
+                else b""
+            ),
+            b"version": b"1.0.0",
         }
 
         # Merge with existing metadata
@@ -361,23 +351,61 @@ class Collection:
         return {k: v for k, v in row.items() if k.endswith("_metadata")}
 
     @classmethod
+    def _format_date_range(
+        cls, start_date: pd.Timestamp, end_date: pd.Timestamp
+    ) -> str:
+        """Format date range for collection name."""
+        if start_date.year == end_date.year:
+            return f"{start_date.strftime('%Y%m')}-{end_date.strftime('%m')}"
+        return f"{start_date.strftime('%Y%m')}-{end_date.strftime('%Y%m')}"
+
+    @classmethod
     def create_name(
         cls, custom_name: str, date_range: Tuple[str, str], data_source: str
     ) -> str:
-        """Create standardized collection name internally."""
+        """Create standardized collection name."""
+        if "_" in custom_name:
+            raise ValueError("Custom name cannot contain underscore (_)")
+
         start_date = pd.to_datetime(date_range[0])
+        end_date = pd.to_datetime(date_range[1])
+
         name_parts = [
-            custom_name.lower().replace(" ", "_"),
-            start_date.strftime("%Y%m"),
-            data_source.split("-")[0],  # First part of data source
+            custom_name.lower().replace(" ", "-"),
+            cls._format_date_range(start_date, end_date),
+            data_source.split("-")[0].lower(),
         ]
         return "_".join(name_parts)
 
     @classmethod
     def parse_name(cls, name: str) -> Dict[str, str]:
-        """Parse collection name components internally."""
+        """Parse collection name components."""
         try:
-            custom_name, date, source = name.split("_")
-            return {"custom_name": custom_name, "date": date, "data_source": source}
-        except ValueError:
-            return {"name": name}  # Fallback if name doesn't match pattern
+            # Remove _stac suffix if present
+            name = name.replace('_stac', '')
+            
+            # Split parts
+            parts = name.split('_')
+            if len(parts) != 3:
+                raise ValueError(f"Invalid name format: {name}")
+                
+            custom_name, date_str, source = parts
+            
+            # Parse date range
+            date_parts = date_str.split('-')
+            if len(date_parts) != 2:
+                raise ValueError(f"Invalid date format: {date_str}")
+                
+            return {
+                'custom_name': custom_name,
+                'data_source': source,
+                'name': name  # Return full standardized name
+            }
+            
+        except Exception as e:
+            logger.debug(f"Failed to parse name {name}: {e}")
+            return {
+                'name': name,
+                'custom_name': name,
+                'data_source': 'unknown'
+            }

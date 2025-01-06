@@ -12,17 +12,14 @@ from rasteret.core.utils import save_per_geometry
 
 
 def main():
-
-    # 1. Define parameters
-    custom_name = "bangalore"
-    date_range = ("2024-01-01", "2024-01-31")
-    data_source = DataSources.LANDSAT  # or SENTINEL2
-
+    """Example of Rasteret workflow with xarray output."""
+    # 1. Setup workspace and parameters
     workspace_dir = Path.home() / "rasteret_workspace"
     workspace_dir.mkdir(exist_ok=True)
 
-    print("1. Defining Area of Interest")
-    print("--------------------------")
+    custom_name = "bangalore"
+    date_range = ("2024-01-01", "2024-03-31")
+    data_source = DataSources.LANDSAT
 
     # Define area and time of interest
     aoi1_polygon = Polygon(
@@ -36,34 +33,32 @@ def main():
     # get total bounds of all polygons above for stac search and stac index creation
     bbox = aoi1_polygon.union(aoi2_polygon).bounds
 
-    print("\n2. Creating and Loading Collection")
-    print("--------------------------")
 
-    # 2. Initialize processor - name generated automatically
-    processor = Rasteret(
-        custom_name=custom_name,
-        data_source=data_source,
-        output_dir=workspace_dir,
-        date_range=date_range,
-    )
+    # 2. List existing collections
+    print("1. Available Collections")
+    print("----------------------")
+    collections = Rasteret.list_collections(workspace_dir=workspace_dir)
+    for c in collections:
+        print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
 
-    # Create index if collection is not present
-    if processor._collection is None:
+    # 3. Try loading existing collection or create new
+    try:
+        processor = Rasteret.load_collection(f"{custom_name}_202401-03_landsat")
+    except ValueError:
+        print("\n2. Creating New Collection")
+        print("-------------------------")
+        processor = Rasteret(
+            custom_name=custom_name,
+            data_source=data_source,
+            output_dir=workspace_dir,
+            date_range=date_range
+        )
         processor.create_collection(
             bbox=bbox,
             date_range=date_range,
             cloud_cover_lt=20,
-            # add platform filter for Landsat 9, 8, 7, 5, 4 if needed,
-            # else remove it for all platforms
-            # This is unique to Landsat STAC endpoint
-            platform={"in": ["LANDSAT_8"]},
+            platform={"in": ["LANDSAT_8"]}
         )
-
-    # List existing collections
-    collections = Rasteret.list_collections(dir=workspace_dir)
-    print("Available collections:")
-    for c in collections:
-        print(f"- {c['name']}: {c['size']} scenes")
 
     print("\n3. Processing Data")
     print("----------------")

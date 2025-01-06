@@ -52,13 +52,15 @@ LANDSAT9_BANDS: Dict[str, str] = {
 
 
 STAC_ENDPOINTS = {
-    "sentinel-2-l2a": "https://earth-search.aws.element84.com/v1",
-    "landsat-c2l2-sr": "https://landsatlook.usgs.gov/stac-server",
+    DataSources.SENTINEL2: "https://earth-search.aws.element84.com/v1",
+    DataSources.LANDSAT: "https://landsatlook.usgs.gov/stac-server",
 }
 
 STAC_COLLECTION_BAND_MAPS = {
-    "sentinel-2-l2a": SENTINEL2_BANDS,
-    "landsat-c2l2-sr": LANDSAT9_BANDS,
+    DataSources.SENTINEL2: SENTINEL2_BANDS,
+    DataSources.LANDSAT: LANDSAT9_BANDS,
+    "LANDSAT" : LANDSAT9_BANDS,
+    "SENTINEL2" : SENTINEL2_BANDS
 }
 
 # Metadata struct for COG headers

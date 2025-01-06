@@ -6,62 +6,65 @@ from pathlib import Path
 from shapely.geometry import Polygon
 
 from rasteret import Rasteret
-
+from rasteret.constants import DataSources
 
 def main():
+    
     """Demonstrate core workflows with Rasteret."""
-    # 1. Define parameters
-
-    custom_name = "bangalore3"
-    date_range = ("2024-01-01", "2024-01-31")
-    data_source = "landsat-c2l2-sr"
-
+    # 1. Setup workspace and parameters
+    
     workspace_dir = Path.home() / "rasteret_workspace"
     workspace_dir.mkdir(exist_ok=True)
 
-    print("1. Defining Area of Interest")
-    print("--------------------------")
+    custom_name = "bangalore"
+    date_range = ("2024-01-01", "2024-01-31")
+    data_source = DataSources.LANDSAT
 
-    # Define area and time of interest
-    aoi_polygon = Polygon(
-        [(77.55, 13.01), (77.58, 13.01), (77.58, 13.08), (77.55, 13.08), (77.55, 13.01)]
-    )
+    # 2. List existing collections
+    print("1. Available Collections")
+    print("----------------------")
+    collections = Rasteret.list_collections(workspace_dir=workspace_dir)
+    for c in collections:
+        print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
 
-    aoi_polygon2 = Polygon(
-        [(77.56, 13.02), (77.59, 13.02), (77.59, 13.09), (77.56, 13.09), (77.56, 13.02)]
-    )
+    # 3. Define areas of interest
+    print("\n2. Defining Areas of Interest")
+    print("---------------------------")
+    aoi1_polygon = Polygon([
+        (77.55, 13.01), (77.58, 13.01), (77.58, 13.08), 
+        (77.55, 13.08), (77.55, 13.01)
+    ])
+    aoi2_polygon = Polygon([
+        (77.56, 13.02), (77.59, 13.02), (77.59, 13.09), 
+        (77.56, 13.09), (77.56, 13.02)
+    ])
+    bbox = aoi1_polygon.union(aoi2_polygon).bounds
 
-    # get total bounds of all polygons above
-    bbox = aoi_polygon.union(aoi_polygon2).bounds
-
-    print("\n2. Creating and Loading Collection")
-    print("--------------------------")
-
-    # 2. Initialize processor - name generated automatically
-    processor = Rasteret(
-        custom_name=custom_name,
-        data_source=data_source,
-        output_dir=workspace_dir,
-        date_range=date_range,
-    )
-
-    # Create index if needed
-    if processor._collection is None:
-        processor.create_index(
-            bbox=bbox, date_range=date_range, query={"cloud_cover_lt": 20}
+    # 4. Load or create collection
+    print("\n3. Loading/Creating Collection")
+    print("---------------------------")
+    try:
+        processor = Rasteret.load_collection(f"{custom_name}_202401_landsat")
+    except ValueError:
+        processor = Rasteret(
+            custom_name=custom_name,
+            data_source=data_source,
+            output_dir=workspace_dir,
+            date_range=date_range
+        )
+        processor.create_collection(
+            bbox=bbox,
+            date_range=date_range,
+            cloud_cover_lt=20,
+            platform={"in": ["LANDSAT_8"]}
         )
 
-    # List existing collections
-    collections = Rasteret.list_collections(dir=workspace_dir)
-    print("Available collections:")
-    for c in collections:
-        print(f"- {c['name']}: {c['size']} scenes")
-
-    print("\n3. Processing Data")
+    # 5. Process data
+    print("\n4. Processing Data")
     print("----------------")
 
     df = processor.get_gdf(
-        geometries=[aoi_polygon, aoi_polygon2], bands=["B4", "B5"], cloud_cover_lt=20
+        geometries=[aoi1_polygon, aoi2_polygon], bands=["B4", "B5"], cloud_cover_lt=20
     )
 
     print(f"Columns: {df.columns}")
