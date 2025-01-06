@@ -139,7 +139,8 @@ It also reduces the cost incurred by readers of paid data sources like Landsat o
 Benchmarks -
 
 - Rasteret vs Zarr coming soon
-- [Rasteret vs Rasterio](docs/comparison.md)
+- [Rasteret vs Rasterio](https://blog.terrafloww.com/efficient-cloud-native-raster-data-access-an-alternative-to-rasterio-gdal/)
+
 ## 🌍 Supported Data Sources
 - Sentinel-2 Level 2A
 - Landsat Collection 2 Level 2 SR
