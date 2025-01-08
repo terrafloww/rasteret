@@ -31,6 +31,147 @@ class COGTileRequest:
     metadata: CogMetadata  # Full metadata including transform
 
 
+class COGReader:
+    """Manages connection pooling and COG reading operations."""
+
+    def __init__(self, max_concurrent: int = 50):
+        self.max_concurrent = max_concurrent
+        self.limits = httpx.Limits(
+            max_keepalive_connections=max_concurrent,
+            max_connections=max_concurrent,
+            keepalive_expiry=60.0,  # Shorter keepalive for HTTP/2
+        )
+        self.timeout = httpx.Timeout(30.0, connect=10.0)
+        self.client = None
+        self.sem = None
+        self.batch_size = 12  # Reduced for better HTTP/2 multiplexing
+
+    async def __aenter__(self):
+        self.client = httpx.AsyncClient(
+            timeout=self.timeout,
+            limits=self.limits,
+            http2=True,
+            verify=True,
+            trust_env=True,
+        )
+        self.sem = asyncio.Semaphore(self.max_concurrent)
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.client:
+            await self.client.aclose()
+
+    def merge_ranges(
+        self, requests: List[COGTileRequest], gap_threshold: int = 1024
+    ) -> List[Tuple[int, int]]:
+        """Merge nearby byte ranges to minimize HTTP requests"""
+        if not requests:
+            return []
+
+        ranges = [(r.offset, r.offset + r.size) for r in requests]
+        ranges.sort()
+        merged = [ranges[0]]
+
+        for curr in ranges[1:]:
+            prev = merged[-1]
+            if curr[0] <= prev[1] + gap_threshold:
+                merged[-1] = (prev[0], max(prev[1], curr[1]))
+            else:
+                merged.append(curr)
+
+        return merged
+
+    async def read_merged_tiles(
+        self, requests: List[COGTileRequest], debug: bool = False
+    ) -> Dict[Tuple[int, int], np.ndarray]:
+        """Parallel tile reading with HTTP/2 multiplexing"""
+        if not requests:
+            return {}
+
+        # Group by URL for HTTP/2 connection reuse
+        url_groups = {}
+        for req in requests:
+            url_groups.setdefault(req.url, []).append(req)
+
+        results = {}
+        for url, group_requests in url_groups.items():
+            ranges = self.merge_ranges(group_requests)
+
+            # Process ranges in batches
+            for i in range(0, len(ranges), self.batch_size):
+                batch = ranges[i : i + self.batch_size]
+                batch_tasks = [
+                    self._read_and_process_range(
+                        url,
+                        start,
+                        end,
+                        [r for r in group_requests if start <= r.offset < end],
+                    )
+                    for start, end in batch
+                ]
+                batch_results = await asyncio.gather(*batch_tasks)
+                for result in batch_results:
+                    results.update(result)
+
+        return results
+
+    async def _read_and_process_range(
+        self, url: str, start: int, end: int, requests: List[COGTileRequest]
+    ) -> Dict[Tuple[int, int], np.ndarray]:
+        """Read and process a byte range with retries"""
+        async with self.sem:
+            data = await self._read_range(url, start, end)
+
+            # Process tiles in parallel
+            tasks = []
+            for req in requests:
+                offset = req.offset - start
+                tile_data = data[offset : offset + req.size]
+                tasks.append(self._process_tile(tile_data, req.metadata))
+
+            tiles = await asyncio.gather(*tasks)
+            return {(req.row, req.col): tile for req, tile in zip(requests, tiles)}
+
+    async def _read_range(self, url: str, start: int, end: int) -> bytes:
+        """HTTP/2 optimized range reading"""
+        headers = {"Range": f"bytes={start}-{end-1}"}
+
+        for attempt in range(3):
+            try:
+                async with self.sem:
+                    response = await self.client.get(url, headers=headers)
+                    response.raise_for_status()
+                    return response.content
+            except Exception:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(1 * (2**attempt))
+
+    async def _process_tile(self, data: bytes, metadata: CogMetadata) -> np.ndarray:
+        """Process tile data in thread pool"""
+        loop = asyncio.get_running_loop()
+
+        # Decompress in thread pool
+        decompressed = await loop.run_in_executor(None, imagecodecs.zlib_decode, data)
+
+        # Process in thread pool to avoid blocking
+        return await loop.run_in_executor(
+            None, self._process_tile_sync, decompressed, metadata
+        )
+
+    def _process_tile_sync(self, data: bytes, metadata: CogMetadata) -> np.ndarray:
+        """Synchronous tile processing"""
+        tile = np.frombuffer(data, dtype=np.uint16).reshape(
+            (metadata.tile_height, metadata.tile_width)
+        )
+
+        if metadata.predictor == 2:
+            tile = tile.astype(np.uint16)
+            np.cumsum(tile, axis=1, out=tile)
+
+        return tile.astype(np.float32)
+
+
 def compute_tile_indices(
     geometry: Polygon,
     transform: List[float],
@@ -202,46 +343,6 @@ def apply_mask_and_crop(
     return masked_data, cropped_transform
 
 
-async def read_tile(
-    request: COGTileRequest,
-    client: httpx.AsyncClient,
-    sem: asyncio.Semaphore,
-    retries: int = 3,
-    retry_delay: float = 1.0,
-) -> Optional[np.ndarray]:
-    """Read a single tile using byte range request."""
-    for attempt in range(retries):
-        try:
-            async with sem:
-                headers = {
-                    "Range": f"bytes={request.offset}-{request.offset+request.size-1}"
-                }
-                response = await client.get(request.url, headers=headers)
-                if response.status_code != 206:
-                    raise ValueError(f"Range request failed: {response.status_code}")
-
-                # Simple, direct data flow like tiles.py
-                decompressed = imagecodecs.zlib_decode(response.content)
-                data = np.frombuffer(decompressed, dtype=np.uint16)
-                data = data.reshape(
-                    (request.metadata.tile_height, request.metadata.tile_width)
-                )
-
-                # Predictor handling exactly like tiles.py
-                if request.metadata.predictor == 2:
-                    data = data.astype(np.uint16)
-                    for i in range(data.shape[0]):
-                        data[i] = np.cumsum(data[i], dtype=np.uint16)
-
-                return data.astype(np.float32)
-
-        except Exception as e:
-            if attempt == retries - 1:
-                logger.error(f"Failed to read tile: {str(e)}")
-                return None
-            await asyncio.sleep(retry_delay * (2**attempt))
-
-
 async def read_cog_tile_data(
     url: str,
     metadata: CogMetadata,
@@ -249,32 +350,9 @@ async def read_cog_tile_data(
     max_concurrent: int = 50,
     debug: bool = False,
 ) -> Tuple[np.ndarray, Optional[Affine]]:
-    """Read COG data, optionally masked by geometry.
-
-    Args:
-        url: URL of the COG file
-        metadata: COG metadata including transform
-        geometry: Optional polygon to mask/filter data
-        max_concurrent: Maximum concurrent requests
-        debug: Enable debug logging
-
-    Returns:
-        Tuple of:
-        - np.ndarray: The masked data array
-        - Affine: Transform matrix for the masked data
-          None if no transform available
-    """
+    """Read COG data, optionally masked by geometry."""
     if debug:
-        logger.info(
-            f"""
-        Input Parameters:
-        - CRS: {metadata.crs}
-        - Transform: {metadata.transform}
-        - Image Size: {metadata.width}x{metadata.height}
-        - Tile Size: {metadata.tile_width}x{metadata.tile_height}
-        - Geometry: {geometry.wkt if geometry else None}
-        """
-        )
+        logger.info(f"Reading COG data from {url}")
 
     if metadata.transform is None:
         return np.array([]), None
@@ -303,31 +381,19 @@ async def read_cog_tile_data(
     if not intersecting_tiles:
         return np.array([]), None
 
-    # Set up HTTP client with connection pooling
-    limits = httpx.Limits(
-        max_keepalive_connections=max_concurrent, max_connections=max_concurrent
-    )
-    timeout = httpx.Timeout(30.0)
+    # Create tile requests
+    requests = []
+    tiles_x = (metadata.width + metadata.tile_width - 1) // metadata.tile_width
 
-    async with httpx.AsyncClient(timeout=timeout, limits=limits, http2=True) as client:
-        sem = asyncio.Semaphore(max_concurrent)
+    for row, col in intersecting_tiles:
+        tile_idx = row * tiles_x + col
+        if tile_idx >= len(metadata.tile_offsets):
+            if debug:
+                logger.warning(f"Tile index {tile_idx} out of bounds")
+            continue
 
-        # Read tiles
-        tiles = {}
-        tasks = []
-        tiles_x = (metadata.width + metadata.tile_width - 1) // metadata.tile_width
-
-        # Create tasks for all tiles
-        for row, col in intersecting_tiles:
-            tile_idx = row * tiles_x + col  # Linear tile index
-
-            if tile_idx >= len(metadata.tile_offsets):
-                if debug:
-                    logger.warning(f"Tile index {tile_idx} out of bounds")
-                continue
-
-            # Create tile request
-            request = COGTileRequest(
+        requests.append(
+            COGTileRequest(
                 url=url,
                 offset=metadata.tile_offsets[tile_idx],
                 size=metadata.tile_byte_counts[tile_idx],
@@ -335,22 +401,16 @@ async def read_cog_tile_data(
                 col=col,
                 metadata=metadata,
             )
+        )
 
-            tasks.append((row, col, read_tile(request, client, sem)))
+    # Use COGReader for efficient tile reading
+    async with COGReader(max_concurrent=max_concurrent) as reader:
+        tiles = await reader.read_merged_tiles(requests, debug=debug)
 
-        # Gather results
-        for row, col, task in tasks:
-            try:
-                tile_data = await task
-                if tile_data is not None:
-                    tiles[(row, col)] = tile_data
-            except Exception as e:
-                logger.error(f"Failed to read tile at ({row}, {col}): {str(e)}")
+    if not tiles:
+        return np.array([]), None
 
-        if not tiles:
-            return np.array([]), None
-
-    # Merge tiles
+    # Merge tiles and handle transforms
     merged_data, bounds = merge_tiles(
         tiles, (metadata.tile_width, metadata.tile_height), dtype=np.float32
     )
@@ -380,7 +440,7 @@ async def read_cog_tile_data(
 
     # Apply geometry mask if provided
     if geometry is not None:
-        merged_data, cropped_transform = apply_mask_and_crop(
+        merged_data, merged_transform = apply_mask_and_crop(
             merged_data, geometry, merged_transform
         )
 
@@ -394,4 +454,4 @@ async def read_cog_tile_data(
         """
         )
 
-    return merged_data, cropped_transform
+    return merged_data, merged_transform

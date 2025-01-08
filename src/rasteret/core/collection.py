@@ -7,7 +7,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 import pandas as pd
-import geopandas as gpd
 
 from shapely.geometry import Polygon
 from pathlib import Path
