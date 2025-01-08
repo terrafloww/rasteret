@@ -180,5 +180,4 @@ Contributions welcome!
 
 ## ⚠️ Known Limitations
 - Higher memory usage than Rasterio/GDAL
-- AWS requester-pays buckets need valid credentials
-- Currently works only with Sentinel-2 L2A and Landsat 4,5,7,8,9 data sources
+- Currently tested with Sentinel-2 and Landsat 8,9 platforms
