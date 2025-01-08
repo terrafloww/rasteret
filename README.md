@@ -166,9 +166,11 @@ Benchmarks -
 - Rasteret vs Zarr coming soon
 - [Rasteret vs Rasterio](https://blog.terrafloww.com/efficient-cloud-native-raster-data-access-an-alternative-to-rasterio-gdal/)
 
-## 🌍 Supported Data Sources
+## 🌍 Built-in Data Sources
 - Sentinel-2 Level 2A
+    - Earthsearch V1 [STAC Endpoint](https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a/) (AWS S3 US-West2 bucket)
 - Landsat Collection 2 Level 2 SR
+    - USGS Landsatlook STAC Server [Endpoint](https://landsatlook.usgs.gov/stac-server/collections/landsat-c2l2-sr/)
 
 ## 📝 License
 Apache 2.0 License
@@ -177,6 +179,6 @@ Apache 2.0 License
 Contributions welcome! 
 
 ## ⚠️ Known Limitations
-- High memory usage for large areas
+- Higher memory usage than Rasterio/GDAL
 - AWS requester-pays buckets need valid credentials
-- Limited to Sentinel-2 and Landsat data formats
+- Currently works only with Sentinel-2 L2A and Landsat 4,5,7,8,9 data sources
