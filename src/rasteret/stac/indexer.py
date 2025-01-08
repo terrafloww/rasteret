@@ -30,7 +30,7 @@ class StacToGeoParquetIndexer:
         self,
         data_source: str,
         stac_api: str,
-        output_dir: Optional[Path] = None,
+        workspace_dir: Optional[Path] = None,
         name: Optional[str] = None,
         cloud_provider: Optional[CloudProvider] = None,
         cloud_config: Optional[CloudConfig] = None,
@@ -38,7 +38,7 @@ class StacToGeoParquetIndexer:
     ):
         self.data_source = data_source
         self.stac_api = stac_api
-        self.output_dir = output_dir
+        self.workspace_dir = workspace_dir
         self.cloud_provider = cloud_provider
         self.cloud_config = cloud_config
         self.name = name
@@ -211,9 +211,9 @@ class StacToGeoParquetIndexer:
             )
 
             # Optionally write to disk
-            if self.output_dir:
-                logger.info(f"Saving collection to {self.output_dir}")
-                collection.save_to_parquet(self.output_dir)
+            if self.workspace_dir:
+                logger.info(f"Saving collection to {self.workspace_dir}")
+                collection.save_to_parquet(self.workspace_dir)
 
             logger.info("Index creation completed successfully")
             return collection

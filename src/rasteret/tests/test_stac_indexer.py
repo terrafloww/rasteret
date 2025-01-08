@@ -105,7 +105,7 @@ class TestStacIndexer(unittest.IsolatedAsyncioTestCase):
         indexer = StacToGeoParquetIndexer(
             data_source="test-source",
             stac_api="https://test-stac.com",
-            output_dir=Path("/tmp/test_output"),
+            workspace_dir=Path("/tmp/test_output"),
         )
 
         collection = await indexer.build_index(
