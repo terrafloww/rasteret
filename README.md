@@ -76,16 +76,16 @@ Example: 1000 Landsat scenes (4 bands each) across 50 parallel environments
 #### First Run Setup
 | Operation | Rasterio | Rasteret | Calculation |
 |-----------|----------|-----------|-------------|
-| Header Requests | $3.20 | $3.20 | 1000 scenes × 4 bands × 2 requests × $0.0004/1000 |
-| Data Tile Requests | $0.32 | $0.32 | 100 farms × 2 tiles × 4 bands × $0.0004/1000 |
-| **Total Per Environment** | **$3.52** | **$3.52** | One-time setup for Rasteret |
+| Header Requests | $0.0032 | $0.0032 | 1000 scenes × 4 bands × 2 requests × $0.0004/1000 |
+| Data Tile Requests | $0.00032 | $0.00032 | 100 farms × 2 tiles × 4 bands × $0.0004/1000 |
+| **Total Per Environment** | **$0.00352** | **$0.00352** | One-time setup for Rasteret |
 
-#### Subsequent Runs (50 Environments)
+#### Subsequent Runs (50 runs in new environments)
 | Operation | Rasterio | Rasteret | Notes |
 |-----------|----------|-----------|--------|
-| Header Requests | $160 | $0 | 50 × $3.20 (Rasterio) vs Cached headers (Rasteret)|
-| Data Tile Requests | $16 | $16 | 50 × $0.32 |
-| **Total** | **$176** | **$16** | **91% savings** |
+| Header Requests | $0.176 | $0 | 50 × $0.00352 (Rasterio) vs Cached headers (Rasteret)|
+| Data Tile Requests | $0.016 | $0.016 | 50 × $0.00032 |
+| **Total** | **$0.192** | **$0.016** | **91% savings** |
 
 #### Alternative: Full Images Download
 | Cost Type | Amount | Notes |
@@ -93,14 +93,14 @@ Example: 1000 Landsat scenes (4 bands each) across 50 parallel environments
 | Data Transfer | $576 | 6.4TB (1.6GB * 4000 files) × $0.09/GB |
 | Monthly Storage | $150 | Varies by provider |
 | GET Requests | Still needed | For company S3 access |
-| **Total** | **$726+** | Plus ongoing storage |
+| **Total** | **$726+** | Plus ongoing storage costs |
 
 The cost breakdown:
-- Each COG file typically needs 2 requests to read its headers (~$0.0004 per 1000 requests)
+- Each COG file typically needs 2 requests to read its headers
 - With Rasteret, headers are read once during Collection creation
 - Subsequent access only requires data tile requests
     - In the above cases we assume 2 COG tiles are needed per farm
-- Cost savings compound with distributed (in new dockers and python envs) / repeated processing
+- Cost savings compound with distributed (in new dockers and python envs) and with repeated processing, like in ML training and inference workloads
 </details>
 
 
