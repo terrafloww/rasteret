@@ -14,7 +14,7 @@ def main():
     workspace_dir = Path.home() / "rasteret_workspace"
     workspace_dir.mkdir(exist_ok=True)
 
-    custom_name = "bangalore-v3"
+    custom_name = "bangalore"
     date_range = ("2024-03-01", "2024-03-31")
     data_source = DataSources.LANDSAT
 
