@@ -1,6 +1,6 @@
 # 🛰️ Rasteret
 
-This library perfoms gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and lowers S3 HTTP requests in your workflows.
+This library gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and lowers S3 HTTP requests in your workflows.
 
 > [!WARNING]  
 > Work-in-progress library. The APIs are subject to change, and as such, documentation is not yet available.
