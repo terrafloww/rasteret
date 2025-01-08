@@ -49,7 +49,8 @@ Rasteret reimagines how we access cloud-hosted satellite imagery by:
 
 ### 📊 Performance Benchmarks
 
-#### Speed Benchmarks
+<details>
+<summary><b>Speed Benchmarks</b></summary>
 
 Test setup: Filter 1 year of STAC (100+ scenes), process 20 Sentinel-2 filtered scenes over an agricultural area, accessing RED and NIR bands (40 COG files total)
 
@@ -64,10 +65,11 @@ The speed improvement comes from:
 - Querying local GeoParquet instead of STAC API endpoints
 - Eliminating repeated header requests
 - Optimized parallel data loading
+</details>
 
 
-
-#### Cost Analysis
+<details>
+<summary><b>Cost Analysis</b></summary>
 
 Example: 1000 Landsat scenes (4 bands each) across 50 parallel environments
 
@@ -99,8 +101,8 @@ The cost breakdown:
 - Subsequent access only requires data tile requests
     - In the above cases we assume 2 COG tiles are needed per farm
 - Cost savings compound with distributed (in new dockers and python envs) / repeated processing
-
 </details>
+
 
 ### 🎯 Key Benefits
 
