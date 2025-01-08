@@ -159,9 +159,19 @@ class Scene:
         max_concurrent: int = 50,
     ) -> Optional[Dict]:
         """Load single band data for geometry."""
-        cog_meta, url = self.get_band_cog_metadata(
-            band_code, provider=cloud_provider, cloud_config=cloud_config
-        )
+        # Get metadata and URL only once
+        if not hasattr(self, "_band_meta_cache"):
+            self._band_meta_cache = {}
+
+        cache_key = f"{band_code}"
+        if cache_key not in self._band_meta_cache:
+            cog_meta, url = self.get_band_cog_metadata(
+                band_code, provider=cloud_provider, cloud_config=cloud_config
+            )
+            self._band_meta_cache[cache_key] = (cog_meta, url)
+        else:
+            cog_meta, url = self._band_meta_cache[cache_key]
+
         if not cog_meta or not url:
             return None
 

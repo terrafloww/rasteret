@@ -22,4 +22,10 @@ def version():
 __version__ = version()
 
 
-__all__ = ["Collection", "Rasteret", "CloudConfig", "AWSProvider", "DataSources"]
+__all__ = [
+    "Collection",
+    "Rasteret",
+    "CloudConfig",
+    "AWSProvider",
+    "DataSources",
+]
