@@ -46,9 +46,9 @@ Currently satellite image access requires multiple HTTP requests in the backend:
 ### ✨ Rasteret's Solution 
 
 Rasteret reimagines how we access cloud-hosted satellite imagery by:
-- Creating local 'Collections' with pre-cached COG headers along with STAC metadata as a one time operation
-- Calculating exact byte ranges for image tiles needed, without header requests to S3 rather using the cached headers in local collection
-- Making single optimized S3 HTTP request per required image tile to create the numpy arrays
+- Creating local 'Collections', which are STAC-geoparquet with additional columns for COG headers for each STAC item
+- Calculating exact byte-ranges of image tiles needed using the local cache, and avoiding the extra HTTP requests for COG headers that most libraries always do.
+- Making 1 range-request per required image tile to create the numpy arrays
 - Ensuring COG file headers are never re-read across new Python environments
 
 ### 📊 Performance Benchmarks
