@@ -56,7 +56,7 @@ Rasteret reimagines how we access cloud-hosted satellite imagery by:
 <details>
 <summary><b>Speed Benchmarks</b></summary>
 
-Test setup: Filter 1 year of STAC items (100+ scenes), process 20 Sentinel-2 filtered scenes, over an agricultural area, by reading RED and NIR bands, which is 40 COG files in total
+Test setup: Filter 1 year of STAC items (100+ scenes), process 20 Sentinel-2 filtered scenes, over an agricultural area, by reading RED and NIR bands, which is 40 COG files in total. (2 CPU, 4 threads machine)
 
 | Operation | Component | Rasterio | Rasteret | Notes |
 |-----------|-----------|----------|-----------|--------|
