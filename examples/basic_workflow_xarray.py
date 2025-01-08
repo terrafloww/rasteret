@@ -17,8 +17,8 @@ def main():
     workspace_dir = Path.home() / "rasteret_workspace"
     workspace_dir.mkdir(exist_ok=True)
 
-    custom_name = "bangalore"
-    date_range = ("2024-01-01", "2024-03-31")
+    custom_name = "bangalore-v3"
+    date_range = ("2024-03-01", "2024-03-31")
     data_source = DataSources.LANDSAT
 
     # Define area and time of interest
@@ -51,7 +51,7 @@ def main():
         processor = Rasteret(
             custom_name=custom_name,
             data_source=data_source,
-            output_dir=workspace_dir,
+            workspace_dir=workspace_dir,
             date_range=date_range,
         )
         processor.create_collection(

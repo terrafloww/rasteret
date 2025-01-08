@@ -49,7 +49,7 @@ def main():
         processor = Rasteret(
             custom_name=custom_name,
             data_source=data_source,
-            output_dir=workspace_dir,
+            workspace_dir=workspace_dir,
             date_range=date_range,
         )
         processor.create_collection(
