@@ -50,20 +50,21 @@ Rasteret reimagines how we access cloud-hosted satellite imagery by:
 - Calculating exact byte-ranges of image tiles needed using the local cache, and avoiding the extra HTTP requests for COG headers that most libraries always do.
 - Making 1 range-request per required image tile to create the numpy arrays
 - Ensuring COG file headers are never re-read across new Python environments
+- Asynchronous execution resulting in 0.1 sec/tile read speed in 4 core AWS VMs
 
 ### 📊 Performance Benchmarks
 
 <details>
 <summary><b>Speed Benchmarks</b></summary>
 
-Test setup: Filter 1 year of STAC items (100+ scenes), process 20 Sentinel-2 filtered scenes, over an agricultural area, by reading RED and NIR bands, which is 40 COG files in total. (2 CPU, 4 threads machine)
+Test setup: Filter 1 year of STAC items (300+ items), process 22 Sentinel-2 filtered scenes, over an agricultural area, by reading RED and NIR bands, which is 44 COG files in total. (4 CPU, 8 threads machine)
 
 | Operation | Component | Rasterio | Rasteret | Notes |
 |-----------|-----------|----------|-----------|--------|
-| STAC Query | Metadata Search | 2.0s | 0.5s | Finding available scenes (STAC API vs Geoparquet) |
-| Data Access | Header Reading | 12s | - | ~0.3s per file (Rasterio) vs Not required (Rasteret) |
-| | Tile Reading | 32s | 8s | Actual data access |
-| **Total Time** | | **44s** | **8s** | **5.5x faster** |
+| STAC Query | Metadata Search | 2.0s | <0.5s | Finding available scenes (STAC API vs Geoparquet) |
+| Data Access | Header Reading | 8s | - | ~0.3s per file (Rasterio) vs Not required (Rasteret) |
+| | Tile Reading | 22s | 4s | Actual data access |
+| **Total Time** | | **30s** | **4s** | **8x faster** |
 
 The speed improvement comes from:
 - Querying local GeoParquet instead of STAC API endpoints
