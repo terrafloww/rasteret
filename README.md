@@ -83,9 +83,9 @@ Example: 1000 Landsat scenes (4 bands each) across 50 parallel environments
 #### Subsequent Runs (50 runs in new environments)
 | Operation | Rasterio | Rasteret | Notes |
 |-----------|----------|-----------|--------|
-| Header Requests | $0.176 | $0 | 50 × $0.00352 (Rasterio) vs Cached headers (Rasteret)|
+| Header Requests | $0.16 | $0 | 50 × $0.0032 (Rasterio) vs Cached headers (Rasteret)|
 | Data Tile Requests | $0.016 | $0.016 | 50 × $0.00032 |
-| **Total** | **$0.192** | **$0.016** | **91% savings** |
+| **Total** | **$0.176** | **$0.016** | **90% savings** |
 
 #### Alternative: Full Images Download
 | Cost Type | Amount | Notes |
