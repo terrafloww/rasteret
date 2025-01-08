@@ -13,7 +13,7 @@ Example:
 >>> from rasteret import Rasteret
 >>> processor = Rasteret(
 ...     data_source="landsat-c2l2-sr",
-...     output_dir="workspace"
+...     workspace_dir="workspace"
 ... )
 >>> processor.create_index(
 ...     bbox=[77.55, 13.01, 77.58, 13.04],
@@ -46,7 +46,7 @@ class Rasteret:
 
     Attributes:
         data_source (str): Source dataset identifier
-        output_dir (Path): Directory for storing collections
+        workspace_dir (Path): Directory for storing collections
         custom_name (str, optional): Collection name prefix
         date_range (Tuple[str, str], optional): Date range for collection
         aws_profile (str, optional): AWS profile for authentication
@@ -63,13 +63,13 @@ class Rasteret:
     def __init__(
         self,
         data_source: Union[str, DataSources],
-        output_dir: Optional[Union[str, Path]] = None,
+        workspace_dir: Optional[Union[str, Path]] = None,
         custom_name: Optional[str] = None,
         date_range: Optional[Tuple[str, str]] = None,
     ):
         """Initialize Rasteret processor."""
         self.data_source = data_source
-        self.output_dir = Path(output_dir or Path.home() / "rasteret_workspace")
+        self.workspace_dir = Path(workspace_dir or Path.home() / "rasteret_workspace")
         self.custom_name = custom_name
         self.date_range = date_range
 
@@ -85,7 +85,7 @@ class Rasteret:
 
     def _get_collection_path(self) -> Path:
         """Get expected collection path"""
-        return self.output_dir / f"{self.custom_name}.parquet"
+        return self.workspace_dir / f"{self.custom_name}.parquet"
 
     def _get_bbox_from_geometries(self, geometries: List[Polygon]) -> List[float]:
         """Get combined bbox from geometries"""
@@ -102,7 +102,7 @@ class Rasteret:
         if not self.custom_name:
             raise ValueError("custom_name is required")
 
-        stac_path = self.output_dir / f"{self.custom_name}_stac"
+        stac_path = self.workspace_dir / f"{self.custom_name}_stac"
 
         if self._collection is None:
             if stac_path.exists():
@@ -126,7 +126,7 @@ class Rasteret:
             self.custom_name, date_range or self.date_range, str(self.data_source)
         )
 
-        stac_path = self.output_dir / f"{collection_name}_stac"
+        stac_path = self.workspace_dir / f"{collection_name}_stac"
 
         if stac_path.exists() and not force:
             self._collection = Collection.from_local(stac_path)
@@ -137,7 +137,7 @@ class Rasteret:
         indexer = StacToGeoParquetIndexer(
             data_source=self.data_source,
             stac_api=STAC_ENDPOINTS[self.data_source],
-            output_dir=stac_path,
+            workspace_dir=stac_path,
             cloud_provider=self.provider,
             cloud_config=self.cloud_config,
             name=collection_name,
@@ -215,7 +215,7 @@ class Rasteret:
         # Create processor
         processor = cls(
             data_source=getattr(DataSources, data_source, data_source),
-            output_dir=workspace_dir,
+            workspace_dir=workspace_dir,
             custom_name=collection_name,
         )
 

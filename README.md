@@ -1,6 +1,6 @@
 # 🛰️ Rasteret
 
-Faster querying of Cloud-Optimized GeoTIFFs (COGs) with lower HTTP requests in your workflows, currently tested for Sentinel-2 and Landsat COG files.
+This library perfoms gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and lowers S3 HTTP requests in your workflows.
 
 > [!WARNING]  
 > Work-in-progress library. The APIs are subject to change, and as such, documentation is not yet available.
@@ -18,9 +18,9 @@ Faster querying of Cloud-Optimized GeoTIFFs (COGs) with lower HTTP requests in y
 ---
 
 ## 🚀 Features
-- Fast byte-range based COG access
+- Fast byte-range based COG data retrieval
 - STAC Geoparquet creation with COG header metadata 
-- Paid S3 bucket support (AWS S3 Landsat)
+- Paid data source support (Landsat on AWS S3)
 - Xarray and GeoDataFrame outputs
 - Parallel data loading
 - Simple high-level API
@@ -31,20 +31,24 @@ Faster querying of Cloud-Optimized GeoTIFFs (COGs) with lower HTTP requests in y
 
 ### 💡 The Problem
 
-Currently satellite image access requires multiple HTTP requests:
-- Initial request to read COG headers 
-- Additional requests if headers are split
-- Final requests for actual data tiles
-- These requests repeat in new environments:
-  - New Python environments (like inside parallel Lambdas/ parallel Docker Containers in k8s)
-  - Or in local environment when GDAL cache is cleared (like a Jupyter kernel restart / Laptop restart)
+Currently satellite image access requires multiple HTTP requests in the backend:
+
+- Initial request to read COG file headers 
+- Additional requests for headers if they are split in COG file
+- Final requests for actual data tiles, which returns the numpy arrays
+
+- These requests are repeated in various situations such as -
+  - New Python envs, inside AWS Lambdas or in Docker Containers
+  - New Local machine env when GDAL cache is cleared
+    - when a Jupyter kernel is restarted
+    - or your laptop itself is restarted
 
 ### ✨ Rasteret's Solution 
 
 Rasteret reimagines how we access cloud-hosted satellite imagery by:
-- Creating local 'collections' with pre-cached COG file headers along with STAC metadata
-- Calculating exact byte ranges for image tiles needed, without header requests
-- Making single optimized HTTP request per required tile
+- Creating local 'Collections' with pre-cached COG headers along with STAC metadata as a one time operation
+- Calculating exact byte ranges for image tiles needed, without header requests to S3 rather using the cached headers in local collection
+- Making single optimized S3 HTTP request per required image tile to create the numpy arrays
 - Ensuring COG file headers are never re-read across new Python environments
 
 ### 📊 Performance Benchmarks
@@ -52,7 +56,7 @@ Rasteret reimagines how we access cloud-hosted satellite imagery by:
 <details>
 <summary><b>Speed Benchmarks</b></summary>
 
-Test setup: Filter 1 year of STAC (100+ scenes), process 20 Sentinel-2 filtered scenes over an agricultural area, accessing RED and NIR bands (40 COG files total)
+Test setup: Filter 1 year of STAC items (100+ scenes), process 20 Sentinel-2 filtered scenes, over an agricultural area, by reading RED and NIR bands, which is 40 COG files in total
 
 | Operation | Component | Rasterio | Rasteret | Notes |
 |-----------|-----------|----------|-----------|--------|
@@ -71,7 +75,7 @@ The speed improvement comes from:
 <details>
 <summary><b>Cost Analysis</b></summary>
 
-Example: 1000 Landsat scenes (4 bands each) across 50 parallel environments
+Example: 1000 Landsat scenes (4 bands each) being queried across 50 new environments
 
 #### First Run Setup
 | Operation | Rasterio | Rasteret | Calculation |
@@ -92,15 +96,16 @@ Example: 1000 Landsat scenes (4 bands each) across 50 parallel environments
 |-----------|---------|--------|
 | Data Transfer | $576 | 6.4TB (1.6GB * 4000 files) × $0.09/GB |
 | Monthly Storage | $150 | Varies by provider |
-| GET Requests | Still needed | For company S3 access |
+| GET Requests | $0.01+ | Still incurs cost within the same AWS account |
 | **Total** | **$726+** | Plus ongoing storage costs |
 
 The cost breakdown:
 - Each COG file typically needs 2 requests to read its headers
-- With Rasteret, headers are read once during Collection creation
-- Subsequent access only requires data tile requests
-    - In the above cases we assume 2 COG tiles are needed per farm
-- Cost savings compound with distributed (in new dockers and python envs) and with repeated processing, like in ML training and inference workloads
+- With Rasteret, headers are read once during 'Collection' creation
+- Subsequent analysis only requires data tile requests
+    - In the above cases we assume 2 COG tiles are needed per farm polygon
+
+- Cost savings compound with distributed (in new dockers and python envs) and repeated processing, like in ML training and inference workloads
 </details>
 
 
@@ -112,7 +117,7 @@ This makes Rasteret particularly effective for:
 - ML pipelines with multiple training runs
 - Production systems using serverless/container deployments
 - Multi-tenant applications accessing same data
-- Not needing convert COG to Zarr for most usecases
+- Not needing to convert COG to Zarr for timeseries analysis
 
 
 ---
@@ -125,16 +130,15 @@ This makes Rasteret particularly effective for:
 
 ## ⚠️ Known Limitations
 - Currently tested only with Sentinel-2 and Landsat 8,9 platform's data
-- S3 based Rasteret Collection creation and loading is not yet supported, right now they need to be in local disk
+- Creating or Loading a 'Rasteret Collection' from S3 is not yet supported
 
 ---
 
 ## 📋 Prerequisites
 - Python 3.10.x,3.11.x
-- AWS credentials (for accessing paid AWS buckets)
+- AWS credentials (for accessing paid data like Landsat on AWS)
 
 ### ⚙️ AWS Credentials Setup
-For accessing paid AWS buckets:
 
 <details>
 <summary><b>Setting up AWS credentials</b></summary>
@@ -177,7 +181,6 @@ from rasteret import Rasteret
 from rasteret.constants import DataSources
 from rasteret.core.utils import save_per_geometry
 
-# 1. Define areas and time of interest
 aoi1_polygon = Polygon([
     (77.55, 13.01),
     (77.58, 13.01),
@@ -194,10 +197,12 @@ aoi2_polygon = Polygon([
     (77.56, 13.02)
 ])
 
-# Use the total bounds of all polygons above
-# OR give an even larger AOI that covers all your future analysis areas
-# like AOI of a State or a Country
+# Get the total bounds of all polygons above
 bbox = aoi1_polygon.union(aoi2_polygon).bounds
+# OR
+# give even larger AOI bounds that covers all your future analysis areas
+# eg., Polygon of a State or a Country
+# bbox = country_polygon.bounds
 ```
 
 ### 2. Configure Rasteret
@@ -208,13 +213,11 @@ in your workspace directory, if they were created earlier.
 ```python
 # Collection configuration
 
-# give your custom name for local collection, it will attached to the
+# give your custom name for local collection, it will be attached to the
 # beginning of the collection name for eg., bangalore_202401-12_landsat
-# date range and data source name is added automatically while rasteret creates a collection
 custom_name = "bangalore"
 
-# pay time and cost upfront for COG headers and STAC metadata
-# here we are writing 1 year worth of STAC metadata and COG file headers to local disk
+# here we are aiming to write 1 year worth of STAC metadata and COG file headers to local disk
 date_range = ("2024-01-01", "2024-12-31")
 
 # choose from LANDSAT / SENTINEL2
@@ -224,8 +227,8 @@ data_source = DataSources.LANDSAT
 workspace_dir = Path.home() / "rasteret_workspace"
 workspace_dir.mkdir(exist_ok=True)
 
-# List existing collections if there are any in the workspace folder (by default is /home/user/rasteret_workspace)
-collections = Rasteret.list_collections()
+# List existing collections if there are any in the workspace folder
+collections = Rasteret.list_collections(workspace_dir=workspace_dir)
 for c in collections:
     print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
 ```
@@ -236,20 +239,22 @@ for c in collections:
 # Try loading existing collection
 try:
     # example name given here
-    processor = Rasteret.load_collection("bangalore_202401-12_landsat")
+    processor = Rasteret.load_collection("bangalore_202401-12_landsat",workspace_dir=workspace_dir)
 except ValueError:
 
     # Instantiate the Class
     processor = Rasteret(
+        workspace_dir=workspace_dir,
         custom_name="bangalore",
         data_source=DataSources.LANDSAT,
         date_range=("2024-01-01", "2024-01-31")
     )
 
     # and create a new collection
-    # here we are giving the BBOX for which STAC items and thier COG headers will be
-    # downloaded to local. and also filtering using PySTAC filters for LANDSAT 8 platform
-    # specifically from LANDSAT USGS STAC, and giving a scene level cloud cover filter
+
+    # we are giving the BBOX for which STAC items and their COG headers will be fetched
+    # and also filtering using PySTAC filters for LANDSAT 8 platform specifically
+    # from LANDSAT USGS STAC, and giving a scene level cloud-cover filter
     processor.create_collection(
         bbox=bbox,
         cloud_cover_lt=20,
@@ -260,7 +265,7 @@ except ValueError:
 ### 4. Query the Collection and Process Data
 
 ```python
-# Query collection created above with filters to get the data you want
+# Now we can query the collection created above, to get the data we want
 # in this case 2 geometries, 2 bands, and a few PySTAC search filters are provided
 ds = processor.get_xarray(
     geometries=[aoi1_polygon,aoi2_polygon],
@@ -273,7 +278,7 @@ ds = processor.get_xarray(
 # for the LANDSAT scenes that pass the filters and dates provided
 # then its getting the tif urls of the requested bands
 # then grabbing COG tiles only for the geometries from those tif files
-# and creating a xarray dataset for each geom and its time series data
+# and creating a xarray dataset for each geometry and its time series data
 
 # Calculate NDVI
 ndvi_ds = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
@@ -290,9 +295,8 @@ output_dir = Path(f"ndvi_results_{custom_name}")
 output_dir.mkdir(exist_ok=True)
 
 # Save results from xarray to geotiff files, each geometry's data will be stored in
-# its own folder. Here we are giving the file name prefix and also mentioning 
-# which Xarray varible to save
-# each geometry in xarray will get its own folder
+# its own folder. We can also give file-name prefix
+# and also mention which Xarray varible to save as geotiffs
 output_files = save_per_geometry(ndvi_ds, output_dir, file_prefix="ndvi", data_var="NDVI")
 
 for geom_id, filepath in output_files.items():
