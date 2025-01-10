@@ -185,11 +185,11 @@ class Rasteret:
         collection_name = Collection.create_name(
             self.custom_name, date_range or self.date_range, str(self.data_source)
         )
-        collection_path = self.workspace_dir / f"{collection_name}.parquet"
+        collection_path = self.workspace_dir / f"{collection_name}_stac"
 
         if collection_path.exists() and not force:
             logger.info(f"Collection {collection_name} already exists")
-            self._collection = Collection.from_parquet(collection_path)
+            self._collection = Collection.from_local(collection_path)
             return
 
         # Initialize indexer with required params
