@@ -45,7 +45,7 @@ Getting satellite imagery from cloud storage is currently slow and expensive. Wh
 ### ✨ Rasteret's Solution 
 
 We fixed this by:
-- Creating a smart local cache that remembers file headers
+- Creating a local cache that holds COG file headers along with STAC metadata
 - Making just one HTTP request per image tile
 - Keeping everything fast across environments - no more repeated requests!
 - Running operations in parallel for blazing fast speeds (0.1 sec/tile on 4 cores)
