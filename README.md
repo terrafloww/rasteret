@@ -5,9 +5,12 @@ This library gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and l
 > [!WARNING]  
 > Work-in-progress library. The APIs are subject to change, and as such, documentation is not yet available.
 
-## Table of Contents
+
+## 📚 Table of Contents
 - [Features](#-features)
-- [Why Rasteret?](#why-this-library)
+- [Why Rasteret?](#-why-this-library)
+- [Performance Benchmarks](#-performance-benchmarks)
+- [Key Benefits](#-key-benefits)
 - [Built-in Data Sources](#-built-in-data-sources)
 - [Prerequisites](#-prerequisites)
 - [Installation](#-installation)
@@ -15,19 +18,19 @@ This library gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and l
 - [License](#-license)
 - [Contributing](#-contributing)
 
----
+<br>
 
 ## 🚀 Features
-- Fast byte-range based COG data retrieval
-- STAC Geoparquet creation with COG header metadata 
-- Paid data source support (Landsat on AWS S3)
-- Xarray and GeoDataFrame outputs
-- Parallel data loading
-- Simple high-level API
+- ⚡ Fast byte-range based COG data retrieval
+- 📦 STAC Geoparquet creation with COG header metadata 
+- 💳 Paid data source support (Landsat on AWS S3)
+- 📊 Xarray and GeoDataFrame outputs
+- ⚙️ Parallel data loading
+- 🎯 Simple high-level API
 
----
+<br>
 
-## Why this library?
+## 🤔 Why this library?
 
 ### 💡 The Problem
 
@@ -37,19 +40,21 @@ Getting satellite imagery from cloud storage is currently slow and expensive. Wh
 2. Do this again in new environments (think Docker containers, AWS Lambda, or just restarting your Jupyter notebook)
 3. Finally make more requests to get the actual image data
 
+<br>
+
 ### ✨ Rasteret's Solution 
 
 We fixed this by:
-- Creating a local cache that holds COG file headers along with STAC metadata
+- Creating a smart local cache that remembers file headers
 - Making just one HTTP request per image tile
 - Keeping everything fast across environments - no more repeated requests!
 - Running operations in parallel for blazing fast speeds (0.1 sec/tile on 4 cores)
 
+<br>
 
 ### 📊 Performance Benchmarks
 
-
-#### Speed Comparison
+#### ⚡ Speed Comparison
 
 ![Single AOI timeseries speed](./assets/single_timeseries_request.png)
 
@@ -103,18 +108,18 @@ Rasteret maintains consistent $19.00 cost regardless of new environments.
 
 More details in blog here
 
+<br>
+
 ### 🎯 Key Benefits
 
-
 Rasteret is particularly effective for:
-- Time series analysis requiring many scenes
-- ML pipelines with multiple training runs
-- Production systems using serverless/container deployments
-- Multi-tenant applications accessing same data
-- Not needing to convert COG to Zarr for timeseries analysis
+- 📈 Time series analysis requiring many scenes
+- 🤖 ML pipelines with multiple training runs
+- ☁️ Production systems using serverless/container deployments
+- 👥 Multi-tenant applications accessing same data
+- 🔄 Not needing to convert COG to Zarr for timeseries analysis
 
-
----
+<br>
 
 ## 🌍 Built-in Data Sources
 - Sentinel-2 Level 2A
@@ -126,9 +131,9 @@ Rasteret is particularly effective for:
 - Currently tested only with Sentinel-2 and Landsat 8,9 platform's data
 - Creating or Loading a 'Rasteret Collection' from S3 is not yet supported
 
----
+<br>
 
-## 📋 Prerequisites
+## ⚙️ Prerequisites
 - Python 3.10.x,3.11.x
 - AWS credentials (for accessing paid data like Landsat on AWS)
 
@@ -152,14 +157,14 @@ export AWS_SECRET_ACCESS_KEY='your_secret_key'
 ```
 </details>
 
----
+<br>
 
-## 📦 Installation
+## 🔧 Installation
 ```bash
 pip install rasteret
 ```
 
----
+<br>
 
 ## 🏃‍♂️ Quick Start
 
@@ -300,10 +305,14 @@ for geom_id, filepath in output_files.items():
 # geometry_1 : ndvi_results_bangalore/geometry_1/ndvi_20241207.tif
 ```
 
+<br>
+
 ---
 
 ## 📝 License
 Apache 2.0 License
 
+<br>
+
 ## 🤝 Contributing
-Contributions welcome!
+Contributions welcome! Please check our contribution guidelines.
