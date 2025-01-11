@@ -87,10 +87,12 @@ Example scenario analyzing 100,000 farms with:
 
 ![Large Scale Analysis Cost](./assets/aws_service_wise_costs.png)
 
+![Large Scale Analysis Time taken](./assets/actual_analysis_time.png)
+
 
 ### Cost analysis with New Environments (Dockers/Lambdas)
 
-Rasterio/GDAL need to repeated query for COG headers in new environments
+Rasterio/GDAL need to make repeated queries for COG headers in new environments
 The more parallel and repetetive the workload, the higher the header GET costs are in Rasterio
 
 **Same above Large scale analysis project's cost, with new environments is shown below**
