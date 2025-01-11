@@ -31,89 +31,82 @@ This library gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and l
 
 ### 💡 The Problem
 
-Currently satellite image access requires multiple HTTP requests in the backend:
+Getting satellite imagery from cloud storage is currently slow and expensive. Why? Every time your code runs, it needs to:
 
-- Initial request to read COG file headers 
-- Additional requests for headers if they are split in COG file
-- Final requests for actual data tiles, which returns the numpy arrays
-
-- These requests are repeated in various situations such as -
-  - New Python envs, inside AWS Lambdas or in Docker Containers
-  - New Local machine env when GDAL cache is cleared
-    - when a Jupyter kernel is restarted
-    - or your laptop itself is restarted
+1. Make multiple HTTP requests just to read file headers
+2. Do this again in new environments (think Docker containers, AWS Lambda, or just restarting your Jupyter notebook)
+3. Finally make more requests to get the actual image data
 
 ### ✨ Rasteret's Solution 
 
-Rasteret reimagines how we access cloud-hosted satellite imagery by:
-- Creating local 'Collections', which are STAC-geoparquet with additional columns for COG headers for each STAC item
-- Calculating exact byte-ranges of image tiles needed using the local cache, and avoiding the extra HTTP requests for COG headers that most libraries always do.
-- Making 1 range-request per required image tile to create the numpy arrays
-- Ensuring COG file headers are never re-read across new Python environments
-- Asynchronous execution resulting in 0.1 sec/tile read speed in 4 core AWS VMs
+We fixed this by:
+- Creating a local cache that holds COG file headers along with STAC metadata
+- Making just one HTTP request per image tile
+- Keeping everything fast across environments - no more repeated requests!
+- Running operations in parallel for blazing fast speeds (0.1 sec/tile on 4 cores)
+
 
 ### 📊 Performance Benchmarks
 
-<details>
-<summary><b>Speed Benchmarks</b></summary>
 
-Test setup: Filter 1 year of STAC items (300+ items), process 22 Sentinel-2 filtered scenes, over an agricultural area, by reading RED and NIR bands, which is 44 COG files in total. (4 CPU, 8 threads machine)
+#### Speed Comparison
 
-| Operation | Component | Rasterio | Rasteret | Notes |
-|-----------|-----------|----------|-----------|--------|
-| STAC Query | Metadata Search | 2.0s | <0.5s | Finding available scenes (STAC API vs Geoparquet) |
-| Data Access | Header Reading | 8s | - | ~0.3s per file (Rasterio) vs Not required (Rasteret) |
-| | Tile Reading | 22s | 4s | Actual data access |
-| **Total Time** | | **30s** | **4s** | **8x faster** |
-
-The speed improvement comes from:
-- Querying local GeoParquet instead of STAC API endpoints
-- Eliminating repeated header requests
-- Optimized parallel data loading
-</details>
+![Single AOI timeseries speed](./assets/single_timeseries_request.png)
 
 
-<details>
-<summary><b>Cost Analysis</b></summary>
+#### Single Farm NDVI Time Series (1 Year of Landsat 9 Data)
+| Library | First Run | Subsequent Runs |
+|---------|-----------|-----------------|
+| Rasterio (Multiprocessing) | 32 seconds | 24 seconds |
+| Rasteret | 4 seconds | 4 seconds |
+| Popular Web Platform* | 10-30 seconds | 3-5 seconds |
 
-Example: 1000 Landsat scenes (4 bands each) being queried across 50 new environments
+*that platform which shall not be named
 
-#### First Run Setup
-| Operation | Rasterio | Rasteret | Calculation |
-|-----------|----------|-----------|-------------|
-| Header Requests | $0.0032 | $0.0032 | 1000 scenes × 4 bands × 2 requests × $0.0004/1000 |
-| Data Tile Requests | $0.00032 | $0.00032 | 100 farms × 2 tiles × 4 bands × $0.0004/1000 |
-| **Total Per Environment** | **$0.00352** | **$0.00352** | One-time setup for Rasteret |
+Rasteret was run in a t3.xlarge 4 CPU machine
 
-#### Subsequent Runs (50 runs in new environments)
-| Operation | Rasterio | Rasteret | Notes |
-|-----------|----------|-----------|--------|
-| Header Requests | $0.16 | $0 | 50 × $0.0032 (Rasterio) vs Cached headers (Rasteret)|
-| Data Tile Requests | $0.016 | $0.016 | 50 × $0.00032 |
-| **Total** | **$0.176** | **$0.016** | **90% savings** |
+#### Rasteret Collection Creation Times & Costs
+| Scope | Time | AWS S3 GET Cost |
+|-------|------|-----------------|
+| Global (1 year) | ~30 minutes | $1.80 |
+| Regional (e.g., Karnataka, India) | ~45 seconds | Negligible |
 
-#### Alternative: Full Images Download
-| Cost Type | Amount | Notes |
-|-----------|---------|--------|
-| Data Transfer | $576 | 6.4TB (1.6GB * 4000 files) × $0.09/GB |
-| Monthly Storage | $150 | Varies by provider |
-| GET Requests | $0.01+ | Still incurs cost within the same AWS account |
-| **Total** | **$726+** | Plus ongoing storage costs |
+### Large Scale Cost Analysis
 
-The cost breakdown:
-- Each COG file typically needs 2 requests to read its headers
-- With Rasteret, headers are read once during 'Collection' creation
-- Subsequent analysis only requires data tile requests
-    - In the above cases we assume 2 COG tiles are needed per farm polygon
+Example scenario analyzing 100,000 farms with:
+- 2 Landsat scenes covering all farms
+- 45 dates per scene
+- 4 bands per date
+- Total: 360 COG files (200 after cloud filtering)
+- Processing across 100 parallel environments
 
-- Cost savings compound with distributed (in new dockers and python envs) and repeated processing, like in ML training and inference workloads
-</details>
+![Large Scale Analysis Cost](./assets/aws_service_wise_costs.png)
 
+
+### Cost analysis with New Environments (Dockers/Lambdas)
+
+Rasterio/GDAL need to repeated query for COG headers in new environments
+The more parallel and repetetive the workload, the higher the header GET costs are in Rasterio
+
+**Same above Large scale analysis project's cost, with new environments is shown below**
+
+| Environments | Repeated Header read Cost | Total Cost Rasterio |
+|--------------|----------------|-------------|
+| 1,000 | +$0.08 | $34.088 |
+| 10,000 | +$0.8 | $34.808 |
+| 100,000 | +$8.0 | $42.008 |
+
+Rasteret maintains consistent $19.00 cost regardless of new environments.
+
+
+![Same above project Costs with new environments](./assets/env_scaling_costs.png)
+
+More details in blog here
 
 ### 🎯 Key Benefits
 
 
-This makes Rasteret particularly effective for:
+Rasteret is particularly effective for:
 - Time series analysis requiring many scenes
 - ML pipelines with multiple training runs
 - Production systems using serverless/container deployments
