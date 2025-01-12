@@ -33,7 +33,7 @@ def main():
 
     # Here were are Collection_names, which are unique identifiers for a collection
     # based on custom_name, date_range and data_source
-    # example collection name for above custom_name and date_range will be 
+    # example collection name for above custom_name and date_range will be
     # "bangalore_202401-03_landsat", if date_range spans across years, it will be "bangalore_202401-202503_landsat"
     collections = Rasteret.list_collections(workspace_dir=workspace_dir)
     for c in collections:
@@ -45,9 +45,11 @@ def main():
 
         # if you want to load a specific collection, you must pass the full collection_name
         # collection_names can be obtained from Rasteret.list_collections(workspace_dir=workspace_dir), shown above
-        
+
         # here im passing a non existent collection name to raise ValueError on purpose
-        processor = Rasteret.load_collection(collection_name="california_202401-03_landsat",workspace_dir=workspace_dir)
+        processor = Rasteret.load_collection(
+            collection_name="california_202401-03_landsat", workspace_dir=workspace_dir
+        )
     except ValueError:
         print("\nCollection not found. Creating new collection...")
         print("-------------------------")
