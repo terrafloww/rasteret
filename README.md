@@ -108,9 +108,9 @@ Rasteret maintains consistent $19.00 cost regardless of new environments.
 
 ![Same above project Costs with new environments](./assets/env_scaling_costs.png)
 
-More details in blog here
-
 <br>
+
+More details in blog [here](https://blog.terrafloww.com/rasteret-a-library-for-faster-and-cheaper-open-satellite-data-access/)
 
 ### 🎯 Key Benefits
 
