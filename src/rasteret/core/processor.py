@@ -177,7 +177,7 @@ class Rasteret:
         indexer = StacToGeoParquetIndexer(
             data_source=str(self.data_source),
             stac_api=STAC_ENDPOINTS[self.data_source],
-            workspace_dir=self.workspace_dir,
+            workspace_dir=collection_path,
             name=collection_name,
             cloud_provider=self._cloud_provider,
             cloud_config=self.cloud_config,
