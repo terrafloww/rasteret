@@ -60,6 +60,9 @@ We fixed this by:
 
 
 #### Single Farm NDVI Time Series (1 Year of Landsat 9 Data)
+
+Run on AWS t3.xlarge 4 CPU machine -
+
 | Library | First Run | Subsequent Runs |
 |---------|-----------|-----------------|
 | Rasterio (Multiprocessing) | 32 seconds | 24 seconds |
@@ -68,13 +71,15 @@ We fixed this by:
 
 *that platform which shall not be named
 
-Rasteret was run in a t3.xlarge 4 CPU machine
 
 #### Rasteret Collection Creation Times & Costs
+
+Run on AWS t3.xlarge 4 CPU machine -
+
 | Scope | Time | AWS S3 GET Cost |
 |-------|------|-----------------|
 | Global (1 year) | ~30 minutes | $1.80 |
-| Regional (e.g., Karnataka, India) | ~45 seconds | Negligible |
+| Regional (1 year, for state of Karnataka, India) | ~45 seconds | Negligible |
 
 ### Large Scale Cost Analysis
 
