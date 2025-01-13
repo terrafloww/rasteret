@@ -88,7 +88,7 @@ Example scenario analyzing 100,000 farms with:
 - 45 dates per scene
 - 4 bands per date
 - Total: 360 COG files (200 after cloud filtering)
-- Processing across 100 parallel environments
+- Processing across 100 parallel environments (t3.xlarge)
 
 ![Large Scale Analysis Cost](./assets/aws_service_wise_costs.png)
 
