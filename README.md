@@ -12,9 +12,9 @@ This library gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and l
 - [Performance Benchmarks](#-performance-benchmarks)
 - [Key Benefits](#-key-benefits)
 - [Built-in Data Sources](#-built-in-data-sources)
-- [Prerequisites](##%EF%B8%8F-prerequisites)
-- [Installation](##%EF%B8%8F-installation)
-- [Quick Start](##%EF%B8%8F-quick-start)
+- [Prerequisites](#%EF%B8%8F-prerequisites)
+- [Installation](#-installation)
+- [Quick Start](#%EF%B8%8F-quick-start)
 - [License](#-license)
 - [Contributing](#-contributing)
 
