@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """ Indexer for creating GeoParquet collections from STAC catalogs. """
 
 from __future__ import annotations

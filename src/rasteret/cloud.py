@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """ Utilities for cloud storage """
 
 from dataclasses import dataclass

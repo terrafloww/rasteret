@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """ Logging configuration for the rasteret package. """
 
 import logging

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 import unittest
 from unittest.mock import patch, MagicMock
 from rasteret.cloud import CloudConfig, AWSProvider

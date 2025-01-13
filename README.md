@@ -317,9 +317,13 @@ for geom_id, filepath in output_files.items():
 ---
 
 ## 📝 License
-Apache 2.0 License
+
+This project is licensed under the terms of the [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html) or later.
+
+By using this project, you agree to the terms of the AGPL v3 license. For a copy of the license, see the [LICENSE](./LICENSE) file in this repository.
+
 
 <br>
 
 ## 🤝 Contributing
-Contributions welcome! Please check our contribution guidelines.
+Contributions welcome!

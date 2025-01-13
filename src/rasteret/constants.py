@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Constants and configurations for rasteret."""
 
 from typing import Dict

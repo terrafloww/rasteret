@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Optimized COG reading using byte ranges."""
 
 from __future__ import annotations

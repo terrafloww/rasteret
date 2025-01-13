@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """ Scene class for handling COG data loading and processing. """
 
 from __future__ import annotations
