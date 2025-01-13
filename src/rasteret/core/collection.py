@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2025 Terrafloww Labs, Inc.
 
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+""" Collection class for managing raster data collections. """
 
 from __future__ import annotations
 from datetime import datetime

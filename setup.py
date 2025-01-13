@@ -11,7 +11,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="rasteret",
-    version="0.1.12",
+    version="0.1.13",
     author="Sidharth Subramaniam",
     author_email="sid@terrafloww.com",
     description="Fast and efficient access to Cloud-Optimized GeoTIFFs (COGs)",
@@ -20,10 +20,11 @@ setup(
     url="https://github.com/terrafloww/rasteret",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
+    license="AGPL-3.0-or-later",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: Apache Software License",
+        "License :: OSI Approved :: GNU Affero General Public License v3",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",

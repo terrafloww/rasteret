@@ -1,6 +1,30 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2025 Terrafloww Labs, Inc.
 
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+"""
+Rasteret: Efficient satellite imagery retrieval and processing
+==========================================================
+
+Core Components:
+---------------
+- Rasteret: Main interface for querying and processing scenes
+- Collection: Manages indexed satellite data
+- Scene: Handles individual scene processing
+
+Example:
+-------
+>>> from rasteret import Rasteret
+>>> processor = Rasteret(
+...     data_source="landsat-c2l2-sr",
+...     workspace_dir="workspace"
+... )
+>>> processor.create_index(
+...     bbox=[77.55, 13.01, 77.58, 13.04],
+...     date_range=["2024-01-01", "2024-01-31"]
+... )
+"""
 
 from __future__ import annotations
 import asyncio
