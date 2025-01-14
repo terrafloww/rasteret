@@ -2,7 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-
 """Type definitions used throughout Rasteret."""
 
 from dataclasses import dataclass
