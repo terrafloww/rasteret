@@ -66,7 +66,8 @@ class AsyncCOGHeaderParser:
 
     def __init__(
         self,
-        max_concurrent: int = 50,
+        max_concurrent: int = 100,
+        batch_size: int = 50,
         cache_ttl: int = 3600,  # 1 hour
         retry_attempts: int = 3,
         cloud_provider: Optional[CloudProvider] = None,
@@ -76,6 +77,7 @@ class AsyncCOGHeaderParser:
         self.retry_attempts = retry_attempts
         self.cloud_provider = cloud_provider
         self.cloud_config = cloud_config
+        self.batch_size = batch_size
 
         # Connection optimization
         self.connector = httpx.Limits(
@@ -115,7 +117,8 @@ class AsyncCOGHeaderParser:
             await self.client.aclose()
 
     async def process_cog_headers_batch(
-        self, urls: List[str], batch_size: int = 10
+        self,
+        urls: List[str],
     ) -> List[Optional[CogMetadata]]:
         """Process multiple URLs in parallel with smart batching."""
 
@@ -123,11 +126,11 @@ class AsyncCOGHeaderParser:
         total = len(urls)
 
         logger.info(
-            f"Processing {total} COG headers {'(single batch)' if total <= batch_size else f'in {(total + batch_size - 1) // batch_size} batches of {batch_size}'}"
+            f"Processing {total} COG headers {'(single batch)' if total <= self.batch_size else f'in {(total + self.batch_size - 1) // self.batch_size} batches of {self.batch_size}'}"
         )
 
-        for i in range(0, total, batch_size):
-            batch = urls[i : min(i + batch_size, total)]
+        for i in range(0, total, self.batch_size):
+            batch = urls[i : min(i + self.batch_size, total)]
             batch_start = time.time()
 
             tasks = [self.parse_cog_header(url) for url in batch]
@@ -143,7 +146,7 @@ class AsyncCOGHeaderParser:
             batch_time = time.time() - batch_start
             remaining = total - (i + len(batch))
             batch_msg = (
-                f"Processed batch {i//batch_size + 1}/{(total + batch_size - 1) // batch_size} "
+                f"Processed batch {i//self.batch_size + 1}/{(total + self.batch_size - 1) // self.batch_size} "
                 f"({len(batch)} {'header' if len(batch) == 1 else 'headers'}) "
                 f"in {batch_time:.2f}s. "
                 f"{'Completed!' if remaining == 0 else f'Remaining: {remaining}'}"
