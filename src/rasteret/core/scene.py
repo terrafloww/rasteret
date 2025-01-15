@@ -12,9 +12,9 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-"""
 
-""" Scene class for handling COG data loading and processing. """
+Scene class for handling COG data loading and processing.
+"""
 
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple, Union
@@ -38,6 +38,8 @@ logger = setup_logger("INFO")
 
 class Scene:
     """
+    Scene class for handling COG data loading and processing.
+
     A single scene with associated metadata and data access methods.
 
     Scene handles the actual data loading from COGs, including:

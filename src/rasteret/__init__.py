@@ -14,8 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-"""Rasteret package."""
-
 from importlib.metadata import version as get_version
 
 from rasteret.core.processor import Rasteret
