@@ -50,7 +50,7 @@ class StacToGeoParquetIndexer:
         name: Optional[str] = None,
         cloud_provider: Optional[CloudProvider] = None,
         cloud_config: Optional[CloudConfig] = None,
-        max_concurrent: int = 50,
+        max_concurrent: int = 100,
     ):
         self.data_source = data_source
         self.stac_api = stac_api
@@ -59,6 +59,7 @@ class StacToGeoParquetIndexer:
         self.cloud_config = cloud_config
         self.name = name
         self.max_concurrent = max_concurrent
+        self.batch_size = 50
 
     @property
     def band_map(self) -> Dict[str, str]:
@@ -96,8 +97,7 @@ class StacToGeoParquetIndexer:
 
         # 2. Process in batches, adding COG metadata
         processed_items = []
-        batch_size = 10
-        total_batches = (len(stac_items) + batch_size - 1) // batch_size
+        total_batches = (len(stac_items) + self.batch_size - 1) // self.batch_size
 
         logger.info(
             f"Processing {len(stac_items)} scenes (each scene has multiple bands)..."
@@ -107,15 +107,16 @@ class StacToGeoParquetIndexer:
             max_concurrent=self.max_concurrent,
             cloud_provider=self.cloud_provider,
             cloud_config=self.cloud_config,
+            batch_size=self.batch_size,
         ) as cog_parser:
 
-            for i in range(0, len(stac_items), batch_size):
-                batch = stac_items[i : i + batch_size]
+            for i in range(0, len(stac_items), self.batch_size):
+                batch = stac_items[i : i + self.batch_size]
                 batch_records = await self._process_batch(batch, cog_parser)
                 if batch_records:
                     processed_items.extend(batch_records)
                 logger.info(
-                    f"Processed scene batch {(i//batch_size)+1}/{total_batches} yielding {len(batch_records)} band assets"
+                    f"Processed scene batch {(i//self.batch_size)+1}/{total_batches} yielding {len(batch_records)} band assets"
                 )
 
         total_assets = sum(len(item["assets"]) for item in stac_items)
