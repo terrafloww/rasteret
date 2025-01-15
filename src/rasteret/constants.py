@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-"""Constants and configurations for rasteret."""
-
 from typing import Dict
 import pyarrow as pa
 

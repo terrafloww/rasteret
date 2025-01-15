@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-"""Optimized COG reading using byte ranges."""
-
 from __future__ import annotations
 import asyncio
 import httpx

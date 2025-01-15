@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-""" Utilities for cloud storage """
-
 from dataclasses import dataclass
 from typing import Optional, Dict
 import boto3

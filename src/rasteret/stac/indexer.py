@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-""" Indexer for creating GeoParquet collections from STAC catalogs. """
-
 from __future__ import annotations
 import json
 from datetime import datetime

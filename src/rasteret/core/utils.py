@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-""" Utility functions for rasteret package. """
-
 from typing import Optional
 from urllib.parse import urlparse
 import boto3

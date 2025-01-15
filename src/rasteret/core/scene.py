@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-""" Scene class for handling COG data loading and processing. """
-
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -26,6 +24,8 @@ logger = setup_logger("INFO")
 
 class Scene:
     """
+    Scene class for handling COG data loading and processing.
+
     A single scene with associated metadata and data access methods.
 
     Scene handles the actual data loading from COGs, including:

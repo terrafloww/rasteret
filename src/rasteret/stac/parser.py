@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-"""Async COG header parsing with caching."""
-
 from __future__ import annotations
 import asyncio
 import struct

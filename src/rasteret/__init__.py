@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-"""Rasteret package."""
-
 from importlib.metadata import version as get_version
 
 from rasteret.core.processor import Rasteret

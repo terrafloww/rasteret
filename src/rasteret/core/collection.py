@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-""" Collection class for managing raster data collections. """
-
 from __future__ import annotations
 from datetime import datetime
 

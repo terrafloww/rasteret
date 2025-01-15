@@ -2,8 +2,6 @@
 # Copyright 2025 Terrafloww Labs, Inc.
 
 
-""" Logging configuration for the rasteret package. """
-
 import logging
 import sys
 from typing import Optional
