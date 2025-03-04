@@ -14,6 +14,7 @@ import pyarrow.dataset as ds
 import pystac_client
 import stac_geoparquet
 from shapely.geometry import shape
+import asyncio
 
 from rasteret.stac.parser import AsyncCOGHeaderParser
 from rasteret.cloud import CloudProvider, CloudConfig
@@ -210,7 +211,7 @@ class StacToGeoParquetIndexer:
             collection = Collection(
                 dataset=ds.dataset(table),  # Create dataset from table
                 name=self.name,
-                description="STAC collection indexed from {self.data_source}",
+                description=f"STAC collection indexed from {self.data_source}",
             )
 
             # Optionally write to disk
@@ -232,38 +233,42 @@ class StacToGeoParquetIndexer:
             if temp_parquet.exists():
                 temp_parquet.unlink()
 
-    async def _search_stac(
-        self,
-        bbox: Optional[BoundingBox] = None,
-        date_range: Optional[DateRange] = None,
-        query: Optional[Dict[str, Any]] = None,
-    ) -> List[dict]:
-        """
-        Search STAC API for items.
+    async def _search_stac(self, bbox, date_range, query) -> List[dict]:
+        """Optimized STAC search with pagination and parallel processing"""
+        search_params = {
+            "collections": [self.data_source], 
+            "limit": 1000,
+            **({"bbox": bbox} if bbox else {}),
+            **({"datetime": f"{date_range[0]}/{date_range[1]}"} if date_range else {}),
+            **({"query": query} if query else {})
+        }
 
-        Returns:
-            List of STAC items
-        """
-
-        # Build search parameters
-        search_params = {"collections": [self.data_source], "limit": None}
-        if bbox:
-            search_params["bbox"] = bbox
-        if date_range:
-            search_params["datetime"] = f"{date_range[0]}/{date_range[1]}"
-        if query is not None:
-            search_params["query"] = query
-
-        # Initialize STAC client and search
         client = pystac_client.Client.open(self.stac_api)
         search = client.search(**search_params)
-
-        items = []
-        for item in search.items():
-            items.append(item.to_dict())
-
-        logger.info(f"Found {len(items)} scenes")
+        
+        # Get all items directly using the built-in iterator
+        items = list(search.items_as_dicts())
+        
+        # If we need to sign URLs, do it in parallel after collecting all items
+        if self.cloud_provider:
+            async def sign_urls():
+                tasks = []
+                for item in items:
+                    for asset in item["assets"].values():
+                        tasks.append(self._sign_url(asset))
+                await asyncio.gather(*tasks)
+                
+            await sign_urls()
+        
         return items
+
+    async def _sign_url(self, asset: dict):
+        """Async URL signing"""
+        if "href" in asset:
+            asset["href"] = self.cloud_provider.get_url(
+                asset["href"], 
+                self.cloud_config
+            )
 
     def _get_asset_url(self, asset: Dict) -> str:
         """Get authenticated URL for asset"""
