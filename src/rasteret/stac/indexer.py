@@ -236,38 +236,38 @@ class StacToGeoParquetIndexer:
     async def _search_stac(self, bbox, date_range, query) -> List[dict]:
         """Optimized STAC search with pagination and parallel processing"""
         search_params = {
-            "collections": [self.data_source], 
+            "collections": [self.data_source],
             "limit": 1000,
             **({"bbox": bbox} if bbox else {}),
             **({"datetime": f"{date_range[0]}/{date_range[1]}"} if date_range else {}),
-            **({"query": query} if query else {})
+            **({"query": query} if query else {}),
         }
 
         client = pystac_client.Client.open(self.stac_api)
         search = client.search(**search_params)
-        
+
         # Get all items directly using the built-in iterator
         items = list(search.items_as_dicts())
-        
+
         # If we need to sign URLs, do it in parallel after collecting all items
         if self.cloud_provider:
+
             async def sign_urls():
                 tasks = []
                 for item in items:
                     for asset in item["assets"].values():
                         tasks.append(self._sign_url(asset))
                 await asyncio.gather(*tasks)
-                
+
             await sign_urls()
-        
+
         return items
 
     async def _sign_url(self, asset: dict):
         """Async URL signing"""
         if "href" in asset:
             asset["href"] = self.cloud_provider.get_url(
-                asset["href"], 
-                self.cloud_config
+                asset["href"], self.cloud_config
             )
 
     def _get_asset_url(self, asset: Dict) -> str:
