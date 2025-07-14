@@ -68,9 +68,7 @@ Run on AWS t3.xlarge 4 CPU machine -
 |---------|-----------|-----------------|
 | Rasterio (Multiprocessing) | 32 seconds | 24 seconds |
 | Rasteret | 4 seconds | 4 seconds |
-| Popular Web Platform* | 10-30 seconds | 3-5 seconds |
-
-*that platform which shall not be named
+| Google Earth Engine | 10-30 seconds | 3-5 seconds |
 
 
 #### Rasteret Collection Creation Times & Costs
