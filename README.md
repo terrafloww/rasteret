@@ -67,7 +67,7 @@ Run on AWS t3.xlarge 4 CPU machine -
 | Library | First Run | Subsequent Runs |
 |---------|-----------|-----------------|
 | Rasterio (Multiprocessing) | 32 seconds | 24 seconds |
-| Rasteret | 4 seconds | 4 seconds |
+| Rasteret | 3 seconds | 3 seconds |
 | Google Earth Engine | 10-30 seconds | 3-5 seconds |
 
 
