@@ -81,8 +81,8 @@ class AsyncCOGHeaderParser:
     def __init__(
         self,
         max_concurrent: int = 300,  # Increased from 100
-        batch_size: int = 100,     # Increased from 50
-        cache_ttl: int = 3600,     # 1 hour
+        batch_size: int = 100,  # Increased from 50
+        cache_ttl: int = 3600,  # 1 hour
         retry_attempts: int = 3,
         cloud_provider: Optional[CloudProvider] = None,
         cloud_config: Optional[CloudConfig] = None,
