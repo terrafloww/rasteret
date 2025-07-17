@@ -22,7 +22,7 @@ import struct
 import time
 from typing import Dict, List, Optional, Set, Any
 
-import httpx
+import aiohttp
 from cachetools import TTLCache, LRUCache
 
 from rasteret.types import CogMetadata
@@ -80,8 +80,8 @@ class AsyncCOGHeaderParser:
 
     def __init__(
         self,
-        max_concurrent: int = 100,
-        batch_size: int = 50,
+        max_concurrent: int = 300,  # Increased from 100
+        batch_size: int = 100,  # Increased from 50
         cache_ttl: int = 3600,  # 1 hour
         retry_attempts: int = 3,
         cloud_provider: Optional[CloudProvider] = None,
@@ -93,12 +93,10 @@ class AsyncCOGHeaderParser:
         self.cloud_config = cloud_config
         self.batch_size = batch_size
 
-        # Connection optimization
-        self.connector = httpx.Limits(
-            max_keepalive_connections=max_concurrent,
-            max_connections=max_concurrent,
-            keepalive_expiry=120,
-        )
+        # Connection optimization for aiohttp
+        self.connector_limit = max_concurrent
+        self.connector_limit_per_host = max_concurrent
+        self.keepalive_timeout = 120
 
         # Rate limiting
         self.semaphore = asyncio.Semaphore(max_concurrent)
@@ -118,17 +116,26 @@ class AsyncCOGHeaderParser:
         }
 
     async def __aenter__(self):
-        self.client = httpx.AsyncClient(
-            limits=self.connector,
-            timeout=30.0,
-            http2=True,
-            headers={"Connection": "keep-alive", "Keep-Alive": "timeout=120"},
+        # Create aiohttp connector with optimized settings
+        connector = aiohttp.TCPConnector(
+            limit=self.connector_limit,
+            limit_per_host=self.connector_limit_per_host,
+            keepalive_timeout=self.keepalive_timeout,
+            enable_cleanup_closed=True,
+        )
+
+        # Create aiohttp client session
+        timeout = aiohttp.ClientTimeout(total=30.0, connect=10.0)
+        self.client = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            headers={"Connection": "keep-alive"},
         )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.client:
-            await self.client.aclose()
+            await self.client.close()
 
     async def process_cog_headers_batch(
         self,
@@ -187,15 +194,15 @@ class AsyncCOGHeaderParser:
             for attempt in range(self.retry_attempts):
                 try:
                     async with self.semaphore:
-                        response = await self.client.get(url, headers=headers)
-                        if response.status_code != 206:
-                            raise IOError(
-                                f"Range request failed: {response.status_code}"
-                            )
+                        async with self.client.get(url, headers=headers) as response:
+                            if response.status != 206:
+                                raise IOError(
+                                    f"Range request failed: {response.status}"
+                                )
 
-                        data = response.content
-                        self.header_cache[cache_key] = data
-                        return data
+                            data = await response.read()
+                            self.header_cache[cache_key] = data
+                            return data
 
                 except Exception as e:
                     if attempt == self.retry_attempts - 1:
