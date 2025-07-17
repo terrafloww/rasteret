@@ -37,7 +37,7 @@ class StacToGeoParquetIndexer:
         name: Optional[str] = None,
         cloud_provider: Optional[CloudProvider] = None,
         cloud_config: Optional[CloudConfig] = None,
-        max_concurrent: int = 100,
+        max_concurrent: int = 300,  # Increased from 100
     ):
         self.data_source = data_source
         self.stac_api = stac_api
@@ -46,7 +46,7 @@ class StacToGeoParquetIndexer:
         self.cloud_config = cloud_config
         self.name = name
         self.max_concurrent = max_concurrent
-        self.batch_size = 50
+        self.batch_size = 100  # Increased from 50
 
     @property
     def band_map(self) -> Dict[str, str]:
