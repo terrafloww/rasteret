@@ -79,7 +79,9 @@ class TestStacIndexer(unittest.IsolatedAsyncioTestCase):
         # Configure mock chain
         mock_pystac.Client.open.return_value = mock_client
         mock_client.search.return_value = mock_search
-        mock_search.items_as_dicts.return_value = [item.to_dict() for item in self.mock_stac_items]
+        mock_search.items_as_dicts.return_value = [
+            item.to_dict() for item in self.mock_stac_items
+        ]
 
         # Create indexer
         indexer = StacToGeoParquetIndexer(
@@ -88,7 +90,9 @@ class TestStacIndexer(unittest.IsolatedAsyncioTestCase):
 
         # Test search
         items = await indexer._search_stac(
-            bbox=[-180, -90, 180, 90], date_range=["2023-01-01", "2023-12-31"], query=None
+            bbox=[-180, -90, 180, 90],
+            date_range=["2023-01-01", "2023-12-31"],
+            query=None,
         )
 
         # Verify results
@@ -109,7 +113,9 @@ class TestStacIndexer(unittest.IsolatedAsyncioTestCase):
 
         mock_pystac.Client.open.return_value = mock_client
         mock_client.search.return_value = mock_search
-        mock_search.items_as_dicts.return_value = [item.to_dict() for item in self.mock_stac_items]
+        mock_search.items_as_dicts.return_value = [
+            item.to_dict() for item in self.mock_stac_items
+        ]
 
         # Setup COG parser mock
         mock_parser_instance = AsyncMock()
