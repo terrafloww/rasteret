@@ -18,7 +18,7 @@ Fetch COG data with geometry masking and parallel tile reading.
 
 from __future__ import annotations
 import asyncio
-import httpx
+import aiohttp
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -50,32 +50,37 @@ class COGTileRequest:
 class COGReader:
     """Manages connection pooling and COG reading operations."""
 
-    def __init__(self, max_concurrent: int = 50):
+    def __init__(self, max_concurrent: int = 150):  # Increased from 50
         self.max_concurrent = max_concurrent
-        self.limits = httpx.Limits(
-            max_keepalive_connections=max_concurrent,
-            max_connections=max_concurrent,
-            keepalive_expiry=60.0,  # Shorter keepalive for HTTP/2
-        )
-        self.timeout = httpx.Timeout(30.0, connect=10.0)
+        # aiohttp connector settings
+        self.connector_limit = max_concurrent
+        self.connector_limit_per_host = max_concurrent
+        self.keepalive_timeout = 60.0
         self.client = None
         self.sem = None
-        self.batch_size = 12  # Reduced for better HTTP/2 multiplexing
+        self.batch_size = 20  # Increased for better throughput
 
     async def __aenter__(self):
-        self.client = httpx.AsyncClient(
-            timeout=self.timeout,
-            limits=self.limits,
-            http2=True,
-            verify=True,
-            trust_env=True,
+        # Create aiohttp connector with optimized settings
+        connector = aiohttp.TCPConnector(
+            limit=self.connector_limit,
+            limit_per_host=self.connector_limit_per_host,
+            keepalive_timeout=self.keepalive_timeout,
+            enable_cleanup_closed=True,
+        )
+
+        # Create aiohttp client session
+        timeout = aiohttp.ClientTimeout(total=30.0, connect=10.0)
+        self.client = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
         )
         self.sem = asyncio.Semaphore(self.max_concurrent)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.client:
-            await self.client.aclose()
+            await self.client.close()
 
     def merge_ranges(
         self, requests: List[COGTileRequest], gap_threshold: int = 1024
@@ -155,9 +160,9 @@ class COGReader:
         for attempt in range(3):
             try:
                 async with self.sem:
-                    response = await self.client.get(url, headers=headers)
-                    response.raise_for_status()
-                    return response.content
+                    async with self.client.get(url, headers=headers) as response:
+                        response.raise_for_status()
+                        return await response.read()
             except Exception:
                 if attempt == 2:
                     raise
@@ -363,7 +368,7 @@ async def read_cog_tile_data(
     url: str,
     metadata: CogMetadata,
     geometry: Optional[Polygon] = None,
-    max_concurrent: int = 50,
+    max_concurrent: int = 150,  # Increased from 50
     debug: bool = False,
 ) -> Tuple[np.ndarray, Optional[Affine]]:
     """Read COG data, optionally masked by geometry."""
