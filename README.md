@@ -78,7 +78,7 @@ Run on AWS t3.xlarge 4 CPU machine -
 | Scope | Time | AWS S3 GET Cost |
 |-------|------|-----------------|
 | Global (1 year) | ~30 minutes | $1.80 |
-| Regional (1 year, for state of Karnataka, India) | ~45 seconds | Negligible |
+| Regional (1 year, for state of Karnataka, India) | ~9 seconds | Negligible |
 
 ### Large Scale Cost Analysis
 
