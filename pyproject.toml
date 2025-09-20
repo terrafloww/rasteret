@@ -1,43 +1,37 @@
-[project]
-name = "rasteret"
-version = "0.2.0"
-description = "Python library that gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and lowers S3 HTTP requests in your workflows."
-readme = "README.md"
-requires-python = ">=3.10,<3.12"
-authors = [
-    { name = "Sidharth Subramaniam", email = "sid@terrafloww.com" }
-]
-dependencies = [
-    "numpy>=1.24.0",
-    "pyarrow>=14.0.1",
-    "pystac-client>=0.7.5",
-    "stac-geoparquet==0.6.0",
-    "aiohttp>=3.9.1",
-    "aiofiles>=23.2.1",
-    "cachetools>=5.3.2",
-    "geoarrow-pyarrow>=0.1.0",
-    "geoarrow-pandas>=0.1.0",
-    "boto3==1.18.32",
-    "xarray==2025.01.0",
-    "rioxarray>=0.7.0",
-    "imagecodecs>=2023.9.18",
-    "zstandard>=0.22.0",
-    "pyproj>=3.6.1",
-    "shapely>=2.0.2",
-    "affine>=2.4.0",
-    "rasterio>=1.4.0",
-    "rich>=13.7.0",
-    "tqdm>=4.66.1",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.4.2",
-]
-
-[project.scripts]
-rasteret = "rasteret:main"
-
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 88
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 88
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --cov=rasteret"
+testpaths = [
+    "tests",
+]
