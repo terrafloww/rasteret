@@ -1,119 +1,110 @@
-# examples/basic_workflow.py
 from pathlib import Path
 from shapely.geometry import Polygon
-import xarray as xr
 
 from rasteret import Rasteret
 from rasteret.constants import DataSources
 from rasteret.core.utils import save_per_geometry
 
+import xarray as xr
 
-def main():
-    """Example of Rasteret workflow with xarray output."""
-    # 1. Setup workspace and parameters
-    workspace_dir = Path.home() / "rasteret_workspace"
-    workspace_dir.mkdir(exist_ok=True)
+aoi1_polygon = Polygon(
+    [(77.55, 13.01), (77.58, 13.01), (77.58, 13.08), (77.55, 13.08), (77.55, 13.01)]
+)
 
-    custom_name = "bangalore_sentinel2"
-    date_range = ("2025-01-01", "2025-01-31")
-    data_source = DataSources.SENTINEL2
 
-    # Define area and time of interest
-    aoi1_polygon = Polygon(
-        [(77.55, 13.01), (77.58, 13.01), (77.58, 13.08), (77.55, 13.08), (77.55, 13.01)]
+# Get the total bounds of all polygons above
+bbox = aoi1_polygon.bounds
+# OR
+# give even larger AOI bounds that covers all your future analysis areas
+# eg., Polygon of a State or a Country
+# bbox = country_polygon.bounds
+
+# Collection configuration
+
+# give your custom name for local collection, it will be attached to the
+# beginning of the collection name for eg., bangalore_202401-12_landsat
+custom_name = "bangalore"
+
+# here we are aiming to write 1 year worth of STAC metadata and COG file headers to local disk
+date_range = ("2024-01-01", "2024-01-31")
+
+# choose from LANDSAT / SENTINEL2
+data_source = DataSources.SENTINEL2
+
+# Set up workspace folder as you wish
+workspace_dir = Path.home() / "rasteret_workspace"
+workspace_dir.mkdir(exist_ok=True)
+
+# List existing collections if there are any in the workspace folder
+collections = Rasteret.list_collections(workspace_dir=workspace_dir)
+for c in collections:
+    print(f"\nExisting Collection in workspace dir {workspace_dir}:")
+    print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
+
+# Try loading existing collection
+try:
+    # example name given here
+    processor = Rasteret.load_collection(
+        "bangalore_202401-12_landsat", workspace_dir=workspace_dir
+    )
+except ValueError:
+
+    # Instantiate the Class
+    processor = Rasteret(
+        workspace_dir=workspace_dir,
+        custom_name=custom_name,
+        data_source=data_source,
+        date_range=date_range,
     )
 
-    bbox = aoi1_polygon.bounds
+    # and create a new collection
 
-    print("1. Available Collections")
-    print("----------------------")
-
-    # Here were are Collection_names, which are unique identifiers for a collection
-    # based on custom_name, date_range and data_source
-    # example collection name for above custom_name and date_range will be
-    # "bangalore_202401-03_landsat", if date_range spans across years, it will be "bangalore_202401-202503_landsat"
-    collections = Rasteret.list_collections(workspace_dir=workspace_dir)
-    for c in collections:
-        print(f"Existing collection in workspace dir {workspace_dir} :")
-        print(
-            f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes"
-        )
-
-    try:
-
-        # if you want to load a specific collection, you must pass the full collection_name
-        # collection_names can be obtained from Rasteret.list_collections(workspace_dir=workspace_dir), shown above
-
-        # here im passing a non existent collection name to raise ValueError on purpose
-        processor = Rasteret.load_collection(
-            collection_name="california_202401-03_landsat", workspace_dir=workspace_dir
-        )
-    except ValueError:
-        print("\nCollection not found. Creating new collection...")
-        print("-------------------------")
-
-        # initialize Rasteret processor
-        processor = Rasteret(
-            custom_name=custom_name,
-            data_source=data_source,
-            workspace_dir=workspace_dir,
-            date_range=date_range,
-        )
-
-        # Create a new collection
-        # this will load an existing collection if it matches the
-        # custom_name, date_range and data_source
-        # so you can safely call this method without worrying about duplicates
-        processor.create_collection(
-            bbox=bbox,
-            date_range=date_range,
-            cloud_cover_lt=20,
-        )
-
-    print("\n3. Retrieving Data")
-    print("----------------")
-
-    # Retrieve data for the area of interests and bands
-    # provide as list of shapely geometries and bands
-    # returns an xarray dataset with 4 dimensions: time, geometry, y, x
-    ds = processor.get_xarray(
-        geometries=[aoi1_polygon],
-        bands=["B04", "B08"],
+    # we are giving the BBOX for which STAC items and their COG headers will be fetched
+    # and also filtering using PySTAC filters for LANDSAT 8 platform specifically
+    # from LANDSAT USGS STAC, and giving a scene level cloud-cover filter
+    processor.create_collection(
+        bbox=bbox,
         cloud_cover_lt=20,
     )
 
-    print("\nCreated dataset:")
-    print(ds)
+# Now we can query the collection created above, to get the data we want
+# in this case 2 geometries, 2 bands, and a few PySTAC search filters are provided
+ds = processor.get_xarray(
+    geometries=[aoi1_polygon],
+    bands=["B04", "B08"],
+    cloud_cover_lt=20,
+    date_range=["2024-01-10", "2024-01-30"],
+)
+# this returns an xarray dataset variable "ds" with the data for the geometries and bands specified
+# behind the scenes, the library is efficiently filtering the local STAC geoparquet,
+# for the LANDSAT scenes that pass the filters and dates provided
+# then its getting the tif urls of the requested bands
+# then grabbing COG tiles only for the geometries from those tif files
+# and creating a xarray dataset for each geometry and its time series data
 
-    # Calculate NDVI
-    ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
+# Calculate NDVI
+ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
 
-    # Create a new dataset with NDVI arrays
-    # Add 'NDVI' as a new data variable
-    ndvi_ds = xr.Dataset(
-        {"NDVI": ndvi},
-        coords=ds.coords,
-        attrs=ds.attrs,
-    )
+# for LANDSAT satellite
+# ndvi_ds = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
 
-    print("\nNDVI dataset:")
-    print(ndvi_ds)
+# give a data variable name for NDVI array
+ndvi_ds = xr.Dataset(
+    {"NDVI": ndvi},
+    coords=ds.coords,
+    attrs=ds.attrs,
+)
 
-    # Create output directory if you wish
-    output_dir = Path("ndvi_results")
-    output_dir.mkdir(exist_ok=True)
+# create a output folder if you wish to
+output_dir = Path(f"ndvi_results_{custom_name}")
+output_dir.mkdir(exist_ok=True)
 
-    # Save NDVI results to separate files per geometry
-    # here we are choosing the xarray data variable as "NDVI"
-    # giving a file prefix "ndvi" and saving the files in output_dir
-    output_files = save_per_geometry(
-        ndvi_ds, output_dir, file_prefix="ndvi", data_var="NDVI"
-    )
+# Save results from xarray to geotiff files, each geometry's data will be stored in
+# its own folder. We can also give file-name prefix
+# and also mention which Xarray varible to save as geotiffs
+output_files = save_per_geometry(
+    ndvi_ds, output_dir, file_prefix="ndvi", data_var="NDVI"
+)
 
-    print("\nProcessed NDVI files:")
-    for geom_id, filepath in output_files.items():
-        print(f"Geometry {geom_id}: {filepath}")
-
-
-if __name__ == "__main__":
-    main()
+for geom_id, filepath in output_files.items():
+    print(f"Geometry {geom_id}: {filepath}")
