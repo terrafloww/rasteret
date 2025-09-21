@@ -14,9 +14,9 @@ def main():
     workspace_dir = Path.home() / "rasteret_workspace"
     workspace_dir.mkdir(exist_ok=True)
 
-    custom_name = "bangalore"
-    date_range = ("2024-01-01", "2024-03-31")
-    data_source = DataSources.LANDSAT
+    custom_name = "bangalore_sentinel2"
+    date_range = ("2025-01-01", "2025-01-31")
+    data_source = DataSources.SENTINEL2
 
     # Define area and time of interest
     aoi1_polygon = Polygon(
@@ -34,6 +34,7 @@ def main():
     # "bangalore_202401-03_landsat", if date_range spans across years, it will be "bangalore_202401-202503_landsat"
     collections = Rasteret.list_collections(workspace_dir=workspace_dir)
     for c in collections:
+        print(f"Existing collection in workspace dir {workspace_dir} :")
         print(
             f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes"
         )
@@ -67,7 +68,6 @@ def main():
             bbox=bbox,
             date_range=date_range,
             cloud_cover_lt=20,
-            platform={"in": ["LANDSAT_8"]},
         )
 
     print("\n3. Retrieving Data")
@@ -78,7 +78,7 @@ def main():
     # returns an xarray dataset with 4 dimensions: time, geometry, y, x
     ds = processor.get_xarray(
         geometries=[aoi1_polygon],
-        bands=["B4", "B5"],
+        bands=["B04", "B08"],
         cloud_cover_lt=20,
     )
 
@@ -86,7 +86,7 @@ def main():
     print(ds)
 
     # Calculate NDVI
-    ndvi = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
+    ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
 
     # Create a new dataset with NDVI arrays
     # Add 'NDVI' as a new data variable
