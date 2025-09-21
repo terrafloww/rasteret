@@ -1,6 +1,6 @@
 [project]
 name = "rasteret"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python library that gives you faster querying of Cloud-Optimized GeoTIFFs (COGs), and lowers S3 HTTP requests in your workflows."
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
