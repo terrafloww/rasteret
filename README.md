@@ -186,6 +186,8 @@ from rasteret import Rasteret
 from rasteret.constants import DataSources
 from rasteret.core.utils import save_per_geometry
 
+import xarray as xr
+
 aoi1_polygon = Polygon([
     (77.55, 13.01),
     (77.58, 13.01),
@@ -194,16 +196,8 @@ aoi1_polygon = Polygon([
     (77.55, 13.01)
 ])
 
-aoi2_polygon = Polygon([
-    (77.56, 13.02),
-    (77.59, 13.02),
-    (77.59, 13.09),
-    (77.56, 13.09),
-    (77.56, 13.02)
-])
-
 # Get the total bounds of all polygons above
-bbox = aoi1_polygon.union(aoi2_polygon).bounds
+bbox = aoi1_polygon.bounds
 # OR
 # give even larger AOI bounds that covers all your future analysis areas
 # eg., Polygon of a State or a Country
@@ -223,10 +217,10 @@ in your workspace directory, if they were created earlier.
 custom_name = "bangalore"
 
 # here we are aiming to write 1 year worth of STAC metadata and COG file headers to local disk
-date_range = ("2024-01-01", "2024-12-31")
+date_range = ("2025-01-01", "2025-01-31")
 
 # choose from LANDSAT / SENTINEL2
-data_source = DataSources.LANDSAT
+data_source = DataSources.SENTINEL2
 
 # Set up workspace folder as you wish
 workspace_dir = Path.home() / "rasteret_workspace"
@@ -235,6 +229,7 @@ workspace_dir.mkdir(exist_ok=True)
 # List existing collections if there are any in the workspace folder
 collections = Rasteret.list_collections(workspace_dir=workspace_dir)
 for c in collections:
+    print(f"\nExisting Collection in workspace dir {workspace_dir}:")
     print(f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes")
 ```
 
@@ -250,9 +245,9 @@ except ValueError:
     # Instantiate the Class
     processor = Rasteret(
         workspace_dir=workspace_dir,
-        custom_name="bangalore",
-        data_source=DataSources.LANDSAT,
-        date_range=("2024-01-01", "2024-01-31")
+        custom_name=custom_name,
+        data_source=data_source,
+        date_range=date_range
     )
 
     # and create a new collection
@@ -263,7 +258,6 @@ except ValueError:
     processor.create_collection(
         bbox=bbox,
         cloud_cover_lt=20,
-        platform={"in": ["LANDSAT_8"]}
     )
 ```
 
@@ -273,10 +267,9 @@ except ValueError:
 # Now we can query the collection created above, to get the data we want
 # in this case 2 geometries, 2 bands, and a few PySTAC search filters are provided
 ds = processor.get_xarray(
-    geometries=[aoi1_polygon,aoi2_polygon],
-    bands=["B4", "B5"],
+    geometries=[aoi1_polygon],
+    bands=["B04", "B08"],
     cloud_cover_lt=20,
-    date_range=["2024-01-10", "2024-01-30"]
 )
 # this returns an xarray dataset variable "ds" with the data for the geometries and bands specified
 # behind the scenes, the library is efficiently filtering the local STAC geoparquet,
@@ -286,7 +279,10 @@ ds = processor.get_xarray(
 # and creating a xarray dataset for each geometry and its time series data
 
 # Calculate NDVI
-ndvi_ds = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
+ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
+
+# for LANDSAT satellite
+# ndvi = (ds.B5 - ds.B4) / (ds.B5 + ds.B4)
 
 # give a data variable name for NDVI array
 ndvi_ds = xr.Dataset(
