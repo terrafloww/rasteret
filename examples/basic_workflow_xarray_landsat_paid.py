@@ -17,8 +17,8 @@ def main():
     workspace_dir = Path.home() / "rasteret_workspace"
     workspace_dir.mkdir(exist_ok=True)
 
-    custom_name = "bangalore"
-    date_range = ("2024-01-01", "2024-03-31")
+    custom_name = "bangalore_landsat"
+    date_range = ("2024-01-01", "2024-01-31")
     data_source = DataSources.LANDSAT
 
     # Define area and time of interest
@@ -37,6 +37,7 @@ def main():
     # "bangalore_202401-03_landsat", if date_range spans across years, it will be "bangalore_202401-202503_landsat"
     collections = Rasteret.list_collections(workspace_dir=workspace_dir)
     for c in collections:
+        print(f"Existing collection in workspace dir {workspace_dir} :")
         print(
             f"- {c['name']}: {c['data_source']}, {c['date_range']}, {c['size']} scenes"
         )
