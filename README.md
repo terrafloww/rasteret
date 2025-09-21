@@ -167,7 +167,8 @@ export AWS_SECRET_ACCESS_KEY='your_secret_key'
 
 ## 🔧 Installation
 ```bash
-pip install rasteret
+# once cloned
+uv sync
 ```
 
 <br>
