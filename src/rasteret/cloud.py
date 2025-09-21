@@ -64,9 +64,7 @@ class CloudProvider:
             session = boto3.Session()
             credentials = session.get_credentials()
             if credentials is None:
-                logger.info(
-                    "\nAWS credentials not found.\n"
-                )
+                logger.info("\nAWS credentials not found.\n")
                 return False
             return True
         except Exception:
@@ -106,11 +104,16 @@ class AWSProvider(CloudProvider):
                 host = p.netloc
                 path = p.path.lstrip("/")
                 # Virtual-hosted-style: <bucket>.s3.amazonaws.com or <bucket>.s3.<region>.amazonaws.com
-                m = re.match(r"^([a-z0-9.\-]+)\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$", host)
+                m = re.match(
+                    r"^([a-z0-9.\-]+)\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$", host
+                )
                 if m:
                     return m.group(1), path
                 # Path-style: s3.amazonaws.com/<bucket>/key or s3.<region>.amazonaws.com/<bucket>/key
-                if re.match(r"^s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$", host) and "/" in path:
+                if (
+                    re.match(r"^s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$", host)
+                    and "/" in path
+                ):
                     bucket, key = path.split("/", 1)
                     return bucket, key
         except Exception:
@@ -120,7 +123,11 @@ class AWSProvider(CloudProvider):
     def get_url(self, url: str, config: CloudConfig) -> Optional[str]:
         """Resolve and sign URL based on configuration."""
         # First check for alternate S3 URL in STAC metadata
-        if isinstance(url, dict) and "alternate" in url and "s3" in url.get("alternate", {}):
+        if (
+            isinstance(url, dict)
+            and "alternate" in url
+            and "s3" in url.get("alternate", {})
+        ):
             s3_url = url["alternate"]["s3"]["href"]
             logger.debug(f"Using alternate S3 URL: {s3_url}")
             url = s3_url
@@ -141,8 +148,12 @@ class AWSProvider(CloudProvider):
             bucket, key = bucket_key
             try:
                 # Requester-pays requires signing and RequestPayer header
-                if not getattr(self, "_have_creds", False) or not getattr(self, "client", None):
-                    logger.error("AWS credentials/client not available for requester-pays signing")
+                if not getattr(self, "_have_creds", False) or not getattr(
+                    self, "client", None
+                ):
+                    logger.error(
+                        "AWS credentials/client not available for requester-pays signing"
+                    )
                     return None
                 params = {"Bucket": bucket, "Key": key, "RequestPayer": "requester"}
                 return self.client.generate_presigned_url(
