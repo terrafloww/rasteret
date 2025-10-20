@@ -283,10 +283,22 @@ class Rasteret:
         # Create copies to avoid modifying original
         signed_assets = {}
         for band, asset in scene.assets.items():
-            # Get signed URL
-            signed_url = await self._url_cache.get_signed_url(asset["href"])
+            href = scene._extract_asset_href(asset)
+            if not href:
+                logger.warning(
+                    "Skipping asset without href for scene %s band %s", scene.id, band
+                )
+                signed_assets[band] = asset
+                continue
 
-            # Create a copy of the asset with signed URL
+            signed_url = await self._url_cache.get_signed_url(href)
+            if not signed_url:
+                logger.warning(
+                    "Failed to sign asset for scene %s band %s", scene.id, band
+                )
+                signed_assets[band] = asset
+                continue
+
             signed_asset = asset.copy()
             signed_asset["href"] = signed_url
             signed_assets[band] = signed_asset

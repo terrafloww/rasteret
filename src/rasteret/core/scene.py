@@ -69,12 +69,46 @@ class Scene:
 
         return None
 
+    def _extract_asset_href(self, asset: Dict) -> Optional[str]:
+        """Resolve the most appropriate href for a STAC asset."""
+
+        if asset is None:
+            return None
+
+        if not isinstance(asset, dict):
+            return asset
+
+        href = asset.get("href")
+        if href:
+            return href
+
+        alternates = asset.get("alternate") or {}
+        if isinstance(alternates, dict):
+            preferred_order = ["s3", "aws", "https", "http", "cloudfront"]
+            for key in preferred_order:
+                alt = alternates.get(key)
+                if isinstance(alt, dict) and alt.get("href"):
+                    return alt["href"]
+            for alt in alternates.values():
+                if isinstance(alt, dict) and alt.get("href"):
+                    return alt["href"]
+
+        links = asset.get("links") if isinstance(asset, dict) else None
+        if isinstance(links, list):
+            for link in links:
+                if isinstance(link, dict) and link.get("href"):
+                    return link["href"]
+
+        return None
+
     def _get_asset_url(
         self, asset: Dict, provider: CloudProvider, cloud_config: CloudConfig
-    ) -> str:
+    ) -> Optional[str]:
         """Get authenticated URL for asset"""
-        url = asset["href"] if isinstance(asset, dict) else asset
-        if provider and cloud_config:
+        url = self._extract_asset_href(asset)
+        if url and isinstance(asset, dict):
+            asset.setdefault("href", url)
+        if url and provider and cloud_config:
             return provider.get_url(url, cloud_config)
         return url
 
