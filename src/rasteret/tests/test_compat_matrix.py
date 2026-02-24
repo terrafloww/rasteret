@@ -164,6 +164,7 @@ def test_matrix_planetary_computer_presigned_https_does_not_require_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Planetary Computer: SAS-signed HTTPS hrefs should work without backend."""
+    pytest.importorskip("planetary_computer")
     import rasteret
 
     captured = _stub_header_parser(monkeypatch)

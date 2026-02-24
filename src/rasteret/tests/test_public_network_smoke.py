@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import rasteret
 
 
@@ -136,6 +138,7 @@ _AEF_URL = (
 )
 
 
+@pytest.mark.network
 def test_aef_build_enrich_and_read_matches_rasterio(tmp_path: Path) -> None:
     import asyncio
 
