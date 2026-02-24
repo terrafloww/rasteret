@@ -446,7 +446,7 @@ class RasterAccessor:
                 geom_arrays.append(da)
 
             if geom_arrays:
-                ds = xr.merge(geom_arrays)
+                ds = xr.merge(geom_arrays, compat="override")
                 # Strip timezone for xarray compat (numpy can't merge tz-aware datetime64)
                 ts = (
                     pd.Timestamp(self.datetime).tz_localize(None)
@@ -473,7 +473,7 @@ class RasterAccessor:
         if not data_arrays:
             return xr.Dataset()
 
-        return xr.merge(data_arrays)
+        return xr.merge(data_arrays, compat="override")
 
     def _merge_geodataframe_results(
         self, results: list[tuple[list[dict], int]], geometries: pa.Array
