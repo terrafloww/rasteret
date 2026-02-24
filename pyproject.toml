@@ -1,0 +1,141 @@
+[project]
+name = "rasteret"
+version = "0.3.0"
+description = "Index-first GeoTIFF access layer for ML and analysis, powered by queryable Parquet indexes."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Sidharth Subramaniam", email = "sid@terrafloww.com" }
+]
+keywords = ["geotiff", "cog", "raster", "satellite", "imagery", "geospatial", "cloud-optimized", "torchgeo"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "pyarrow>=14.0.1",
+    "pystac-client>=0.7.5",
+    "obstore>=0.8.0",
+    "cachetools>=5.3.2",
+    "geoarrow-pyarrow>=0.1.0",
+    "geoarrow-pandas>=0.1.0",
+    "geopandas>=0.13",
+    "imagecodecs>=2023.9.18",
+    "zstandard>=0.22.0",
+    "pyproj>=3.6.1",
+    "affine>=2.4.0",
+    "rasterio>=1.4.0",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+aws = [
+    "boto3>=1.34.0",
+]
+xarray = [
+    "xarray>=2024.1.0,<2027",
+]
+azure = [
+    "planetary-computer>=1.0.0",
+    "requests>=2.31.0",
+]
+earthdata = [
+    "requests>=2.31.0",
+]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "pytest-asyncio>=0.23.2",
+    "tifffile>=2023.9.18",
+    "ruff==0.8.6",
+    "pre-commit>=3.7.0",
+]
+torchgeo = [
+    "torchgeo>=0.9.0; python_version >= '3.12'",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+    "mkdocs-jupyter>=0.25",
+    "mkdocs-llmstxt>=0.2",
+    "mkdocs-section-index>=0.3",
+]
+examples = [
+    "duckdb>=1.1.0",
+    "stac-geoparquet>=0.6.0",
+]
+all = [
+    "rasteret[xarray,aws,azure,earthdata,torchgeo,dev,docs,examples]",
+]
+
+[project.urls]
+Repository = "https://github.com/terrafloww/rasteret"
+Documentation = "https://terrafloww.github.io/rasteret"
+Issues = "https://github.com/terrafloww/rasteret/issues"
+Changelog = "https://terrafloww.github.io/rasteret/changelog/"
+
+[project.scripts]
+rasteret = "rasteret.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rasteret"]
+exclude = ["src/rasteret/tests"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.github",
+    "/assets",
+    "/docs",
+    "/examples",
+    "/fixtures",
+    "/notebooks",
+    "/site",
+    "/.pre-commit-config.yaml",
+    "/.secrets.baseline",
+    "/mkdocs.yml",
+    "/uv.lock",
+    "/codemeta.json",
+    "/CITATION.cff",
+    "/.internal",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/**/*.ipynb" = ["E402"]
+"docs/tutorials/**/*.ipynb" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["src/rasteret/tests"]
+markers = [
+    "network: tests that require network access (pass --network to run)",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.8.6",
+]

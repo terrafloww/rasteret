@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use Rasteret, please cite it as below."
+title: "Rasteret: Index-first GeoTIFF access layer for ML and analysis, powered by queryable Parquet indexes."
+type: software
+authors:
+  - name: "Terrafloww Labs, Inc."
+version: "0.3.0"
+date-released: "2026-02-23"
+license: Apache-2.0
+repository-code: "https://github.com/terrafloww/rasteret"
+keywords:
+  - geospatial
+  - cloud-optimized-geotiff
+  - torchgeo
+  - remote-sensing

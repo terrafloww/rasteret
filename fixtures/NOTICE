@@ -1,0 +1,19 @@
+These TIFF fixture files are sourced from:
+
+  https://github.com/developmentseed/async-tiff
+  (MIT license, fixtures under libtiff permissive license)
+
+The original libtiff COPYRIGHT is included alongside these files.
+
+Only the specific fixtures used by Rasteret's test suite are included here:
+
+  tiled-oversize-gray-i8.tif   LZW + predictor=2, oversized tile
+  tiled-rgb-u8.tif             Tiled RGB, header parser tests
+  predictor-3-gray-f32.tif     Float predictor=3 (stripped)
+  int16_zstd.tif               ZSTD int16 (stripped)
+  issue_69_lzw.tiff            LZW uint16 regression fixture
+  random-fp16-pred2.tiff       Float16 + integer predictor
+  random-fp16-pred3.tiff       Float16 + float predictor
+  bigtiff/BigTIFF.tif          BigTIFF endianness test
+  bigtiff/BigTIFFLong.tif      BigTIFF endianness test
+  bigtiff/BigTIFFMotorola.tif  BigTIFF endianness test (big-endian)

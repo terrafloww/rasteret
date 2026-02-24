@@ -1,0 +1,23 @@
+name: Live smoke (network)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: Live smoke (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: uv sync --extra dev --extra aws --extra azure --extra earthdata --extra examples
+      - name: Run network tests (skips when creds missing)
+        run: uv run pytest -m network -q --tb=short

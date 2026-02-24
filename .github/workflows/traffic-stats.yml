@@ -1,0 +1,95 @@
+name: GitHub traffic stats
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: data
+
+      - name: Collect traffic data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p data/github
+
+          REPO="${{ github.repository }}"
+
+          # Clones (14-day rolling window from GitHub)
+          gh api "repos/${REPO}/traffic/clones" --jq '.clones[] | [.timestamp,.count,.uniques] | @csv' | \
+            while IFS= read -r line; do
+              echo "$line"
+            done > /tmp/clones_new.csv
+
+          # Views (14-day rolling window from GitHub)
+          gh api "repos/${REPO}/traffic/views" --jq '.views[] | [.timestamp,.count,.uniques] | @csv' | \
+            while IFS= read -r line; do
+              echo "$line"
+            done > /tmp/views_new.csv
+
+          # Referrers (top 10, snapshot)
+          gh api "repos/${REPO}/traffic/popular/referrers" --jq '.[] | [.referrer,.count,.uniques] | @csv' | \
+            while IFS= read -r line; do
+              echo "$(date -u +%Y-%m-%dT00:00:00Z),$line"
+            done > /tmp/referrers_new.csv
+
+          # Popular paths (top 10, snapshot)
+          gh api "repos/${REPO}/traffic/popular/paths" --jq '.[] | [.path,.count,.uniques] | @csv' | \
+            while IFS= read -r line; do
+              echo "$(date -u +%Y-%m-%dT00:00:00Z),$line"
+            done > /tmp/paths_new.csv
+
+          # Merge clones (deduplicate by timestamp)
+          CLONES=data/github/clones.csv
+          if [ ! -f "$CLONES" ]; then
+            echo "timestamp,count,uniques" > "$CLONES"
+          fi
+          while IFS= read -r line; do
+            ts=$(echo "$line" | cut -d',' -f1 | tr -d '"')
+            if ! grep -q "$ts" "$CLONES" 2>/dev/null; then
+              echo "$line" >> "$CLONES"
+            fi
+          done < /tmp/clones_new.csv
+
+          # Merge views (deduplicate by timestamp)
+          VIEWS=data/github/views.csv
+          if [ ! -f "$VIEWS" ]; then
+            echo "timestamp,count,uniques" > "$VIEWS"
+          fi
+          while IFS= read -r line; do
+            ts=$(echo "$line" | cut -d',' -f1 | tr -d '"')
+            if ! grep -q "$ts" "$VIEWS" 2>/dev/null; then
+              echo "$line" >> "$VIEWS"
+            fi
+          done < /tmp/views_new.csv
+
+          # Append referrers (always append, these are daily snapshots)
+          REFS=data/github/referrers.csv
+          if [ ! -f "$REFS" ]; then
+            echo "date,referrer,count,uniques" > "$REFS"
+          fi
+          cat /tmp/referrers_new.csv >> "$REFS"
+
+          # Append paths (always append, these are daily snapshots)
+          PATHS=data/github/paths.csv
+          if [ ! -f "$PATHS" ]; then
+            echo "date,path,count,uniques" > "$PATHS"
+          fi
+          cat /tmp/paths_new.csv >> "$PATHS"
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/github/
+          git diff --cached --quiet || git commit -m "data: github traffic $(date -u +%Y-%m-%d)"
+          git push

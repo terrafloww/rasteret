@@ -1,0 +1,213 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright Terrafloww Labs, Inc.
+site_name: Rasteret
+site_url: https://terrafloww.github.io/rasteret
+site_description: >-
+  Index-first access to cloud-native GeoTIFF collections for ML and analysis.
+  A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), over 20x faster reads.
+site_author: Terrafloww Labs, Inc.
+repo_url: https://github.com/terrafloww/rasteret
+repo_name: terrafloww/rasteret
+edit_uri: edit/main/docs/
+docs_dir: docs
+exclude_docs: ""
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  logo: assets/logo-light.svg
+  favicon: assets/favicon.svg
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.path
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+    - header.autohide
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            group_by_category: true
+            show_category_heading: true
+            merge_init_into_class: true
+            show_if_no_docstring: false
+            show_signature_annotations: true
+            signature_crossrefs: true
+            separate_signature: true
+            annotations_path: brief
+            filters:
+              - "!^_"
+              - "!^__"
+              - "^__init__$"
+  - mkdocs-jupyter:
+      execute: false
+      include_source: true
+      theme: light
+  - llmstxt:
+      full_output: llms-full.txt
+      markdown_description: >-
+        Index-first access to cloud-native GeoTIFF collections for ML and analysis.
+        A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), over 20x faster reads.
+      sections:
+        Getting Started:
+          - getting-started/index.md
+        Tutorials:
+          - tutorials/*.ipynb
+        How-To Guides:
+          - how-to/*.md
+        API Reference:
+          - reference/**/*.md
+        Explanation:
+          - explanation/*.md
+  - section-index
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - def_list
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started/index.md
+  - Tutorials:
+    - tutorials/index.md
+    - "Quickstart: xarray": tutorials/01_quickstart_xarray.ipynb
+    - TorchGeo Integration: tutorials/02_torchgeo_09_accelerator.ipynb
+    - Building from Parquet: tutorials/06_non_stac_cog_collections.ipynb
+    - Parquet-first Filtering: tutorials/03_parquet_first_filtering.ipynb
+    - Configuring Custom Collections: tutorials/04_custom_cloud_and_bands.ipynb
+    - TorchGeo Benchmark: tutorials/05_torchgeo_comparison.ipynb
+  - How-To Guides:
+    - how-to/index.md
+    - Build from Parquet: how-to/build-from-parquet.md
+    - AEF Embeddings: how-to/aef-embeddings.md
+    - Enriched Parquet Workflows: how-to/enriched-parquet-workflows.md
+    - ML Training with Splits: how-to/ml-training-splits.md
+    - Multi-Dataset Training: how-to/multi-dataset-training.md
+    - Collection Management: how-to/collection-management.md
+    - Dataset Catalog: how-to/dataset-catalog.md
+    - Custom Cloud Provider: how-to/custom-cloud-provider.md
+  - Explanation:
+    - explanation/index.md
+    - Architecture: explanation/architecture.md
+    - Compatibility Matrix: explanation/compatibility-matrix.md
+    - Design Decisions: explanation/design-decisions.md
+    - Correctness Contract: explanation/correctness.md
+    - Schema Contract: explanation/schema-contract.md
+    - Ecosystem Comparison: explanation/interop.md
+    - Benchmarks: explanation/benchmark.md
+  - API Reference:
+    - reference/index.md
+    - Entry Points: reference/rasteret.md
+    - Catalog: reference/catalog.md
+    - Core:
+      - Collection: reference/core/collection.md
+      - Execution: reference/core/execution.md
+      - RasterAccessor: reference/core/raster_accessor.md
+      - Utilities: reference/core/utils.md
+    - Ingest:
+      - rasteret.ingest: reference/ingest/index.md
+      - Normalize: reference/ingest/normalize.md
+      - STAC Indexer: reference/ingest/stac_indexer.md
+      - Record Table: reference/ingest/parquet_record_table.md
+      - COG Enrichment: reference/ingest/enrich.md
+    - Fetch:
+      - COG Reader: reference/fetch/cog.md
+      - Header Parser: reference/fetch/header_parser.md
+    - Integrations:
+      - TorchGeo: reference/integrations/torchgeo.md
+    - Configuration:
+      - Cloud & Storage: reference/cloud.md
+      - Types: reference/types.md
+      - CLI: reference/cli.md
+  - Contributing: contributing.md
+  - Releasing: releasing.md
+  - Changelog: changelog.md
+
+extra:
+  analytics:
+    provider: google
+    property: G-K46JVQZL1C
+    feedback:
+      title: Was this page helpful?
+      ratings:
+        - icon: material/thumb-up-outline
+          name: This page was helpful
+          data: 1
+          note: Thanks for the feedback!
+        - icon: material/thumb-down-outline
+          name: This page could be improved
+          data: 0
+          note: >-
+            Thanks for the feedback! If you have suggestions,
+            <a href="https://github.com/terrafloww/rasteret/issues/new?labels=docs" target="_blank" rel="noopener">open an issue</a>.
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/terrafloww
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/V5vvuEBc
+    - icon: fontawesome/brands/linkedin
+      link: https://www.linkedin.com/company/terrafloww-inc/

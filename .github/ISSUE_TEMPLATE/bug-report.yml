@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a bug to help us fix it
+labels: [bug]
+
+body:
+  - type: textarea
+    attributes:
+      label: Description
+      description: >
+        What happened? What did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: >
+        A minimal reproducible example helps us fix issues much faster.
+        Include the code you ran and the error traceback.
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Area
+      description: Which part of Rasteret is affected?
+      options:
+        - Ingestion
+        - Collection queries
+        - Data reading
+        - Integrations
+        - CLI
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Rasteret version
+      description: >
+        Output of `python -c "import rasteret; print(rasteret.__version__)"`.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Python version
+      placeholder: "3.12"
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Installed packages
+      description: >
+        Output of `uv pip list` or `pip list`.
+      render: text
+    validations:
+      required: false

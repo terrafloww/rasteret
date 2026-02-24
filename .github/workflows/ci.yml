@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv sync --extra dev
+      - name: Ruff check
+        run: uv run ruff check src/
+      - name: Ruff format check
+        run: uv run ruff format --check src/
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: uv sync --extra dev --extra xarray --extra examples
+      - name: Run tests
+        run: uv run pytest -q --tb=short
+      - name: List installed packages
+        if: failure()
+        run: uv pip list
+
+  docs:
+    name: Docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --extra docs --no-dev
+      - name: Build docs (strict)
+        run: uv run mkdocs build --strict
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.label || github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

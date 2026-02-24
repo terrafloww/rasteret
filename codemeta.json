@@ -1,0 +1,35 @@
+{
+    "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+    "@type": "SoftwareSourceCode",
+    "name": "Rasteret",
+    "description": "Index-first GeoTIFF access layer for ML and analysis, powered by queryable Parquet indexes.",
+    "programmingLanguage": "Python",
+    "runtimePlatform": "Python 3.12+",
+    "license": "https://spdx.org/licenses/Apache-2.0",
+    "codeRepository": "https://github.com/terrafloww/rasteret",
+    "issueTracker": "https://github.com/terrafloww/rasteret/issues",
+    "keywords": [
+        "geospatial",
+        "COG",
+        "cloud-optimized-geotiff",
+        "torchgeo",
+        "xarray",
+        "remote-sensing",
+        "ML"
+    ],
+    "applicationCategory": "Geospatial, Machine Learning",
+    "author": [
+        {
+            "@type": "Person",
+            "givenName": "Sidharth",
+            "familyName": "Subramaniam",
+            "email": "sid@terrafloww.com"
+        }
+    ],
+    "maintainer": [
+        {
+            "@type": "Organization",
+            "name": "Terrafloww Labs, Inc."
+        }
+    ]
+}

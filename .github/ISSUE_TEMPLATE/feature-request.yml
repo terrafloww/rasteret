@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest a new feature or improvement
+labels: [enhancement]
+
+body:
+  - type: textarea
+    attributes:
+      label: Summary
+      description: >
+        What would you like Rasteret to do?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Use case
+      description: >
+        Describe the workflow or problem this would address.
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Area
+      description: Which part of Rasteret does this relate to?
+      options:
+        - Ingestion
+        - Collection queries
+        - Data reading
+        - Integrations
+        - CLI
+        - Performance
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Proposed approach
+      description: >
+        If you have ideas about implementation, share them here. Describing
+        the problem well is more valuable than proposing a solution.
+    validations:
+      required: false

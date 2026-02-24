@@ -1,0 +1,939 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright Terrafloww Labs, Inc.
+
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import struct
+from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
+from typing import Any, AsyncIterator
+
+import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
+
+from rasteret.core.execution import get_collection_gdf, get_collection_xarray
+from rasteret.core.raster_accessor import RasterAccessor
+from rasteret.types import RasterInfo
+
+logger = logging.getLogger(__name__)
+
+# WKB geometry type id → GeoParquet type name (OGC Simple Features).
+_WKB_TYPE_NAMES: dict[int, str] = {
+    1: "Point",
+    2: "LineString",
+    3: "Polygon",
+    4: "MultiPoint",
+    5: "MultiLineString",
+    6: "MultiPolygon",
+    7: "GeometryCollection",
+}
+
+
+def _geometry_types_from_wkb(col: pa.ChunkedArray) -> list[str]:
+    """Return sorted GeoParquet ``geometry_types`` from a WKB column."""
+    seen: set[str] = set()
+    for chunk in col.chunks:
+        for val in chunk:
+            if val is None:
+                continue
+            raw = val.as_py()
+            if raw is None or len(raw) < 5:
+                continue
+            fmt = "<I" if raw[0] == 1 else ">I"
+            type_id = struct.unpack(fmt, raw[1:5])[0] & 0xFF
+            name = _WKB_TYPE_NAMES.get(type_id)
+            if name:
+                seen.add(name)
+    return sorted(seen)
+
+
+def _bbox_overlap_expr(
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+) -> ds.Expression:
+    """Arrow expression testing whether a record's bbox overlaps the given bounds."""
+    return (
+        (ds.field("bbox_maxx") >= minx)
+        & (ds.field("bbox_minx") <= maxx)
+        & (ds.field("bbox_maxy") >= miny)
+        & (ds.field("bbox_miny") <= maxy)
+    )
+
+
+class Collection:
+    """
+    A collection of raster data with flexible initialization.
+
+    Collections can be created from:
+    - Local partitioned datasets
+    - Single Arrow tables
+
+    Collections maintain efficient partitioned storage when using files.
+
+    Examples
+    --------
+    # From partitioned dataset
+    >>> collection = Collection.from_local("path/to/dataset")
+
+    # Filter and process
+    >>> filtered = collection.subset(cloud_cover_lt=20)
+    >>> ds = filtered.get_xarray(...)
+    """
+
+    def __init__(
+        self,
+        dataset: ds.Dataset | None = None,
+        name: str = "",
+        description: str = "",
+        data_source: str = "",
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ):
+        """Initialize a Collection.
+
+        Parameters
+        ----------
+        dataset : pyarrow.dataset.Dataset, optional
+            Backing Arrow dataset. ``None`` creates an empty collection.
+        name : str
+            Human-readable collection name.
+        description : str
+            Free-text description.
+        data_source : str
+            Data source identifier (e.g. ``"sentinel-2-l2a"``).
+        start_date : datetime, optional
+            Collection temporal start.
+        end_date : datetime, optional
+            Collection temporal end.
+        """
+        self.dataset = dataset
+        self.name = name
+        self.description = description
+        self.data_source = data_source
+        self.start_date = start_date
+        self.end_date = end_date
+        if self.dataset is not None:
+            self._validate_parquet_dataset()
+
+    def _view(self, dataset: ds.Dataset) -> Collection:
+        """Return a new Collection view preserving this Collection's metadata."""
+        return Collection(
+            dataset=dataset,
+            name=self.name,
+            description=self.description,
+            data_source=self.data_source,
+            start_date=self.start_date,
+            end_date=self.end_date,
+        )
+
+    @classmethod
+    def from_local(cls, path: str | Path) -> Collection:
+        """Create collection from a local Parquet dataset.
+
+        Tries Hive-style partitioning first (year/month), falls back to
+        plain Parquet if the directory isn't Hive-partitioned.
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Dataset not found at {path}")
+
+        try:
+            dataset = ds.dataset(
+                str(path),
+                format="parquet",
+                partitioning="hive",
+                exclude_invalid_files=True,
+            )
+        except pa.ArrowInvalid:
+            dataset = ds.dataset(
+                str(path),
+                format="parquet",
+                exclude_invalid_files=True,
+            )
+
+        name = path.stem.removesuffix("_stac").removesuffix("_records")
+        return cls(dataset=dataset, name=name)
+
+    @classmethod
+    def from_parquet(cls, path: str | Path, name: str = "") -> Collection:
+        """Load a Collection from any Parquet file or directory.
+
+        The Parquet must contain the core columns:
+        ``id``, ``datetime``, ``geometry``, ``assets``, ``scene_bbox``.
+        See the `Schema Contract <../explanation/schema-contract/>`_ docs page.
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Parquet not found at {path}")
+
+        dataset = ds.dataset(str(path), format="parquet")
+        required = {"id", "datetime", "geometry", "assets", "scene_bbox"}
+        missing = required - set(dataset.schema.names)
+        if missing:
+            raise ValueError(
+                f"Parquet is missing required columns: {missing}. "
+                "See the Schema Contract page in docs for the expected schema."
+            )
+
+        name = name or path.stem
+        return cls(dataset=dataset, name=name)
+
+    def subset(
+        self,
+        *,
+        cloud_cover_lt: float | None = None,
+        date_range: tuple[str, str] | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
+        geometries: Any = None,
+        split: str | Sequence[str] | None = None,
+        split_column: str = "split",
+    ) -> Collection:
+        """Return a filtered view of this Collection.
+
+        All provided criteria are combined with AND.
+
+        Parameters
+        ----------
+        cloud_cover_lt : float, optional
+            Keep records with ``eo:cloud_cover`` below this value (0--100).
+        date_range : tuple of str, optional
+            ``(start, end)`` ISO date strings for temporal filtering.
+        bbox : tuple of float, optional
+            ``(minx, miny, maxx, maxy)`` bounding box filter.
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict, optional
+            Spatial filter; records whose bbox overlaps any geometry are kept.
+            Accepts ``(minx, miny, maxx, maxy)`` bbox tuples, Arrow arrays
+            (e.g. a geometry column read from GeoParquet), Shapely objects,
+            raw WKB bytes, or GeoJSON dicts.
+        split : str or sequence of str, optional
+            Keep only rows matching the given split value(s).
+        split_column : str
+            Column name holding split labels. Defaults to ``"split"``.
+
+        Returns
+        -------
+        Collection
+            A new Collection with the filtered dataset view.
+        """
+        if self.dataset is None:
+            return self
+
+        filter_expr: ds.Expression | None = None
+
+        def _and(current: ds.Expression | None, new: ds.Expression) -> ds.Expression:
+            return new if current is None else current & new
+
+        if cloud_cover_lt is not None:
+            if "eo:cloud_cover" not in self.dataset.schema.names:
+                raise ValueError("Collection has no cloud cover data")
+            if not isinstance(cloud_cover_lt, (int, float)) or not (
+                0 <= cloud_cover_lt <= 100
+            ):
+                raise ValueError("Invalid cloud cover value")
+            filter_expr = _and(
+                filter_expr, ds.field("eo:cloud_cover") < float(cloud_cover_lt)
+            )
+
+        if date_range is not None:
+            if "datetime" not in self.dataset.schema.names:
+                raise ValueError("Collection has no datetime data")
+            start_raw, end_raw = date_range
+            if not start_raw or not end_raw:
+                raise ValueError("Invalid date range")
+            start = pd.Timestamp(start_raw)
+            end = pd.Timestamp(end_raw)
+            if start > end:
+                raise ValueError("Invalid date range")
+
+            ts_type = self.dataset.schema.field("datetime").type
+            if not pa.types.is_timestamp(ts_type):
+                raise ValueError("Collection datetime column is not a timestamp")
+            start_scalar = pa.scalar(start.to_pydatetime(), type=ts_type)
+            end_scalar = pa.scalar(end.to_pydatetime(), type=ts_type)
+            date_filter = (ds.field("datetime") >= start_scalar) & (
+                ds.field("datetime") <= end_scalar
+            )
+            filter_expr = _and(filter_expr, date_filter)
+
+        if bbox is not None:
+            required_cols = {"bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy"}
+            if not required_cols.issubset(set(self.dataset.schema.names)):
+                raise ValueError(
+                    "bbox filtering requires scalar bbox columns "
+                    "('bbox_minx', 'bbox_miny', 'bbox_maxx', 'bbox_maxy'). "
+                    "Rebuild or re-normalize the collection with rasteret>=1.0.0."
+                )
+            if len(bbox) != 4:
+                raise ValueError("Invalid bbox format")
+            minx, miny, maxx, maxy = bbox
+            if minx > maxx or miny > maxy:
+                raise ValueError("Invalid bbox coordinates")
+            filter_expr = _and(filter_expr, _bbox_overlap_expr(minx, miny, maxx, maxy))
+
+        if geometries is not None:
+            required_cols = {"bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy"}
+            if not required_cols.issubset(set(self.dataset.schema.names)):
+                raise ValueError(
+                    "geometry filtering requires scalar bbox columns "
+                    "('bbox_minx', 'bbox_miny', 'bbox_maxx', 'bbox_maxy'). "
+                    "Rebuild or re-normalize the collection with rasteret>=1.0.0."
+                )
+            from rasteret.core.geometry import bbox_array, coerce_to_geoarrow
+
+            geo_arr = coerce_to_geoarrow(geometries)
+            xmin, ymin, xmax, ymax = bbox_array(geo_arr)
+
+            geometry_filter: ds.Expression | None = None
+            for i in range(len(xmin)):
+                geom_expr = _bbox_overlap_expr(
+                    xmin[i].as_py(),
+                    ymin[i].as_py(),
+                    xmax[i].as_py(),
+                    ymax[i].as_py(),
+                )
+                geometry_filter = (
+                    geom_expr
+                    if geometry_filter is None
+                    else (geometry_filter | geom_expr)
+                )
+            if geometry_filter is not None:
+                filter_expr = _and(filter_expr, geometry_filter)
+
+        if split is not None:
+            if split_column not in self.dataset.schema.names:
+                raise ValueError(f"Collection has no split column: '{split_column}'")
+            if isinstance(split, str):
+                split_expr = ds.field(split_column) == split
+            elif (
+                isinstance(split, Sequence)
+                and not isinstance(split, (str, bytes))
+                and split
+                and all(isinstance(value, str) for value in split)
+            ):
+                split_expr = ds.field(split_column).isin(list(split))
+            else:
+                raise ValueError(
+                    "Invalid split filter. Use a split name or sequence of split names."
+                )
+            filter_expr = _and(filter_expr, split_expr)
+
+        if filter_expr is None:
+            raise ValueError("No filters provided")
+
+        return self._view(self.dataset.filter(filter_expr))
+
+    def select_split(
+        self,
+        split: str | Sequence[str],
+        *,
+        split_column: str = "split",
+    ) -> Collection:
+        """Return a split-filtered view of this Collection.
+
+        This is a convenience wrapper around ``subset(split=...)`` to keep the
+        intent obvious in training code.
+        """
+        return self.subset(split=split, split_column=split_column)
+
+    def where(self, expr: ds.Expression) -> Collection:
+        """Return a filtered view using a raw Arrow dataset expression."""
+        if self.dataset is None:
+            return self
+        return self._view(self.dataset.filter(expr))
+
+    @classmethod
+    def list_collections(
+        cls, workspace_dir: Path | None = None
+    ) -> list[dict[str, Any]]:
+        """List cached collections with summary metadata.
+
+        Parameters
+        ----------
+        workspace_dir : Path, optional
+            Directory to scan for cached collections. Defaults to
+            ``~/rasteret_workspace``.
+
+        Returns
+        -------
+        list of dict
+            Each dict contains ``name``, ``kind``, ``data_source``,
+            ``date_range``, ``size``, and ``created``.
+        """
+        if workspace_dir is None:
+            workspace_dir = Path.home() / "rasteret_workspace"
+
+        def _date_range(dataset: ds.Dataset) -> tuple[str, str] | None:
+            if "datetime" not in dataset.schema.names:
+                return None
+            scanner = dataset.scanner(columns=["datetime"])
+            min_value = None
+            max_value = None
+            for batch in scanner.to_batches():
+                if batch.num_rows == 0:
+                    continue
+                column = batch.column(0)
+                batch_min = pc.min(column).as_py()
+                batch_max = pc.max(column).as_py()
+                if batch_min is not None:
+                    min_value = (
+                        batch_min if min_value is None else min(min_value, batch_min)
+                    )
+                if batch_max is not None:
+                    max_value = (
+                        batch_max if max_value is None else max(max_value, batch_max)
+                    )
+            if min_value is None or max_value is None:
+                return None
+            return (min_value.date().isoformat(), max_value.date().isoformat())
+
+        collections: list[dict[str, Any]] = []
+
+        def _data_source_from_metadata(dataset: ds.Dataset) -> str | None:
+            metadata = dataset.schema.metadata or {}
+            value = metadata.get(b"data_source")
+            if not value:
+                return None
+            try:
+                decoded = value.decode("utf-8").strip()
+            except (UnicodeDecodeError, AttributeError):
+                return None
+            return decoded or None
+
+        # Look for cached directories
+        for suffix in ("_stac", "_records"):
+            dirs = workspace_dir.glob(f"*{suffix}")
+            for cache_dir in dirs:
+                try:
+                    try:
+                        dataset = ds.dataset(
+                            str(cache_dir), format="parquet", partitioning="hive"
+                        )
+                    except pa.ArrowInvalid:
+                        dataset = ds.dataset(str(cache_dir), format="parquet")
+                    name = cache_dir.name.removesuffix(suffix)
+                    date_range = _date_range(dataset)
+                    data_source = _data_source_from_metadata(dataset) or (
+                        name.split("_")[-1] if "_" in name else "unknown"
+                    )
+
+                    collections.append(
+                        {
+                            "name": name,
+                            "kind": suffix.removeprefix("_"),
+                            "data_source": data_source,
+                            "date_range": date_range,
+                            "size": dataset.count_rows(),
+                            "created": cache_dir.stat().st_ctime,
+                        }
+                    )
+
+                except (pa.ArrowInvalid, OSError) as exc:
+                    logger.debug("Failed to read collection %s: %s", cache_dir, exc)
+                    continue
+
+        return collections
+
+    def export(
+        self,
+        path: str | Path,
+        partition_by: Sequence[str] = ("year", "month"),
+    ) -> None:
+        """Export the collection as a partitioned Parquet dataset.
+
+        Use this to produce a portable copy of the collection that can
+        be shared with teammates via :func:`rasteret.load`.
+
+        Parameters
+        ----------
+        path : str or Path
+            Output directory.
+        partition_by : sequence of str
+            Columns to partition by. Defaults to ``("year", "month")``.
+        """
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        if self.dataset is None:
+            raise ValueError("No Pyarrow dataset provided")
+
+        table = self.dataset.to_table()
+
+        # Enhanced metadata with fallbacks
+        custom_metadata = {
+            b"description": (
+                self.description.encode("utf-8") if self.description else b""
+            ),
+            b"created": datetime.now().isoformat().encode("utf-8"),
+            b"name": self.name.encode("utf-8") if self.name else b"",
+            b"data_source": (
+                self.data_source.encode("utf-8") if self.data_source else b"unknown"
+            ),
+            b"date_range": (
+                f"{self.start_date.isoformat()},{self.end_date.isoformat()}".encode(
+                    "utf-8"
+                )
+                if self.start_date and self.end_date
+                else b""
+            ),
+            b"rasteret_collection_version": b"1",
+        }
+
+        # Merge with existing metadata
+        merged_metadata = {**custom_metadata, **(table.schema.metadata or {})}
+
+        # GeoParquet metadata: declare the geometry column as WKB.
+        #
+        # Rasteret stores footprint geometries in CRS84 (lon/lat) for portability.
+        # GeoParquet 1.1 treats missing `crs` as CRS84 by default.
+        if "geometry" in table.schema.names and b"geo" not in merged_metadata:
+            geom_types = _geometry_types_from_wkb(table.column("geometry"))
+            geo = {
+                "version": "1.1.0",
+                "primary_column": "geometry",
+                "columns": {
+                    "geometry": {
+                        "encoding": "WKB",
+                        "geometry_types": geom_types,
+                    }
+                },
+            }
+            merged_metadata[b"geo"] = json.dumps(
+                geo, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+
+        table_with_metadata = table.replace_schema_metadata(merged_metadata)
+
+        # Write dataset
+        pq.write_to_dataset(
+            table_with_metadata,
+            root_path=str(path),
+            partition_cols=partition_by,
+            compression="zstd",
+            compression_level=3,
+            row_group_size=50_000,
+            write_statistics=True,
+            use_dictionary=True,
+            write_batch_size=10000,
+            basename_template="part-{i}.parquet",
+        )
+
+    async def iterate_rasters(
+        self, data_source: str | None = None
+    ) -> AsyncIterator[RasterAccessor]:
+        """Iterate through raster records in this Collection.
+
+        Each Parquet row becomes a :class:`RasterAccessor` that provides
+        async band-loading methods.
+
+        Parameters
+        ----------
+        data_source : str, optional
+            Data source identifier for band mapping. Defaults to
+            ``self.data_source`` or inferred from the dataset.
+
+        Yields
+        ------
+        RasterAccessor
+        """
+        required_fields = {"id", "datetime", "geometry", "assets", "scene_bbox"}
+
+        if self.dataset is None:
+            return
+
+        # Check required fields
+        missing = required_fields - set(self.dataset.schema.names)
+        if missing:
+            raise ValueError(f"Missing required fields: {missing}")
+
+        resolved_source = data_source or self.data_source or ""
+
+        for batch in self.dataset.to_batches():
+            for row in batch.to_pylist():
+                try:
+                    info = RasterInfo(
+                        id=row["id"],
+                        datetime=row["datetime"],
+                        footprint=row["geometry"],
+                        bbox=row["scene_bbox"],
+                        crs=row.get("proj:epsg"),
+                        cloud_cover=row.get("eo:cloud_cover", 0),
+                        assets=row["assets"],
+                        band_metadata=self._extract_band_metadata(row),
+                        collection=row.get("collection", resolved_source),
+                    )
+                    yield RasterAccessor(info, resolved_source)
+                except (KeyError, TypeError, ValueError):
+                    logger.exception(
+                        "Failed to create RasterAccessor from collection row"
+                    )
+                    continue
+
+    async def get_first_raster(self) -> RasterAccessor:
+        """Return the first raster record in the collection.
+
+        Returns
+        -------
+        RasterAccessor
+        """
+        async for raster in self.iterate_rasters():
+            return raster
+        raise ValueError("No raster records found in collection")
+
+    def _validate_parquet_dataset(self) -> None:
+        """Basic dataset validation."""
+        if not isinstance(self.dataset, ds.Dataset):
+            raise TypeError("Expected pyarrow.dataset.Dataset")
+
+    def _extract_band_metadata(self, row: dict) -> dict:
+        """Extract band metadata from row."""
+        return {k: v for k, v in row.items() if k.endswith("_metadata")}
+
+    @classmethod
+    def _format_date_range(
+        cls, start_date: pd.Timestamp, end_date: pd.Timestamp
+    ) -> str:
+        """Format date range for collection name."""
+        if start_date.year == end_date.year:
+            return f"{start_date.strftime('%Y%m')}-{end_date.strftime('%m')}"
+        return f"{start_date.strftime('%Y%m')}-{end_date.strftime('%Y%m')}"
+
+    @classmethod
+    def _source_token(cls, data_source: str) -> str:
+        """Convert data source id into a stable name token.
+
+        Uses short tokens for canonical built-ins to keep cache paths
+        compact, while preserving more detail for other sources
+        (e.g. ``sentinel-1-grd``).
+        """
+        source = (data_source or "").strip().lower()
+        short_names = {
+            "sentinel-2-l2a": "sentinel",
+            "landsat-c2-l2": "landsat",
+        }
+        if source in short_names:
+            return short_names[source]
+
+        # Use the source itself, normalised for filesystem safety.
+        source = source.replace("/", "-")
+        source = source.replace(" ", "-")
+        source = re.sub(r"[^a-z0-9-]+", "-", source)
+        source = re.sub(r"-{2,}", "-", source).strip("-")
+        return source or "source"
+
+    @classmethod
+    def create_name(
+        cls, custom_name: str, date_range: tuple[str, str], data_source: str
+    ) -> str:
+        """Create a standardized collection name.
+
+        Parameters
+        ----------
+        custom_name : str
+            User-chosen name component. Underscores are normalised to dashes.
+        date_range : tuple of str
+            ``(start, end)`` ISO date strings.
+        data_source : str
+            Data source identifier (e.g. ``"sentinel-2-l2a"``).
+
+        Returns
+        -------
+        str
+            Name in the format ``{custom}_{daterange}_{source}``.
+        """
+        start_date = pd.to_datetime(date_range[0])
+        end_date = pd.to_datetime(date_range[1])
+
+        custom_token = custom_name.lower().replace(" ", "-").replace("_", "-")
+        custom_token = re.sub(r"[^a-z0-9-]+", "-", custom_token)
+        custom_token = re.sub(r"-{2,}", "-", custom_token).strip("-")
+        if not custom_token:
+            custom_token = "collection"
+
+        name_parts = [
+            custom_token,
+            cls._format_date_range(start_date, end_date),
+            cls._source_token(data_source),
+        ]
+        return "_".join(name_parts)
+
+    @classmethod
+    def parse_name(cls, name: str) -> dict[str, str]:
+        """Parse a standardized collection name into its components.
+
+        Parameters
+        ----------
+        name : str
+            Collection name created by :meth:`create_name`.
+
+        Returns
+        -------
+        dict
+            Keys: ``custom_name``, ``data_source``, ``name``.
+        """
+        try:
+            # Remove _stac suffix if present
+            name = name.replace("_stac", "")
+
+            # Split parts
+            parts = name.split("_")
+            if len(parts) != 3:
+                raise ValueError(f"Invalid name format: {name}")
+
+            custom_name, date_str, source = parts
+
+            # Parse date range
+            date_parts = date_str.split("-")
+            if len(date_parts) != 2:
+                raise ValueError(f"Invalid date format: {date_str}")
+
+            return {
+                "custom_name": custom_name,
+                "data_source": source,
+                "name": name,  # Return full standardized name
+            }
+
+        except ValueError as e:
+            logger.debug(f"Failed to parse name {name}: {e}")
+            return {"name": name, "custom_name": name, "data_source": "unknown"}
+
+    def to_torchgeo_dataset(
+        self,
+        *,
+        bands: list[str],
+        chip_size: int | None = None,
+        is_image: bool = True,
+        allow_resample: bool = False,
+        split: str | Sequence[str] | None = None,
+        split_column: str = "split",
+        label_field: str | None = None,
+        geometries: Any = None,
+        geometries_crs: int = 4326,
+        transforms: Any = None,
+        max_concurrent: int = 50,
+        cloud_config: Any = None,
+        backend: Any = None,
+        time_series: bool = False,
+        target_crs: int | None = None,
+    ) -> Any:
+        """Create a TorchGeo GeoDataset backed by this Collection.
+
+        This integration is optional and requires ``torchgeo`` and its
+        dependencies.
+
+        Parameters
+        ----------
+        bands : list of str
+            Band codes to load (e.g. ``["B04", "B03", "B02"]``).
+        chip_size : int, optional
+            Spatial extent of each chip in pixels.
+        is_image : bool
+            If ``True`` (default), return chips as ``sample[\"image\"]``.
+            If ``False``, return chips as ``sample[\"mask\"]`` (single-band data
+            will have its channel dimension squeezed to match TorchGeo
+            ``RasterDataset`` behavior).
+        allow_resample : bool
+            If ``True``, Rasteret will resample bands to the dataset grid when
+            requested bands have different resolutions. This is opt-in because
+            it may change pixel values (resampling) and can be slow.
+        split : str or sequence of str, optional
+            Filter to the given split(s) before creating the dataset.
+        split_column : str
+            Column holding split labels. Defaults to ``"split"``.
+        label_field : str, optional
+            Column name to include as ``sample["label"]``.
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict, optional
+            Spatial extent for the dataset. Accepts ``(minx, miny, maxx, maxy)``
+            bbox tuples, Arrow arrays (e.g. from GeoParquet), Shapely objects,
+            raw WKB bytes, or GeoJSON dicts.
+        geometries_crs : int
+            EPSG code for *geometries*. Defaults to ``4326``.
+        transforms : callable, optional
+            TorchGeo-compatible transforms applied to each sample.
+        max_concurrent : int
+            Maximum concurrent HTTP requests.
+        cloud_config : CloudConfig, optional
+            Cloud configuration for URL rewriting.
+        backend : StorageBackend, optional
+            Pluggable I/O backend (e.g. ``ObstoreBackend``).
+        time_series : bool
+            When ``True``, stack all timesteps as ``[T, C, H, W]``.
+        target_crs : int, optional
+            Reproject all records to this EPSG code at read time.
+
+        Returns
+        -------
+        RasteretGeoDataset
+            A standard TorchGeo ``GeoDataset``. Pixel data is in the
+            native COG dtype (e.g. ``uint16`` for Sentinel-2).
+        """
+        from rasteret.integrations.torchgeo import RasteretGeoDataset
+
+        selected_collection = (
+            self.select_split(split, split_column=split_column)
+            if split is not None
+            else self
+        )
+
+        return RasteretGeoDataset(
+            collection=selected_collection,
+            bands=bands,
+            chip_size=chip_size,
+            is_image=is_image,
+            allow_resample=allow_resample,
+            label_field=label_field,
+            geometries=geometries,
+            geometries_crs=geometries_crs,
+            transforms=transforms,
+            cloud_config=cloud_config,
+            max_concurrent=max_concurrent,
+            backend=backend,
+            time_series=time_series,
+            target_crs=target_crs,
+        )
+
+    def _auto_backend(
+        self,
+        cloud_config: Any = None,
+        data_source: str | None = None,
+    ) -> Any:
+        """Auto-create a backend from cloud_config if applicable."""
+        from rasteret.cloud import CloudConfig, backend_config_from_cloud_config
+        from rasteret.fetch.cog import _create_obstore_backend
+
+        resolved_config = cloud_config or CloudConfig.get_config(
+            data_source or self.data_source or ""
+        )
+        if resolved_config:
+            cfg = backend_config_from_cloud_config(resolved_config)
+            if cfg:
+                return _create_obstore_backend(**cfg)
+        return None
+
+    def get_xarray(
+        self,
+        geometries: Any,
+        bands: list[str],
+        *,
+        max_concurrent: int = 50,
+        cloud_config: Any = None,
+        data_source: str | None = None,
+        backend: Any = None,
+        target_crs: int | None = None,
+        **filters: Any,
+    ) -> Any:
+        """Load selected bands into an xarray Dataset.
+
+        Parameters
+        ----------
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict
+            Area(s) of interest to load. Accepts ``(minx, miny, maxx, maxy)``
+            bbox tuples, Arrow arrays (e.g. from GeoParquet), Shapely objects,
+            raw WKB bytes, or GeoJSON dicts.
+        bands : list of str
+            Band codes to load.
+        max_concurrent : int
+            Maximum concurrent HTTP requests.
+        cloud_config : CloudConfig, optional
+            Cloud configuration for URL rewriting.
+        data_source : str, optional
+            Override the inferred data source.
+        backend : StorageBackend, optional
+            Pluggable I/O backend.
+        target_crs : int, optional
+            Reproject all records to this CRS before merging.
+        filters : kwargs
+            Additional keyword arguments passed to :meth:`subset`.
+
+        Returns
+        -------
+        xarray.Dataset
+            Band arrays in native COG dtype (e.g. ``uint16`` for
+            Sentinel-2). CRS encoded via CF conventions (``spatial_ref``
+            coordinate with WKT2, PROJJSON, GeoTransform). Multi-CRS
+            queries are auto-reprojected to the most common CRS.
+        """
+        if backend is None:
+            backend = self._auto_backend(cloud_config, data_source)
+        return get_collection_xarray(
+            collection=self,
+            geometries=geometries,
+            bands=bands,
+            data_source=data_source,
+            max_concurrent=max_concurrent,
+            backend=backend,
+            target_crs=target_crs,
+            **filters,
+        )
+
+    def get_gdf(
+        self,
+        geometries: Any,
+        bands: list[str],
+        *,
+        max_concurrent: int = 50,
+        cloud_config: Any = None,
+        data_source: str | None = None,
+        backend: Any = None,
+        target_crs: int | None = None,
+        **filters: Any,
+    ) -> Any:
+        """Load selected bands into a GeoDataFrame.
+
+        Parameters
+        ----------
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict
+            Area(s) of interest to load. Accepts ``(minx, miny, maxx, maxy)``
+            bbox tuples, Arrow arrays (e.g. from GeoParquet), Shapely objects,
+            raw WKB bytes, or GeoJSON dicts.
+        bands : list of str
+            Band codes to load.
+        max_concurrent : int
+            Maximum concurrent HTTP requests.
+        cloud_config : CloudConfig, optional
+            Cloud configuration for URL rewriting.
+        data_source : str, optional
+            Override the inferred data source.
+        backend : StorageBackend, optional
+            Pluggable I/O backend.
+        target_crs : int, optional
+            Reproject all records to this CRS before building the GeoDataFrame.
+        filters : kwargs
+            Additional keyword arguments passed to :meth:`subset`.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            Band arrays in native COG dtype. Each row is a
+            geometry-record pair with pixel data as columns.
+        """
+        if backend is None:
+            backend = self._auto_backend(cloud_config, data_source)
+        return get_collection_gdf(
+            collection=self,
+            geometries=geometries,
+            bands=bands,
+            data_source=data_source,
+            max_concurrent=max_concurrent,
+            backend=backend,
+            target_crs=target_crs,
+            **filters,
+        )
+
+    def __dir__(self) -> list[str]:
+        names = super().__dir__()
+        return sorted(
+            name
+            for name in names
+            if (name.startswith("__") and name.endswith("__"))
+            or not name.startswith("_")
+        )

@@ -1,0 +1,79 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+
+# MkDocs build output
+/site
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Temporary files
+*.swp
+*.swo
+*~
+*.log
+.DS_Store
+
+# Local data and config
+.env
+.env.*
+*.pem
+*.key
+.secrets
+credentials.json
+.internal_keys/
+.internal/
+
+# Archived drafts and outputs
+archive/
+docs/old/
+docs/spec/
+examples/outputs/
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Local scratch
+.plan.md
+
+# Local smoke-test artifacts
+tmp_*.parquet
+aef_filtered.parquet

@@ -1,0 +1,96 @@
+name: PyPI download stats
+
+on:
+  schedule:
+    - cron: "30 6 * * *"  # Daily at 06:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: data
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: uv python install 3.12
+
+      - name: Install pypistats
+        run: uv pip install pypistats --system
+
+      - name: Collect daily stats
+        run: |
+          mkdir -p data/pypi
+
+          # Overall daily downloads (last 180 days window)
+          pypistats overall rasteret --json --mirrors | \
+            python -c "
+          import json, sys, csv, os
+          data = json.load(sys.stdin)
+          f = 'data/pypi/overall.csv'
+          exists = os.path.exists(f)
+          seen = set()
+          if exists:
+              with open(f) as fh:
+                  for row in csv.DictReader(fh):
+                      seen.add(row['date'])
+          with open(f, 'a', newline='') as fh:
+              w = csv.DictWriter(fh, ['date','category','downloads'])
+              if not exists: w.writeheader()
+              for row in data.get('data', []):
+                  if row['date'] not in seen:
+                      w.writerow(row)
+          "
+
+          # By Python version
+          pypistats python_minor rasteret --json --mirrors | \
+            python -c "
+          import json, sys, csv, os
+          data = json.load(sys.stdin)
+          f = 'data/pypi/by_python.csv'
+          exists = os.path.exists(f)
+          seen = set()
+          if exists:
+              with open(f) as fh:
+                  for row in csv.DictReader(fh):
+                      seen.add((row['date'], row['category']))
+          with open(f, 'a', newline='') as fh:
+              w = csv.DictWriter(fh, ['date','category','downloads'])
+              if not exists: w.writeheader()
+              for row in data.get('data', []):
+                  if (row['date'], row['category']) not in seen:
+                      w.writerow(row)
+          "
+
+          # By system (Linux, Windows, macOS)
+          pypistats system rasteret --json --mirrors | \
+            python -c "
+          import json, sys, csv, os
+          data = json.load(sys.stdin)
+          f = 'data/pypi/by_system.csv'
+          exists = os.path.exists(f)
+          seen = set()
+          if exists:
+              with open(f) as fh:
+                  for row in csv.DictReader(fh):
+                      seen.add((row['date'], row['category']))
+          with open(f, 'a', newline='') as fh:
+              w = csv.DictWriter(fh, ['date','category','downloads'])
+              if not exists: w.writeheader()
+              for row in data.get('data', []):
+                  if (row['date'], row['category']) not in seen:
+                      w.writerow(row)
+          "
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/pypi/
+          git diff --cached --quiet || git commit -m "data: pypi stats $(date -u +%Y-%m-%d)"
+          git push
