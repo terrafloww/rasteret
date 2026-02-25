@@ -29,7 +29,7 @@ own reader fetches pixels concurrently with no GDAL in the path.
 - **Zero downloads** - work with terabytes of imagery while storing only megabytes of metadata
 - **No STAC at training time** - query once at setup; zero API calls during training
 - **Reproducible** - same Parquet index = same records = same results
-- **Native dtypes** - uint16 stays uint16; no silent float32 promotion in the read path
+- **Native dtypes** - uint16 stays uint16 in TorchGeo tensors; xarray promotes only when NaN fill requires it
 - **Shareable cache** - a 5 MB index captures scene selection, band metadata, and split assignments
 
 Rasteret is an **opt-in accelerator**. Your TorchGeo samplers, DataLoader,
