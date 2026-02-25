@@ -3,7 +3,7 @@ name: Publish to Test PyPI
 on:
   push:
     tags:
-      - 'v*.*.*-test*'  # e.g., v0.2.1-test1, v0.3.0-test2
+      - 'v*.*.*rc*'  # e.g., v0.2.1rc1, v0.3.0rc2
 
 jobs:
   build:
