@@ -41,22 +41,22 @@ async tile I/O underneath.
 ## Installation
 
 ```bash
-pip install "rasteret[all]"    # recommended, includes all extras
+uv pip install rasteret
 ```
-
-> [!TIP]
-> We recommend [uv](https://docs.astral.sh/uv/) for faster installs: `uv pip install "rasteret[all]"`
 
 <details>
-<summary><strong>More install options</strong></summary>
+<summary><strong>Extras</strong></summary>
 
 ```bash
-pip install rasteret                 # core only
-pip install "rasteret[xarray]"       # + xarray output
-pip install "rasteret[torchgeo]"     # + TorchGeo for ML
+uv pip install "rasteret[xarray]"       # + xarray output
+uv pip install "rasteret[torchgeo]"     # + TorchGeo for ML pipelines
+uv pip install "rasteret[aws]"          # + requester-pays buckets (Landsat, NAIP)
+uv pip install "rasteret[azure]"        # + Planetary Computer signed URLs
 ```
 
-Available extras: `xarray`, `torchgeo`, `aws`, `azure`, `earthdata`, `examples`, `dev`, `docs`, `all`.
+Combine as needed: `uv pip install "rasteret[xarray,aws]"`.
+
+Available extras: `xarray`, `torchgeo`, `aws`, `azure`, `earthdata`.
 See [Getting Started](https://terrafloww.github.io/rasteret/getting-started/) for details.
 
 > [!NOTE]

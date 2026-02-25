@@ -5,20 +5,18 @@
 Rasteret requires Python 3.12 or later.
 
 ```bash
-# Recommended: includes all extras
-pip install "rasteret[all]"
-
-# Core only (STAC indexing + GeoDataFrame reads)
-pip install rasteret
-
-# With TorchGeo for ML pipelines
-pip install "rasteret[torchgeo]"
+uv pip install rasteret
 ```
 
-!!! tip "Faster installs with [uv](https://docs.astral.sh/uv/)"
+Add extras as needed:
 
-    Replace `pip install` with `uv pip install` in the commands above for
-    significantly faster dependency resolution.
+```bash
+uv pip install "rasteret[xarray]"       # + xarray output
+uv pip install "rasteret[torchgeo]"     # + TorchGeo for ML pipelines
+uv pip install "rasteret[aws]"          # + requester-pays buckets (Landsat, NAIP)
+```
+
+Combine extras: `uv pip install "rasteret[xarray,aws]"`
 
 ??? note "All extras"
 
@@ -30,9 +28,7 @@ pip install "rasteret[torchgeo]"
     | `azure` | planetary-computer | Planetary Computer signed URLs |
     | `earthdata` | requests | Earthdata / DAAC auth (temporary S3 credentials) |
     | `dev` | pytest, ruff, pre-commit | Running tests and linting |
-    | `examples` | duckdb, stac-geoparquet | Running example scripts |
     | `docs` | mkdocs + plugins | Building documentation locally |
-    | `all` | Everything above | Full development environment |
 
 Verify the installation:
 

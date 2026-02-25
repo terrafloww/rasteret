@@ -1,6 +1,6 @@
 [project]
 name = "rasteret"
-version = "0.3.0rc2"
+dynamic = ["version"]
 description = "Index-first GeoTIFF access layer for ML and analysis, powered by queryable Parquet indexes."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -32,7 +32,7 @@ dependencies = [
     "zstandard>=0.22.0",
     "pyproj>=3.6.1",
     "affine>=2.4.0",
-    "rasterio>=1.4.0",
+    "rasterio>=1.4.3,<1.5.0",
     "tqdm>=4.60",
 ]
 
@@ -54,6 +54,7 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "pytest-asyncio>=0.23.2",
+    "pytest-timeout>=2.3.0",
     "tifffile>=2023.9.18",
     "ruff==0.8.6",
     "pre-commit>=3.7.0",
@@ -87,8 +88,11 @@ Changelog = "https://terrafloww.github.io/rasteret/changelog/"
 rasteret = "rasteret.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rasteret"]
