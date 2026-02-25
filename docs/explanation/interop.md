@@ -90,8 +90,9 @@ common CRS before merging. A warning is logged. Pass `target_crs=` to
 
 ### rasterio
 
-Rasteret uses rasterio for reprojection (`rasterio.warp.reproject`) and
-geometry masking (`rasterio.features.geometry_mask`). CRS transforms and
+Rasteret uses rasterio for geometry masking (`rasterio.features.geometry_mask`),
+multi-CRS reprojection (`rasterio.warp.reproject`), and TorchGeo query-grid
+placement (`rasterio.merge.merge` via `rio_semantics.py`). CRS transforms and
 coordinate operations use pyproj directly. Tile reads go through Rasteret's
 own async pipeline backed by obstore. No GDAL in the tile-read path.
 
@@ -139,11 +140,13 @@ metadata.
 ## Testing
 
 The test suite includes pixel-level comparisons against direct rasterio
-reads for the xarray, GeoDataFrame, and TorchGeo output paths. Coverage
-includes Sentinel-2 L2A (uint16) and AEF embeddings (int8). See
-`test_execution.py` (unit/integration) and the live suites:
-`test_public_network_smoke.py`, `test_dataset_pixel_comparison.py`,
-`test_torchgeo_network_usage.py`, and `test_network_smoke.py` (requires `--network`).
+reads for the xarray, GeoDataFrame, and TorchGeo output paths. The TorchGeo
+comparison uses `rasterio.merge.merge` as the oracle, matching what TorchGeo's
+own `_merge_or_stack` calls. Coverage spans 12 datasets including Sentinel-2,
+Landsat, NAIP, Copernicus DEM, ESA WorldCover, and AEF (south-up). See
+`test_dataset_pixel_comparison.py` (requires `--network`), plus
+`test_public_network_smoke.py`, `test_torchgeo_network_usage.py`, and
+`test_network_smoke.py`.
 
 If you encounter edge cases where output differs from rasterio, please
 [file an issue](https://github.com/terrafloww/rasteret/issues).

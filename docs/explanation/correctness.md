@@ -59,6 +59,13 @@ read dtype/values.
 it returns a standard TorchGeo `GeoDataset` so samplers/DataLoader/training code
 stay in TorchGeo, while Rasteret provides fast pixel I/O underneath.
 
+Pixel placement uses `rasterio.merge.merge(bounds=..., res=...)` semantics,
+matching what TorchGeo's own `RasterDataset._merge_or_stack()` calls. This is
+handled by `rio_semantics.py`, which delegates placement entirely to rasterio
+and does not reimplement merge/warp logic. South-up rasters (e.g. AEF, where
+`transform.e > 0`) are normalised to north-up before merge, consistent with
+TorchGeo's `WarpedVRT` approach in `_load_warp_file()`.
+
 If requested bands have different resolutions, Rasteret fails fast by default.
 To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
 `allow_resample=True` to `Collection.to_torchgeo_dataset(...)`.

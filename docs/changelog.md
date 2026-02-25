@@ -44,8 +44,10 @@
 ### Tested
 
 - All three output paths (xarray, GDF, TorchGeo) are tested against direct
-  rasterio reads for Sentinel-2 (uint16) and AEF (int8) data. See
-  `test_execution.py` and `test_network_smoke.py`.
+  rasterio reads across 12 datasets (Sentinel-2, Landsat, NAIP, Copernicus DEM,
+  ESA WorldCover, AEF, and more). The TorchGeo path uses `rasterio.merge.merge`
+  as the oracle, matching TorchGeo's own read semantics. See
+  `test_dataset_pixel_comparison.py` and `test_network_smoke.py`.
 
 ### Stability
 
