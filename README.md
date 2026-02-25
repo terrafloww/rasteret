@@ -30,7 +30,7 @@ own reader fetches pixels concurrently with no GDAL in the path.
 - **No STAC at training time** - query once at setup; zero API calls during training
 - **Reproducible** - same Parquet index = same records = same results
 - **Native dtypes** - uint16 stays uint16; no silent float32 promotion in the read path
-- **Shareable** - a 5 MB index captures scene selection, band metadata, and split assignments
+- **Shareable cache** - a 5 MB index captures scene selection, band metadata, and split assignments
 
 Rasteret is an **opt-in accelerator**. Your TorchGeo samplers, DataLoader,
 xarray workflows, and analysis tools stay the same - Rasteret handles the
@@ -121,6 +121,21 @@ collection = rasteret.build(
 COG headers, and caches everything as Parquet. The next run loads in
 milliseconds.
 
+### Inspect and filter
+
+```python
+collection        # Collection('s2_training', source='sentinel-2-l2a', bands=13, records=47, crs=32643)
+collection.bands  # ['B01', 'B02', ..., 'B12', 'SCL']
+len(collection)   # 47
+
+
+# Filter in memory — no network calls
+filtered = collection.subset(cloud_cover_lt=15, date_range=("2024-03-01", "2024-06-01"))
+```
+
+`subset()` accepts `cloud_cover_lt`, `date_range`, `bbox`, `geometries`, and
+`split`. For raw Arrow expressions, use `collection.where(expr)`.
+
 ### ML training (TorchGeo)
 
 ```python
@@ -157,7 +172,7 @@ ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
 | Multi-band COGs (AEF embeddings, etc.) | [AEF Embeddings guide](https://terrafloww.github.io/rasteret/how-to/aef-embeddings/) |
 | Authenticated sources (PC, requester-pays, Earthdata, etc.) | [Custom Cloud Provider](https://terrafloww.github.io/rasteret/how-to/custom-cloud-provider/) |
 | Share a Collection | `collection.export("path/")` then `rasteret.load("path/")` |
-| Filter by cloud cover, date, bbox | [`collection.subset()`](https://terrafloww.github.io/rasteret/tutorials/) |
+| Filter by cloud cover, date, bbox | [`collection.subset()`](https://terrafloww.github.io/rasteret/how-to/collection-management/) |
 
 </details>
 

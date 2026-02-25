@@ -16,12 +16,13 @@
 - **Local catalog persistence**: `register_local()` persists to
   `~/.rasteret/datasets.local.json`; `export_local_descriptor()` for
   sharing catalog entries alongside Collections.
+- **Torchgeo GeoDataset**: Adapter created that use rasteret's own I/O parts to create a Torchgeo
+  GeoDataset.
 - **Native dtype preservation**: COG tiles return in their source dtype (uint16, int8,
   float32, etc.). No forced float32 conversion.
 - **Rasterio-aligned masking defaults**: AOI reads now default to `all_touched=False`
   and fill masked/outside-coverage pixels with `nodata` when present, otherwise `0`.
-  The primary read API (`read_cog`) returns a `valid_mask` so ML pipelines can avoid
-  learning from filled pixels.
+  The primary read API (`read_cog`) returns a `valid_mask`.
 - **rioxarray removed**: CRS encoding uses pyproj CF conventions directly (WKT2, PROJJSON,
   GeoTransform). The `xarray` extra no longer pulls rioxarray.
 - **Extended TIFF header parsing**: nodata, SamplesPerPixel, PlanarConfiguration,
@@ -32,14 +33,24 @@
   reproject to the most common CRS. Cross-CRS reprojection uses GDAL's
   `calculate_default_transform` for correct resolution handling.
 
+
+### Collection API
+
+- **Collection inspection**: `.bands`, `.bounds`, `.epsg`, `len()`, `__repr__()`,
+  `.describe()`, `.compare_to_catalog()` for quick metadata access without
+  materializing the full table.
+- **Filtering**: `collection.subset(cloud_cover_lt=..., date_range=..., bbox=...,
+  geometries=..., split=...)` for friendly filtering; `collection.where(expr)` for
+  raw Arrow dataset expressions. `select_split()` convenience wrapper.
+- **Sharing**: `collection.export("path/")` writes a portable copy;
+  `rasteret.load("path/")` reloads it.
+
 ### Other changes
 
 - Arrow-native geometry internals (GeoArrow replaces Shapely in hot paths).
 - obstore as base dependency for Rust-native HTTP backend.
 - CLI: `rasteret collections build|list|info|delete|import`, `rasteret build` shortcut.
 - CLI: `rasteret datasets list|info|build|register-local|export-local|unregister-local`.
-- Polished documentation, tutorials, and example scripts.
-- CI workflow fixes and public repo cleanup.
 
 ### Tested
 
@@ -48,14 +59,6 @@
   ESA WorldCover, AEF, and more). The TorchGeo path uses `rasterio.merge.merge`
   as the oracle, matching TorchGeo's own read semantics. See
   `test_dataset_pixel_comparison.py` and `test_network_smoke.py`.
-
-### Stability
-
-- STAC + COG scene workflows: **stable**
-- Multi-cloud (S3, Azure Blob, GCS): stable
-- Dataset catalog: stable
-- TorchGeo adapter: **stable** (upgraded from experimental)
-- Non-STAC / record-table ingestion (build_from_table): stable
 
 ### Breaking changes
 

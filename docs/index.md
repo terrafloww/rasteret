@@ -99,6 +99,7 @@ import rasteret
 
 # 1. Build index (one-time, cached)
 collection = rasteret.build("earthsearch/sentinel-2-l2a", name="s2", bbox=(...), date_range=(...))
+collection.bands   # ['B01', 'B02', ..., 'B12', 'SCL']
 
 # 2. Filter metadata (in-memory, instant)
 sub = collection.subset(cloud_cover_lt=20, date_range=("2024-03-01", "2024-06-01"))
