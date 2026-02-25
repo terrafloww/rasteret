@@ -714,11 +714,16 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
 
             t_step = 1 if t.step is None else int(t.step)
             if self.time_series:
-                # TorchGeo semantics: filter by time, then spatial, then stack.
-                interval = pd.Interval(t.start, t.stop, closed="both")
-                df = self.index.iloc[self.index.index.overlaps(interval)]
+                # TorchGeo semantics: time_series stacks ALL spatially
+                # overlapping records regardless of the sampler's time slice.
+                # TorchGeo's own RasterDataset effectively does this because
+                # files without parseable dates get [Timestamp.min, .max],
+                # making every sampler query match every file.  Rasteret
+                # stores precise per-scene dates from STAC, so we must skip
+                # the time filter here; users control date range upstream
+                # via build(date_range=...) or collection.subset().
+                df = self.index.cx[x.start : x.stop, y.start : y.stop]
                 df = df.iloc[::t_step]
-                df = df.cx[x.start : x.stop, y.start : y.stop]
             else:
                 interval = pd.Interval(t.start, t.stop, closed="both")
                 df = self.index.iloc[self.index.index.overlaps(interval)]
