@@ -1,6 +1,6 @@
 [project]
 name = "rasteret"
-version = "0.3.0rc1"
+version = "0.3.0rc2"
 description = "Index-first GeoTIFF access layer for ML and analysis, powered by queryable Parquet indexes."
 readme = "README.md"
 requires-python = ">=3.12"
