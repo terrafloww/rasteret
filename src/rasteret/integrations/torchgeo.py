@@ -36,8 +36,8 @@ from rasteret.cloud import CloudConfig, backend_config_from_cloud_config
 from rasteret.constants import BandRegistry
 from rasteret.core.collection import Collection
 from rasteret.core.geometry import bbox_array, coerce_to_geoarrow
+from rasteret.core.rio_semantics import MergeGrid, merge_semantic_resample_single_source
 from rasteret.core.utils import (
-    compute_dst_grid,
     normalize_transform,
     reproject_array,
     transform_bbox,
@@ -645,16 +645,16 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             pool: _AsyncCOGReaderPool,
             *,
             out_shape: tuple[int, int] | None,
-        ) -> list[tuple[np.ndarray, Any, np.ndarray]]:
+        ) -> list[tuple[Any, CogMetadata]]:
             """Fetch pixel arrays for all (url, metadata) pairs concurrently.
 
             Reuses the pool's persistent COGReader (and its obstore backend)
             so every request shares the same connection pool.
-            Returns one (2-D array, Affine transform) per request.
+            Returns one ``(CogReadResult, CogMetadata)`` per request.
             """
             reader = pool.reader
 
-            async def _gather() -> list[tuple[np.ndarray, Any, np.ndarray]]:
+            async def _gather() -> list[tuple[Any, CogMetadata]]:
                 tasks = [
                     read_cog(
                         url,
@@ -671,7 +671,9 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     for url, meta, band_index in requests
                 ]
                 results = list(await asyncio.gather(*tasks))
-                return [(r.data, r.transform, r.valid_mask) for r in results]
+                return [
+                    (r, meta) for r, (_url, meta, _band_index) in zip(results, requests)
+                ]
 
             return pool.run(_gather())
 
@@ -701,10 +703,11 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
 
             t_step = 1 if t.step is None else int(t.step)
             if self.time_series:
-                # TorchGeo semantics: time_series stacks all spatially overlapping
-                # records, regardless of the sampler-provided time slice.
-                df = self.index.cx[x.start : x.stop, y.start : y.stop]
+                # TorchGeo semantics: filter by time, then spatial, then stack.
+                interval = pd.Interval(t.start, t.stop, closed="both")
+                df = self.index.iloc[self.index.index.overlaps(interval)]
                 df = df.iloc[::t_step]
+                df = df.cx[x.start : x.stop, y.start : y.stop]
             else:
                 interval = pd.Interval(t.start, t.stop, closed="both")
                 df = self.index.iloc[self.index.index.overlaps(interval)]
@@ -717,28 +720,14 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 )
 
             pool = self._ensure_pool()
-            # Create GeoArrow patch from sampler bbox (no Shapely on fetch path)
+            # Fetch on the raster's native grid; sampling to the query grid is
+            # handled below using TorchGeo-aligned merge semantics.
             patch_array = coerce_to_geoarrow((x.start, y.start, x.stop, y.stop))
             n_bands = len(self.bands)
-            # TorchGeo samplers produce bounds aligned to integer multiples of
-            # `dataset.res`, but floating point representation can still yield
-            # off-by-one in ceil-based shape computations. For ML chips we
-            # prefer fixed-size outputs when `chip_size` is set.
-            if self.chip_size is not None:
-                dst_shape = (int(self.chip_size), int(self.chip_size))
-                dst_transform = Affine(
-                    float(x.step),
-                    0.0,
-                    float(x.start),
-                    0.0,
-                    -float(y.step),
-                    float(y.stop),
-                )
-            else:
-                dst_transform, dst_shape = compute_dst_grid(
-                    (x.start, y.start, x.stop, y.stop),
-                    self._res,
-                )
+            query_grid = MergeGrid(
+                bounds=(float(x.start), float(y.start), float(x.stop), float(y.stop)),
+                res=(abs(float(x.step)), abs(float(y.step))),
+            )
 
             def _auto_resampling_for_dtype(dtype: np.dtype) -> str:
                 # Match TorchGeo RasterDataset default: bilinear for float, nearest for int.
@@ -746,31 +735,9 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     return "bilinear"
                 return "nearest"
 
-            def _warp_to_grid(
-                arr: np.ndarray,
-                src_transform: object,
-                *,
-                resampling: str,
-            ) -> np.ndarray:
-                from rasterio.crs import CRS as RioCRS
-                from rasterio.warp import Resampling, reproject
-
-                dst = np.empty(dst_shape, dtype=arr.dtype)
-                dst.fill(0)
-                reproject(
-                    source=arr,
-                    destination=dst,
-                    src_transform=src_transform,
-                    src_crs=RioCRS.from_epsg(self.epsg),
-                    dst_transform=dst_transform,
-                    dst_crs=RioCRS.from_epsg(self.epsg),
-                    resampling=getattr(Resampling, resampling),
-                )
-                return dst
-
-            fetch_out_shape = (
-                None if (self._multi_crs or self._resample_bands) else dst_shape
-            )
+            # Always let the reader return its natural grid-aligned crop with a
+            # self-consistent (data, transform) pair.
+            fetch_out_shape = None
 
             if self.time_series:
                 # Sort chronologically so T dimension is time-ordered.
@@ -800,29 +767,46 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 if self._multi_crs:
                     arrays = [
                         reproject_array(
-                            arr,
-                            aff,
+                            r.data,
+                            r.transform,
                             src_crs,
                             self.epsg,
-                            dst_transform,
-                            dst_shape,
+                            query_grid.transform,
+                            query_grid.shape,
                         )
-                        for (arr, aff, _mask), src_crs in zip(
+                        for (r, _meta), src_crs in zip(
                             fetch_results,
                             source_crs_per_request,
                         )
                     ]
-                elif self._resample_bands:
-                    arrays = [
-                        _warp_to_grid(
-                            arr,
-                            aff,
-                            resampling=_auto_resampling_for_dtype(arr.dtype),
-                        )
-                        for (arr, aff, _mask) in fetch_results
-                    ]
                 else:
-                    arrays = [r[0] for r in fetch_results]
+                    arrays = [
+                        merge_semantic_resample_single_source(
+                            r.data,
+                            src_crop_transform=r.transform,
+                            src_full_transform=Affine(
+                                *(
+                                    lambda sx, tx, sy, ty: (
+                                        float(sx),
+                                        0.0,
+                                        float(tx),
+                                        0.0,
+                                        float(sy),
+                                        float(ty),
+                                    )
+                                )(*normalize_transform(meta.transform))
+                            ),
+                            src_full_width=int(meta.width),
+                            src_full_height=int(meta.height),
+                            src_crs=int(meta.crs or self.epsg),
+                            grid=query_grid,
+                            resampling=_auto_resampling_for_dtype(
+                                r.data.dtype
+                            ),  # TorchGeo-like
+                            src_nodata=meta.nodata,
+                        )
+                        for (r, meta) in fetch_results
+                    ]
 
                 # arrays is flat: [t0_band0, t0_band1, ..., t1_band0, ...]
                 # Reshape into [T, C, H, W] with minimal copies:
@@ -863,26 +847,41 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     src_crs = int(row["proj:epsg"])
                     arrays = [
                         reproject_array(
-                            arr,
-                            aff,
+                            r.data,
+                            r.transform,
                             src_crs,
                             self.epsg,
-                            dst_transform,
-                            dst_shape,
+                            query_grid.transform,
+                            query_grid.shape,
                         )
-                        for arr, aff, _mask in fetch_results
-                    ]
-                elif self._resample_bands:
-                    arrays = [
-                        _warp_to_grid(
-                            arr,
-                            aff,
-                            resampling=_auto_resampling_for_dtype(arr.dtype),
-                        )
-                        for arr, aff, _mask in fetch_results
+                        for r, _meta in fetch_results
                     ]
                 else:
-                    arrays = [r[0] for r in fetch_results]
+                    arrays = [
+                        merge_semantic_resample_single_source(
+                            r.data,
+                            src_crop_transform=r.transform,
+                            src_full_transform=Affine(
+                                *(
+                                    lambda sx, tx, sy, ty: (
+                                        float(sx),
+                                        0.0,
+                                        float(tx),
+                                        0.0,
+                                        float(sy),
+                                        float(ty),
+                                    )
+                                )(*normalize_transform(meta.transform))
+                            ),
+                            src_full_width=int(meta.width),
+                            src_full_height=int(meta.height),
+                            src_crs=int(meta.crs or self.epsg),
+                            grid=query_grid,
+                            resampling=_auto_resampling_for_dtype(r.data.dtype),
+                            src_nodata=meta.nodata,
+                        )
+                        for (r, meta) in fetch_results
+                    ]
 
                 # np.stack → [C, H, W] (1 alloc), torch.from_numpy → zero-copy.
                 image = torch.from_numpy(np.stack(arrays, axis=0))  # [C, H, W]

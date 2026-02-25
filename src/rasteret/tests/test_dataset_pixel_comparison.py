@@ -22,7 +22,6 @@ Requires ``--network`` flag::
 from __future__ import annotations
 
 import contextlib
-import math
 import signal
 from pathlib import Path
 
@@ -206,62 +205,52 @@ def _rasterio_ground_truth_native_bbox(
     bbox_native: tuple[float, float, float, float],
     band_number: int,
     gdal_env: dict[str, str],
+    res: tuple[float, float] | None = None,
 ) -> np.ndarray:
-    """Read ground truth pixels for an axis-aligned bbox already in raster CRS.
+    """Read ground truth pixels using rasterio.merge.merge.
 
-    Uses a window read (not polygon masking) to match TorchGeo-style chip reads.
+    This matches what TorchGeo's ``_merge_or_stack`` actually calls:
+    ``rasterio.merge.merge([src], bounds=..., res=..., indexes=...)``.
+
+    South-up rasters (positive transform.e) are wrapped in a WarpedVRT
+    to force north-up before merging, since rasterio.merge rejects them.
     """
+    from rasterio.merge import merge as rio_merge
+    from rasterio.vrt import WarpedVRT
+
     with rasterio.Env(**gdal_env):
         with rasterio.open(href) as src:
             if src.crs is None:
                 pytest.skip(
                     f"COG has no CRS (href={href}); cannot compare with rasterio"
                 )
-            fill = src.nodata if src.nodata is not None else 0
-            xmin, ymin, xmax, ymax = bbox_native
-            if src.transform.b != 0.0 or src.transform.d != 0.0:
-                pytest.skip("Rotated/sheared transforms not supported in window oracle")
-
-            window_geojson = {
-                "type": "Polygon",
-                "coordinates": [
-                    [
-                        (xmin, ymin),
-                        (xmax, ymin),
-                        (xmax, ymax),
-                        (xmin, ymax),
-                        (xmin, ymin),
-                    ]
-                ],
-            }
-
-            from rasterio.features import bounds as rio_bounds
-
-            left, bottom, right, top = rio_bounds(
-                window_geojson, transform=~src.transform
+            # TorchGeo's RasterDataset defaults to bilinear for float dtypes and
+            # nearest for integer dtypes.
+            dtype = np.dtype(src.dtypes[band_number - 1])
+            resampling = (
+                rasterio.enums.Resampling.bilinear
+                if np.issubdtype(dtype, np.floating)
+                else rasterio.enums.Resampling.nearest
             )
-            cols = [left, right, right, left]
-            rows = [top, top, bottom, bottom]
-            col_start = int(math.floor(min(cols)))
-            col_stop = int(math.ceil(max(cols)))
-            row_start = int(math.floor(min(rows)))
-            row_stop = int(math.ceil(max(rows)))
-
-            from rasterio.windows import Window
-
-            win = Window(
-                col_off=col_start,
-                row_off=row_start,
-                width=max(col_stop - col_start, 0),
-                height=max(row_stop - row_start, 0),
+            # South-up rasters have positive Y scale; merge rejects these.
+            if src.transform.e > 0:
+                with WarpedVRT(src) as vrt:
+                    data, _ = rio_merge(
+                        [vrt],
+                        bounds=bbox_native,
+                        res=res,
+                        indexes=[band_number],
+                        resampling=resampling,
+                    )
+                    return data.squeeze()
+            data, _ = rio_merge(
+                [src],
+                bounds=bbox_native,
+                res=res,
+                indexes=[band_number],
+                resampling=resampling,
             )
-            arr = src.read(
-                band_number,
-                window=win,
-                boundless=True,
-                fill_value=fill,
-            )
-            return arr.squeeze()
+            return data.squeeze()
 
 
 def _count_mismatches(r_arr: np.ndarray, rio_arr: np.ndarray) -> tuple[int, int]:
@@ -480,7 +469,7 @@ def test_pixel_values_match_rasterio(tmp_path: Path, dataset_id: str) -> None:
 
     with _timeout(120):
         rasterio_tg_arr = _rasterio_ground_truth_native_bbox(
-            href, tg_bbox, band_number, gdal_env
+            href, tg_bbox, band_number, gdal_env, res=(res_x, res_y)
         )
     _compare_arrays(
         rasteret_tg_arr,

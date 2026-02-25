@@ -1300,6 +1300,13 @@ async def read_cog(
                 [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax), (xmin, ymin)]
             ],
         }
+        intersecting_tiles = compute_tile_indices(
+            geometry_bbox=geom_bbox,
+            transform=metadata.transform,
+            tile_size=(metadata.tile_width, metadata.tile_height),
+            image_size=(metadata.width, metadata.height),
+            debug=debug,
+        )
     elif geom_array is not None:
         # Always compute the input bbox in the geometry CRS first. This lets us
         # provide a clear error when the record CRS is missing and the geometry
