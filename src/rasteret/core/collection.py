@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     import geopandas as gpd
     import xarray as xr
 
+    from rasteret.core.display import DescribeResult
     from rasteret.integrations.torchgeo import RasteretGeoDataset
 
 logger = logging.getLogger(__name__)
@@ -660,6 +661,12 @@ class Collection:
             return raster
         raise ValueError("No raster records found in collection")
 
+    def __len__(self) -> int:
+        """Number of scene records in this collection."""
+        if self.dataset is None:
+            return 0
+        return self.dataset.count_rows()
+
     @property
     def bands(self) -> list[str]:
         """Available band codes in this collection."""
@@ -688,10 +695,20 @@ class Collection:
             pc.max(t["bbox_maxy"]).as_py(),
         )
 
+    @property
+    def epsg(self) -> list[int]:
+        """Unique EPSG codes in this collection."""
+        if self.dataset is None:
+            return []
+        if "proj:epsg" not in self.dataset.schema.names:
+            return []
+        col = self.dataset.to_table(columns=["proj:epsg"]).column("proj:epsg")
+        return sorted(v.as_py() for v in pc.unique(col) if v.is_valid)
+
     def __repr__(self) -> str:
         n_bands = len(self.bands)
         try:
-            n_rows = self.dataset.count_rows() if self.dataset is not None else 0
+            n_rows = len(self)
         except Exception:
             n_rows = "?"
 
@@ -700,11 +717,105 @@ class Collection:
             parts.append(f"source={self.data_source!r}")
         parts.append(f"bands={n_bands}")
         parts.append(f"records={n_rows}")
+        epsg = self.epsg
+        if len(epsg) == 1:
+            parts.append(f"crs={epsg[0]}")
+        elif epsg:
+            parts.append(f"crs={epsg}")
         if self.start_date and self.end_date:
             s = str(self.start_date)[:10]
             e = str(self.end_date)[:10]
             parts.append(f"{s}..{e}")
         return ", ".join(parts) + ")"
+
+    def describe(self) -> DescribeResult:
+        """Summary of this collection.
+
+        Returns a :class:`~rasteret.core.display.DescribeResult` that renders
+        as a clean table in terminals and as styled HTML in notebooks
+        (Jupyter, marimo, Colab).
+
+        The underlying data is accessible via ``.data`` or ``["key"]``.
+
+        Examples
+        --------
+        >>> collection.describe()           # pretty table in REPL
+        >>> collection.describe()["bands"]  # programmatic access
+        >>> collection.describe().data      # full dict
+        """
+        from rasteret.core.display import build_describe_result
+
+        dates = None
+        if self.start_date and self.end_date:
+            dates = (str(self.start_date)[:10], str(self.end_date)[:10])
+        return build_describe_result(
+            name=self.name,
+            records=len(self),
+            bands=self.bands,
+            bounds=self.bounds,
+            crs=self.epsg,
+            dates=dates,
+            source=self.data_source,
+        )
+
+    def _resolve_catalog_descriptor(self) -> Any | None:
+        """Look up the catalog DatasetDescriptor for this collection."""
+        if not self.data_source:
+            return None
+        from rasteret.catalog import DatasetRegistry
+
+        desc = DatasetRegistry.get(self.data_source)
+        if desc is None:
+            for d in DatasetRegistry.list():
+                if d.stac_collection == self.data_source:
+                    return d
+        return desc
+
+    def compare_to_catalog(self) -> DescribeResult:
+        """Compare this collection against its catalog source.
+
+        Shows collection properties side-by-side with the catalog entry
+        (bands coverage, date range vs source range, spatial coverage,
+        auth requirements).
+
+        Raises :class:`ValueError` if the collection has no catalog match.
+
+        Returns a :class:`~rasteret.core.display.DescribeResult` that renders
+        as a table in terminals and styled HTML in notebooks.
+
+        Examples
+        --------
+        >>> collection.compare_to_catalog()        # pretty comparison table
+        >>> collection.compare_to_catalog().data    # full dict with catalog info
+        """
+        from rasteret.core.display import build_catalog_comparison
+
+        desc = self._resolve_catalog_descriptor()
+        if desc is None:
+            raise ValueError(
+                f"No catalog entry found for data_source={self.data_source!r}. "
+                "Use describe() for collection-only summary."
+            )
+
+        dates = None
+        if self.start_date and self.end_date:
+            dates = (str(self.start_date)[:10], str(self.end_date)[:10])
+
+        return build_catalog_comparison(
+            name=self.name,
+            records=len(self),
+            bands=self.bands,
+            bounds=self.bounds,
+            crs=self.epsg,
+            dates=dates,
+            source=self.data_source,
+            catalog_name=desc.name,
+            catalog_bands=list(desc.band_map) if desc.band_map else [],
+            catalog_temporal=desc.temporal_range,
+            catalog_coverage=desc.spatial_coverage,
+            catalog_auth=desc.requires_auth,
+            catalog_license=desc.license,
+        )
 
     def _validate_parquet_dataset(self) -> None:
         """Basic dataset validation."""

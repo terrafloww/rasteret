@@ -126,6 +126,56 @@ collection = rasteret.build_from_table(
 When `name` is provided, the collection is cached to
 `~/rasteret_workspace/{name}_records/` -- same behavior as `build_from_stac()`.
 
+### Inspect a collection
+
+```python
+collection           # Collection('s2-bangalore', source='sentinel-2-l2a', bands=13, records=42, crs=32643, 2024-01-01..2024-06-30)
+collection.bands     # ['B01', 'B02', ..., 'SCL']
+collection.bounds    # (77.50, 12.90, 77.70, 13.10)
+collection.epsg      # [32643]
+len(collection)      # 42
+```
+
+### Describe a collection
+
+```python
+collection.describe()
+# Collection: s2-bangalore
+#
+#   Property  Value
+#   ────────  ──────────────────────────────────────
+#   Records   42
+#   Bands     B01, B02, B03, B04, B05 (+8 more)
+#   CRS       EPSG:32643
+#   Bounds    (77.5000, 12.9000, 77.7000, 13.1000)
+#   Dates     2024-01-01 .. 2024-06-30
+#   Source    earthsearch/sentinel-2-l2a
+
+collection.describe()["bands"]  # programmatic access
+collection.describe().data      # full dict
+```
+
+### Compare against catalog
+
+For collections built from the catalog, compare what you indexed against
+the full source offering:
+
+```python
+collection.compare_to_catalog()
+# Collection: s2-bangalore
+#
+#   Property  Value
+#   ────────  ─────────────────────────────────────────────────────────
+#   Records   42
+#   Bands     B01, B02, B03, B04, B05 (+8 more) (13/13)
+#   Dates     2024-01-01 .. 2024-06-30  (source: 2015-06-23 .. present)
+#   Source    earthsearch/sentinel-2-l2a (Sentinel-2 Level-2A)
+#   Coverage  global
+#   Auth      none
+```
+
+In Jupyter/marimo notebooks both methods render as styled HTML tables.
+
 ### Export and reload
 
 See [`export()`](../reference/core/collection.md) and [`load()`](../reference/rasteret.md).

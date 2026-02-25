@@ -94,6 +94,13 @@ collection = rasteret.build(
     bbox=(77.5, 12.9, 77.7, 13.1),
     date_range=("2024-01-01", "2024-06-30"),
 )
+collection
+# Collection('s2-bangalore', source='sentinel-2-l2a', bands=13, records=42, crs=32643, 2024-01-01..2024-06-30)
+
+collection.bands     # ['B01', 'B02', ..., 'B12', 'SCL']
+collection.bounds    # (77.50, 12.90, 77.70, 13.10)
+collection.epsg      # [32643]
+len(collection)      # 42
 ```
 
 !!! info "What just happened?"
@@ -102,6 +109,29 @@ collection = rasteret.build(
     (in `~/rasteret_workspace/` by default). The next call with the same
     parameters reuses the cached index instantly; no network requests,
     no header parsing. This is the core idea: **build once, read many times**.
+
+!!! tip "Collection vs catalog"
+    A Collection contains only the scenes you indexed (your bbox, date range,
+    filters).  Use `compare_to_catalog()` to see what you built vs what the
+    source offers:
+
+    ```python
+    collection.compare_to_catalog()
+    # Collection: s2-bangalore
+    #
+    #   Property  Value
+    #   ────────  ─────────────────────────────────────────────────────────
+    #   Records   42
+    #   Bands     B01, B02, B03, B04, B05 (+8 more) (13/13)
+    #   CRS       EPSG:32643
+    #   Bounds    (77.5000, 12.9000, 77.7000, 13.1000)
+    #   Dates     2024-01-01 .. 2024-06-30  (source: 2015-06-23 .. present)
+    #   Source    earthsearch/sentinel-2-l2a (Sentinel-2 Level-2A)
+    #   Coverage  global
+    #   Auth      none
+    ```
+
+    In Jupyter/marimo notebooks this renders as a styled HTML table.
 
 This example uses Sentinel-2 from Earth Search, which is public; no
 credentials needed. For requester-pays or authenticated sources, see
