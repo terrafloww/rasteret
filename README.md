@@ -23,18 +23,19 @@ requests** before a pixel moves.
 
 Rasteret parses those headers **once**, caches them in Parquet, and its
 own reader fetches pixels concurrently with no GDAL in the path.
-**Over 20x faster** on cold starts.
+**Up to 20x faster** on cold starts.
 
-- **Easy** - three lines from STAC search or Parquet file to TorchGeo dataset
+- **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
 - **Zero downloads** - work with terabytes of imagery while storing only megabytes of metadata
 - **No STAC at training time** - query once at setup; zero API calls during training
 - **Reproducible** - same Parquet index = same records = same results
-- **Native dtypes** - uint16 stays uint16 in TorchGeo tensors; xarray promotes only when NaN fill requires it
+- **Native dtypes** - uint16 stays uint16 in tensors; xarray promotes only when NaN fill requires it
 - **Shareable cache** - a 5 MB index captures scene selection, band metadata, and split assignments
 
-Rasteret is an **opt-in accelerator**. Your TorchGeo samplers, DataLoader,
-xarray workflows, and analysis tools stay the same - Rasteret handles the
-async tile I/O underneath.
+Rasteret is an **opt-in accelerator** that integrates with TorchGeo by
+returning a standard `GeoDataset`. Your samplers, DataLoader, xarray
+workflows, and analysis tools stay the same - Rasteret handles the async
+tile I/O underneath.
 
 ---
 
@@ -186,28 +187,33 @@ Processing pipeline: Filter 450,000 scenes -> 22 matches -> Read 44 COG files
 
 ![Single request performance](./assets/single_timeseries_request.png)
 
-### TorchGeo comparison (cold start)
+### Cold-start comparison with TorchGeo
 
-Apples-to-apples: same AOIs, same scenes, same sampler, same DataLoader.
-Both paths output identical `[batch, T, C, H, W]` tensors.
-Cold-start numbers: no HTTP cache, no OS page cache, no pre-opened file handles.
+Same AOIs, same scenes, same sampler, same DataLoader. Both paths output
+identical `[batch, T, C, H, W]` tensors. TorchGeo runs with its
+recommended GDAL settings for best-case remote COG performance.
 
-| Scenario | TorchGeo | Rasteret | Speedup |
+| Scenario | rasterio/GDAL path | Rasteret path | Ratio |
 |---|---|---|---|
-| Single AOI, 15 scenes | 9.08 s | 1.14 s | **8.0x** |
-| Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **18.7x** |
-| Cross-CRS boundary, 12 scenes | 12.47 s | 0.59 s | **21.3x** |
+| Single AOI, 15 scenes | 9.08 s | 1.14 s | **8x** |
+| Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **19x** |
+| Cross-CRS boundary, 12 scenes | 12.47 s | 0.59 s | **21x** |
+
+The difference comes from how headers are accessed: the rasterio/GDAL
+path re-parses IFDs over HTTP on each cold start, while Rasteret reads
+them from a local Parquet cache. See
+[Benchmarks](https://terrafloww.github.io/rasteret/explanation/benchmark/)
+for full methodology.
 
 ![Processing time comparison](./assets/benchmark_results.png)
 ![Speedup breakdown](./assets/benchmark_breakdown.png)
 
-Full methodology: [Benchmarks](https://terrafloww.github.io/rasteret/explanation/benchmark/)
- ·  Notebook: [`05_torchgeo_comparison.ipynb`](docs/tutorials/05_torchgeo_comparison.ipynb)
- ·  Blog: [blog.terrafloww.com](https://blog.terrafloww.com/rasteret-a-library-for-faster-and-cheaper-open-satellite-data-access/)
+Notebook: [`05_torchgeo_comparison.ipynb`](docs/tutorials/05_torchgeo_comparison.ipynb)
 
-> [!IMPORTANT]
-> Measured on 12-30 Sentinel-2 scenes. The speedup grows with scene count.
-> If you run Rasteret on larger workloads, share your numbers on
+> [!NOTE]
+> Measured on 12-30 Sentinel-2 scenes on an EC2 instance in the same
+> region as the data (us-west-2). Results vary with network conditions.
+> If you run Rasteret on your own workloads, share your numbers on
 > [GitHub Discussions](https://github.com/terrafloww/rasteret/discussions/categories/show-and-tell)
 > or [Discord](https://discord.gg/V5vvuEBc).
 

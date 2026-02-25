@@ -62,22 +62,19 @@ before pixel reads begin.
 
 ## Key observations
 
-1. **Rasteret is 8-21x faster than TorchGeo** for remote COG
-   time-series reads (speedup grows with scene count).
-2. **The speedup grows with scene count**: more scenes = more benefit.
-   TorchGeo's overhead scales linearly (sequential HTTP per file)
-   while Rasteret's concurrent reads are bandwidth-bound.
-3. **Cross-CRS adds reprojection overhead** (~0.1-0.3 s) to Rasteret, but
-   it is still much faster than TorchGeo's WarpedVRT approach.
+1. The difference grows with scene count: the rasterio/GDAL path
+   re-parses headers over HTTP per file (sequential), while Rasteret
+   reads cached headers from disk and fetches pixels concurrently.
+2. Cross-CRS adds reprojection overhead (~0.1-0.3 s) to both paths.
 
-## Why Rasteret is faster
+## Where the difference comes from
 
-| | TorchGeo | Rasteret |
+| | rasterio/GDAL path | Rasteret path |
 |-|----------|---------|
 | **Index** | `rasterio.open()` per COG over HTTP | Pre-built GeoParquet (disk read) |
 | **Time-series read** | Sequential `rasterio.merge()` per timestep | All T timesteps via `asyncio.gather` |
 | **HTTP per timestep** | HEAD + IFD + pixel ranges | Pixel ranges only (headers cached) |
-| **Concurrency** | None (GDAL reads are serial) | `asyncio.gather` across T x C reads |
+| **Concurrency** | Sequential | `asyncio.gather` across T x C reads |
 
 ## Reproducibility
 

@@ -1,6 +1,6 @@
 # Rasteret
 
-**Made to beat cold starts.** Index-first access to cloud-native GeoTIFF collections for ML and analysis.
+**Made to beat cold starts.** Index-first access to cloud-native GeoTIFF collections for ML and geospatial analysis.
 
 ---
 
@@ -17,7 +17,7 @@
 !!! success "What Rasteret does"
 
     Parse headers **once**, cache in Parquet, read pixels concurrently
-    with no GDAL in the path. **Over 20x faster** on cold starts.
+    with no GDAL in the path.
 
     ```text
     STAC API / GeoParquet  -->  Parquet Index  -->  Tile-level byte reads
