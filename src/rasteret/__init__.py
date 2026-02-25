@@ -34,6 +34,41 @@ def version() -> str:
 __version__ = version()
 
 
+def _validate_bbox(bbox: tuple[float, float, float, float] | None) -> None:
+    """Raise ``ValueError`` if *bbox* coordinates are inverted."""
+    if bbox is None:
+        return
+    west, south, east, north = bbox
+    problems: list[str] = []
+    if west >= east:
+        problems.append(f"west ({west}) must be less than east ({east})")
+    if south >= north:
+        problems.append(f"south ({south}) must be less than north ({north})")
+    if problems:
+        raise ValueError(
+            f"Invalid bbox: {' and '.join(problems)}. "
+            "Expected format: (west, south, east, north)."
+        )
+
+
+def _validate_date_range(date_range: tuple[str, str] | None) -> None:
+    """Raise ``ValueError`` if *date_range* start is after end."""
+    if date_range is None:
+        return
+    start_str, end_str = date_range
+    from datetime import date as _date
+
+    try:
+        start = _date.fromisoformat(start_str[:10])
+        end = _date.fromisoformat(end_str[:10])
+    except (ValueError, TypeError):
+        return
+    if start > end:
+        raise ValueError(
+            f"Invalid date_range: start '{start_str}' is after end '{end_str}'."
+        )
+
+
 def build_from_stac(
     *,
     name: str,
@@ -101,6 +136,9 @@ def build_from_stac(
     -------
     Collection
     """
+    _validate_bbox(bbox)
+    _validate_date_range(date_range)
+
     from rasteret.core.collection import Collection
 
     workspace_dir_path = Path(workspace_dir or Path.home() / "rasteret_workspace")
@@ -260,6 +298,9 @@ def build(
         If the descriptor has no configured access method, or if
         auth is required but no backend could be created.
     """
+    _validate_bbox(bbox)
+    _validate_date_range(date_range)
+
     from rasteret.catalog import DatasetRegistry
 
     descriptor = DatasetRegistry.get(dataset)

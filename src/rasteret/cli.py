@@ -133,7 +133,7 @@ def _print_list_rows(rows: list[dict[str, Any]]) -> None:
         )
 
 
-def _handle_cache_build(args: argparse.Namespace) -> int:
+def _handle_collections_build(args: argparse.Namespace) -> int:
     workspace_dir = _workspace_dir(args.workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -165,7 +165,7 @@ def _handle_cache_build(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_cache_list(args: argparse.Namespace) -> int:
+def _handle_collections_list(args: argparse.Namespace) -> int:
     workspace_dir = _workspace_dir(args.workspace_dir)
     rows = Collection.list_collections(workspace_dir=workspace_dir)
     rows = sorted(rows, key=lambda row: row.get("name", ""))
@@ -178,9 +178,13 @@ def _handle_cache_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_cache_info(args: argparse.Namespace) -> int:
+def _handle_collections_info(args: argparse.Namespace) -> int:
     workspace_dir = _workspace_dir(args.workspace_dir)
-    collection_path = _resolve_collection_path(args.name, workspace_dir)
+    try:
+        collection_path = _resolve_collection_path(args.name, workspace_dir)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", flush=True)
+        return 1
     collection = Collection._load_cached(collection_path)
     summary = _collection_summary(collection, collection_path)
 
@@ -198,9 +202,13 @@ def _handle_cache_info(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_cache_delete(args: argparse.Namespace) -> int:
+def _handle_collections_delete(args: argparse.Namespace) -> int:
     workspace_dir = _workspace_dir(args.workspace_dir)
-    collection_path = _resolve_collection_path(args.name, workspace_dir)
+    try:
+        collection_path = _resolve_collection_path(args.name, workspace_dir)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", flush=True)
+        return 1
 
     if not args.yes:
         response = input(f"Delete collection at {collection_path}? [y/N]: ")
@@ -213,7 +221,7 @@ def _handle_cache_delete(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_cache_import(args: argparse.Namespace) -> int:
+def _handle_collections_import(args: argparse.Namespace) -> int:
     workspace_dir = _workspace_dir(args.workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -271,10 +279,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    cache_parser = subparsers.add_parser("cache", help="Manage cached collections")
-    cache_subparsers = cache_parser.add_subparsers(dest="cache_command", required=True)
+    collections_parser = subparsers.add_parser(
+        "collections", help="Manage local collections"
+    )
+    collections_subparsers = collections_parser.add_subparsers(
+        dest="collections_command", required=True
+    )
 
-    build_parser = cache_subparsers.add_parser(
+    build_parser = collections_subparsers.add_parser(
         "build", help="Build or refresh a STAC-backed collection cache"
     )
     build_parser.add_argument("name", help="Logical collection name")
@@ -312,14 +324,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
-    list_parser = cache_subparsers.add_parser("list", help="List cached collections")
+    list_parser = collections_subparsers.add_parser(
+        "list", help="List local collections"
+    )
     list_parser.add_argument(
         "--workspace-dir", help="Workspace directory for cached collections"
     )
     list_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
-    info_parser = cache_subparsers.add_parser(
-        "info", help="Show details for one cached collection"
+    info_parser = collections_subparsers.add_parser(
+        "info", help="Show details for a local collection"
     )
     info_parser.add_argument("name", help="Collection name or folder name")
     info_parser.add_argument(
@@ -327,8 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     info_parser.add_argument("--json", action="store_true", help="Emit JSON output")
 
-    delete_parser = cache_subparsers.add_parser(
-        "delete", help="Delete one cached collection"
+    delete_parser = collections_subparsers.add_parser(
+        "delete", help="Delete a local collection"
     )
     delete_parser.add_argument("name", help="Collection name or folder name")
     delete_parser.add_argument(
@@ -340,7 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip confirmation prompt",
     )
 
-    import_parser = cache_subparsers.add_parser(
+    import_parser = collections_subparsers.add_parser(
         "import", help="Materialize a local collection from a Parquet record table"
     )
     import_parser.add_argument("name", help="Logical collection name")
@@ -371,6 +385,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replace an existing imported collection",
     )
     import_parser.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    # --- top-level build shortcut (mirrors rasteret.build()) ---
+    top_build_parser = subparsers.add_parser(
+        "build", help="Build a collection from a registered dataset"
+    )
+    top_build_parser.add_argument("dataset_id", help="Dataset ID")
+    top_build_parser.add_argument("name", help="Logical collection name")
+    top_build_parser.add_argument(
+        "--bbox",
+        type=_parse_bbox,
+        help="Bounding box as minx,miny,maxx,maxy",
+    )
+    top_build_parser.add_argument(
+        "--date-range",
+        type=_parse_date_range,
+        help="Date range as YYYY-MM-DD,YYYY-MM-DD",
+    )
+    top_build_parser.add_argument("--workspace-dir", help="Workspace directory")
+    top_build_parser.add_argument("--force", action="store_true", help="Rebuild cache")
+    top_build_parser.add_argument(
+        "--max-concurrent", type=int, default=50, help="Max concurrent fetches"
+    )
+    top_build_parser.add_argument("--query", help="Additional STAC query as JSON")
+    top_build_parser.add_argument(
+        "--json", action="store_true", help="Emit JSON output"
+    )
 
     # --- datasets subcommand ---
     ds_parser = subparsers.add_parser("datasets", help="Browse registered datasets")
@@ -735,19 +775,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command is None:
+        parser.print_help()
         return 0
 
-    if args.command == "cache":
-        if args.cache_command == "build":
-            return _handle_cache_build(args)
-        if args.cache_command == "list":
-            return _handle_cache_list(args)
-        if args.cache_command == "info":
-            return _handle_cache_info(args)
-        if args.cache_command == "delete":
-            return _handle_cache_delete(args)
-        if args.cache_command == "import":
-            return _handle_cache_import(args)
+    if args.command == "build":
+        return _handle_datasets_build(args)
+
+    if args.command == "collections":
+        if args.collections_command == "build":
+            return _handle_collections_build(args)
+        if args.collections_command == "list":
+            return _handle_collections_list(args)
+        if args.collections_command == "info":
+            return _handle_collections_info(args)
+        if args.collections_command == "delete":
+            return _handle_collections_delete(args)
+        if args.collections_command == "import":
+            return _handle_collections_import(args)
 
     if args.command == "datasets":
         if args.ds_command == "list":

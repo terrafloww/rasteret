@@ -196,7 +196,9 @@ class Collection:
         end_date = None
         dr = meta.get("date_range", "")
         if "," in dr:
-            start_date, end_date = dr.split(",", 1)
+            s, e = dr.split(",", 1)
+            start_date = datetime.fromisoformat(s)
+            end_date = datetime.fromisoformat(e)
 
         return cls(
             dataset=dataset,
@@ -249,7 +251,9 @@ class Collection:
         end_date = None
         dr = meta.get("date_range", "")
         if "," in dr:
-            start_date, end_date = dr.split(",", 1)
+            s, e = dr.split(",", 1)
+            start_date = datetime.fromisoformat(s)
+            end_date = datetime.fromisoformat(e)
 
         return cls(
             dataset=dataset,
@@ -311,7 +315,9 @@ class Collection:
             if not isinstance(cloud_cover_lt, (int, float)) or not (
                 0 <= cloud_cover_lt <= 100
             ):
-                raise ValueError("Invalid cloud cover value")
+                raise ValueError(
+                    f"Invalid cloud_cover_lt={cloud_cover_lt!r}: must be between 0 and 100."
+                )
             filter_expr = _and(
                 filter_expr, ds.field("eo:cloud_cover") < float(cloud_cover_lt)
             )
@@ -548,7 +554,7 @@ class Collection:
             b"created": datetime.now().isoformat().encode("utf-8"),
             b"name": self.name.encode("utf-8") if self.name else b"",
             b"data_source": (
-                self.data_source.encode("utf-8") if self.data_source else b"unknown"
+                self.data_source.encode("utf-8") if self.data_source else b""
             ),
             b"date_range": (
                 f"{self.start_date.isoformat()},{self.end_date.isoformat()}".encode(
@@ -709,7 +715,7 @@ class Collection:
         n_bands = len(self.bands)
         try:
             n_rows = len(self)
-        except Exception:
+        except (pa.ArrowInvalid, pa.ArrowKeyError, OSError):
             n_rows = "?"
 
         parts = [f"Collection({self.name!r}"]
@@ -817,6 +823,17 @@ class Collection:
             catalog_license=desc.license,
         )
 
+    def _validate_bands(self, bands: list[str]) -> None:
+        """Raise ``ValueError`` eagerly if *bands* contains unknown names."""
+        available = self.bands
+        if not available:
+            return
+        invalid = [b for b in bands if b not in available]
+        if invalid:
+            raise ValueError(
+                f"Band(s) not found: {invalid}. Available bands: {available}"
+            )
+
     def _validate_parquet_dataset(self) -> None:
         """Basic dataset validation."""
         if not isinstance(self.dataset, ds.Dataset):
@@ -895,7 +912,7 @@ class Collection:
         return "_".join(name_parts)
 
     @classmethod
-    def parse_name(cls, name: str) -> dict[str, str]:
+    def parse_name(cls, name: str) -> dict[str, str | None]:
         """Parse a standardized collection name into its components.
 
         Parameters
@@ -906,16 +923,17 @@ class Collection:
         Returns
         -------
         dict
-            Keys: ``custom_name``, ``data_source``, ``name``.
+            Keys: ``custom_name``, ``data_source`` (``None`` if unparseable),
+            ``name``.
         """
         try:
             # Remove _stac suffix if present
-            name = name.replace("_stac", "")
+            clean = name.replace("_stac", "")
 
             # Split parts
-            parts = name.split("_")
+            parts = clean.split("_")
             if len(parts) != 3:
-                raise ValueError(f"Invalid name format: {name}")
+                raise ValueError(f"Invalid name format: {clean}")
 
             custom_name, date_str, source = parts
 
@@ -927,12 +945,12 @@ class Collection:
             return {
                 "custom_name": custom_name,
                 "data_source": source,
-                "name": name,  # Return full standardized name
+                "name": clean,
             }
 
         except ValueError as e:
-            logger.debug(f"Failed to parse name {name}: {e}")
-            return {"name": name, "custom_name": name, "data_source": "unknown"}
+            logger.debug("Failed to parse collection name %r: %s", name, e)
+            return {"name": name, "custom_name": name, "data_source": None}
 
     def to_torchgeo_dataset(
         self,
@@ -1005,6 +1023,8 @@ class Collection:
             native COG dtype (e.g. ``uint16`` for Sentinel-2).
         """
         from rasteret.integrations.torchgeo import RasteretGeoDataset
+
+        self._validate_bands(bands)
 
         selected_collection = (
             self.select_split(split, split_column=split_column)
@@ -1090,6 +1110,7 @@ class Collection:
             coordinate with WKT2, PROJJSON, GeoTransform). Multi-CRS
             queries are auto-reprojected to the most common CRS.
         """
+        self._validate_bands(bands)
         if backend is None:
             backend = self._auto_backend(cloud_config, data_source)
         return get_collection_xarray(
@@ -1144,6 +1165,7 @@ class Collection:
             Band arrays in native COG dtype. Each row is a
             geometry-record pair with pixel data as columns.
         """
+        self._validate_bands(bands)
         if backend is None:
             backend = self._auto_backend(cloud_config, data_source)
         return get_collection_gdf(
