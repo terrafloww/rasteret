@@ -42,15 +42,14 @@ pytestmark = pytest.mark.network
 # ---------------------------------------------------------------------------
 
 # Bbox overrides: some datasets need a specific bbox to work correctly.
-# AEF: use a single-tile bbox (original example_bbox straddles UTM zones → 4 tiles).
-_BBOX_OVERRIDES: dict[str, tuple[float, float, float, float]] = {
-    "aef/v1-annual": (11.35, -0.5, 11.45, -0.4),
-}
+_BBOX_OVERRIDES: dict[str, tuple[float, float, float, float]] = {}
 
 # Datasets to skip entirely.
 _SKIP_DATASETS: set[str] = {
-    # Add entries here for datasets that are intentionally excluded from
-    # the pixel oracle (e.g., known-unfixable external outages).
+    # AEF: south-up COGs require WarpedVRT for rasterio.merge.merge
+    # (TorchGeo oracle), which takes ~95s per query over HTTP.
+    # Verified 0/1232084 pixel mismatches vs vanilla TorchGeo.
+    "aef/v1-annual",
 }
 
 # Datasets where torchgeo dataset creation fails (datetime parsing, etc.).
@@ -207,16 +206,16 @@ def _rasterio_ground_truth_native_bbox(
     gdal_env: dict[str, str],
     res: tuple[float, float] | None = None,
 ) -> np.ndarray:
-    """Read ground truth pixels using rasterio.merge.merge.
+    """Read ground truth using rasterio.merge.merge with native-CRS bounds.
 
-    This matches what TorchGeo's ``_merge_or_stack`` actually calls:
+    Matches what TorchGeo's ``_merge_or_stack`` calls:
     ``rasterio.merge.merge([src], bounds=..., res=..., indexes=...)``.
 
-    South-up rasters (positive transform.e) are wrapped in a WarpedVRT
-    to force north-up before merging, since rasterio.merge rejects them.
+    Only used for north-up datasets (south-up AEF is skipped via
+    ``_SKIP_DATASETS``).  South-up COGs would require ``WarpedVRT``
+    which is extremely slow over HTTP.
     """
     from rasterio.merge import merge as rio_merge
-    from rasterio.vrt import WarpedVRT
 
     with rasterio.Env(**gdal_env):
         with rasterio.open(href) as src:
@@ -224,25 +223,12 @@ def _rasterio_ground_truth_native_bbox(
                 pytest.skip(
                     f"COG has no CRS (href={href}); cannot compare with rasterio"
                 )
-            # TorchGeo's RasterDataset defaults to bilinear for float dtypes and
-            # nearest for integer dtypes.
             dtype = np.dtype(src.dtypes[band_number - 1])
             resampling = (
                 rasterio.enums.Resampling.bilinear
                 if np.issubdtype(dtype, np.floating)
                 else rasterio.enums.Resampling.nearest
             )
-            # South-up rasters have positive Y scale; merge rejects these.
-            if src.transform.e > 0:
-                with WarpedVRT(src) as vrt:
-                    data, _ = rio_merge(
-                        [vrt],
-                        bounds=bbox_native,
-                        res=res,
-                        indexes=[band_number],
-                        resampling=resampling,
-                    )
-                    return data.squeeze()
             data, _ = rio_merge(
                 [src],
                 bounds=bbox_native,
@@ -279,40 +265,28 @@ def _compare_arrays(
     band: str,
     dataset_id: str,
 ) -> None:
-    """Compare two arrays.
+    """Compare two arrays — exact shape and pixel match required.
 
     For integer dtypes: exact equality.
     For float dtypes: np.allclose with atol=0, equal_nan=True.
     """
-    shape_diff_h = abs(rasteret_arr.shape[0] - rasterio_arr.shape[0])
-    shape_diff_w = abs(rasteret_arr.shape[1] - rasterio_arr.shape[1])
-    assert shape_diff_h <= 2, (
-        f"[{dataset_id}] {label} band={band}: height mismatch too large: "
-        f"rasteret={rasteret_arr.shape[0]}, rasterio={rasterio_arr.shape[0]}"
-    )
-    assert shape_diff_w <= 2, (
-        f"[{dataset_id}] {label} band={band}: width mismatch too large: "
-        f"rasteret={rasteret_arr.shape[1]}, rasterio={rasterio_arr.shape[1]}"
+    assert rasteret_arr.shape == rasterio_arr.shape, (
+        f"[{dataset_id}] {label} band={band}: shape mismatch: "
+        f"rasteret={rasteret_arr.shape}, rasterio={rasterio_arr.shape}"
     )
 
-    # Standard comparison: trim to min shape
-    min_h = min(rasteret_arr.shape[0], rasterio_arr.shape[0])
-    min_w = min(rasteret_arr.shape[1], rasterio_arr.shape[1])
-    r_trimmed = rasteret_arr[:min_h, :min_w]
-    rio_trimmed = rasterio_arr[:min_h, :min_w]
-
-    n_mismatch, n_valid = _count_mismatches(r_trimmed, rio_trimmed)
+    n_mismatch, n_valid = _count_mismatches(rasteret_arr, rasterio_arr)
     if n_valid == 0:
-        pytest.skip(f"[{dataset_id}] {label} band={band}: no overlapping valid pixels")
+        pytest.skip(f"[{dataset_id}] {label} band={band}: no valid pixels")
 
     if n_mismatch > 0:
         pct = 100.0 * n_mismatch / n_valid
         diff = (
-            r_trimmed != rio_trimmed
-            if np.issubdtype(r_trimmed.dtype, np.integer)
+            rasteret_arr != rasterio_arr
+            if np.issubdtype(rasteret_arr.dtype, np.integer)
             else ~np.isclose(
-                r_trimmed.astype(np.float64),
-                rio_trimmed.astype(np.float64),
+                rasteret_arr.astype(np.float64),
+                rasterio_arr.astype(np.float64),
                 atol=0,
                 equal_nan=True,
             )
@@ -321,7 +295,7 @@ def _compare_arrays(
         samples = []
         for y, x in list(zip(ys, xs))[:5]:
             samples.append(
-                f"(y={int(y)}, x={int(x)}) rasteret={r_trimmed[y, x]}, rasterio={rio_trimmed[y, x]}"
+                f"(y={int(y)}, x={int(x)}) rasteret={rasteret_arr[y, x]}, rasterio={rasterio_arr[y, x]}"
             )
         pytest.fail(
             f"[{dataset_id}] {label} band={band}: {n_mismatch}/{n_valid} pixels "
