@@ -36,6 +36,32 @@ Verify the installation:
 python -c "import rasteret; print(rasteret.version())"
 ```
 
+### Running notebooks
+
+=== "Jupyter / JupyterLab"
+
+    Jupyter runs each notebook in a **kernel** — a separate Python process.
+    To use your Rasteret environment as a kernel:
+
+    ```bash
+    uv pip install ipykernel
+    python -m ipykernel install --user --name rasteret --display-name "Rasteret"
+    ```
+
+    Then select the **Rasteret** kernel when you open a notebook.
+
+=== "marimo"
+
+    [marimo](https://marimo.io) manages dependencies inline — no kernel
+    registration needed.  Just `uv pip install marimo` alongside Rasteret
+    and run `marimo edit notebook.py`.
+
+=== "VS Code"
+
+    VS Code auto-detects virtual environments.  Open a `.ipynb` file,
+    click the kernel picker (top-right), and select the Python interpreter
+    from your Rasteret venv.
+
 ---
 
 ## Key concepts
