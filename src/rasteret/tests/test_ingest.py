@@ -385,7 +385,7 @@ class TestBuildFromTable:
         # workspace_dir gets _records suffix for discoverability
         expected = out_dir / "demo_records"
         assert expected.exists()
-        reloaded = Collection.from_local(expected)
+        reloaded = Collection._load_cached(expected)
         assert reloaded.dataset is not None
         assert reloaded.dataset.count_rows() == collection.dataset.count_rows()
 

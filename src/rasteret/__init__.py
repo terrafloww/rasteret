@@ -115,7 +115,7 @@ def build_from_stac(
     collection_path = workspace_dir_path / f"{collection_name}_stac"
 
     if collection_path.exists() and not force:
-        return Collection.from_local(collection_path)
+        return Collection._load_cached(collection_path)
 
     from rasteret.cloud import CloudConfig, backend_config_from_cloud_config
     from rasteret.ingest.stac_indexer import StacCollectionBuilder
@@ -666,7 +666,7 @@ def build_from_table(
     if resolved_workspace is not None:
         rw = Path(resolved_workspace)
         if rw.exists() and not force:
-            return Collection.from_local(rw)
+            return Collection._load_cached(rw)
 
     # Arrow-native path: accept an in-memory Arrow table / dataset.
     import pyarrow as pa

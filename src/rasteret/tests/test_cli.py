@@ -91,7 +91,7 @@ def test_cache_build_passes_args_and_returns_summary(
     def fake_build_from_stac(**kwargs):
         captured.update(kwargs)
         _write_cached_collection(cache_dir)
-        return Collection.from_local(cache_dir)
+        return Collection._load_cached(cache_dir)
 
     monkeypatch.setattr("rasteret.cli.build_from_stac", fake_build_from_stac)
 

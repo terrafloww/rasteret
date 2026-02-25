@@ -59,7 +59,7 @@ def test_collection_analysis_methods_delegate_to_execution_layer() -> None:
     with TemporaryDirectory() as tmp_dir:
         dataset_path = Path(tmp_dir) / "example_stac"
         _write_minimal_partitioned_collection(dataset_path)
-        collection = Collection.from_local(dataset_path)
+        collection = Collection._load_cached(dataset_path)
 
     with (
         patch(
@@ -134,10 +134,10 @@ def test_load_rejects_missing_file() -> None:
         rasteret.load("/nonexistent/path.parquet")
 
 
-def test_from_local_fallback_to_non_hive() -> None:
-    """from_local should work on non-Hive partitioned parquet."""
+def test_from_parquet_fallback_to_non_hive() -> None:
+    """from_parquet should work on non-Hive partitioned parquet."""
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "flat.parquet"
         _write_minimal_flat_collection(path)
-        collection = Collection.from_local(path)
+        collection = Collection.from_parquet(path)
         assert isinstance(collection, Collection)

@@ -27,6 +27,8 @@ from tqdm.asyncio import tqdm
 from rasteret.core.utils import infer_data_source, run_sync
 
 if TYPE_CHECKING:  # pragma: no cover
+    import xarray as xr
+
     from rasteret.core.collection import Collection
 
 logger = logging.getLogger(__name__)
@@ -223,7 +225,7 @@ def get_collection_xarray(
     backend: object | None = None,
     target_crs: int | None = None,
     **filters: Any,
-):
+) -> xr.Dataset:
     """Load selected bands as an ``xarray.Dataset``.
 
     Parameters

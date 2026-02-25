@@ -181,7 +181,7 @@ def _handle_cache_list(args: argparse.Namespace) -> int:
 def _handle_cache_info(args: argparse.Namespace) -> int:
     workspace_dir = _workspace_dir(args.workspace_dir)
     collection_path = _resolve_collection_path(args.name, workspace_dir)
-    collection = Collection.from_local(collection_path)
+    collection = Collection._load_cached(collection_path)
     summary = _collection_summary(collection, collection_path)
 
     if args.json:
@@ -220,7 +220,7 @@ def _handle_cache_import(args: argparse.Namespace) -> int:
     collection_path = workspace_dir / f"{args.name}_records"
     if collection_path.exists():
         if not args.force:
-            collection = Collection.from_local(collection_path)
+            collection = Collection._load_cached(collection_path)
             summary = _collection_summary(collection, collection_path)
             if args.json:
                 print(json.dumps(summary, indent=2))

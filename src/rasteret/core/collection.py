@@ -11,7 +11,7 @@ import struct
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 import pandas as pd
 import pyarrow as pa
@@ -22,6 +22,12 @@ import pyarrow.parquet as pq
 from rasteret.core.execution import get_collection_gdf, get_collection_xarray
 from rasteret.core.raster_accessor import RasterAccessor
 from rasteret.types import RasterInfo
+
+if TYPE_CHECKING:
+    import geopandas as gpd
+    import xarray as xr
+
+    from rasteret.integrations.torchgeo import RasteretGeoDataset
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +89,7 @@ class Collection:
     Examples
     --------
     # From partitioned dataset
-    >>> collection = Collection.from_local("path/to/dataset")
+    >>> collection = Collection.from_parquet("path/to/dataset")
 
     # Filter and process
     >>> filtered = collection.subset(cloud_cover_lt=20)
@@ -136,12 +142,31 @@ class Collection:
             end_date=self.end_date,
         )
 
-    @classmethod
-    def from_local(cls, path: str | Path) -> Collection:
-        """Create collection from a local Parquet dataset.
+    @staticmethod
+    def _metadata_from_schema(dataset: ds.Dataset) -> dict[str, str]:
+        """Extract Rasteret metadata stored by ``export()``."""
+        raw = dataset.schema.metadata or {}
+        out: dict[str, str] = {}
+        for key in (b"name", b"data_source", b"description", b"date_range"):
+            val = raw.get(key)
+            if val:
+                try:
+                    out[key.decode()] = val.decode("utf-8")
+                except (UnicodeDecodeError, AttributeError):
+                    pass
+        return out
 
-        Tries Hive-style partitioning first (year/month), falls back to
-        plain Parquet if the directory isn't Hive-partitioned.
+    @classmethod
+    def _load_cached(cls, path: str | Path) -> Collection:
+        """Load a Collection from a workspace cache directory.
+
+        Internal fast-path for ``build()`` / ``build_from_table()`` cache
+        hits.  Trusts the data (no schema validation), strips workspace
+        suffixes (``_stac``, ``_records``) from the name, and detects
+        Hive partitioning.
+
+        For user-facing loading, use :meth:`from_parquet` or
+        :func:`rasteret.load` instead.
         """
         path = Path(path)
         if not path.exists():
@@ -161,22 +186,53 @@ class Collection:
                 exclude_invalid_files=True,
             )
 
-        name = path.stem.removesuffix("_stac").removesuffix("_records")
-        return cls(dataset=dataset, name=name)
+        meta = cls._metadata_from_schema(dataset)
+        name = meta.get("name") or path.stem.removesuffix("_stac").removesuffix(
+            "_records"
+        )
+
+        start_date = None
+        end_date = None
+        dr = meta.get("date_range", "")
+        if "," in dr:
+            start_date, end_date = dr.split(",", 1)
+
+        return cls(
+            dataset=dataset,
+            name=name,
+            data_source=meta.get("data_source", ""),
+            description=meta.get("description", ""),
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     @classmethod
     def from_parquet(cls, path: str | Path, name: str = "") -> Collection:
         """Load a Collection from any Parquet file or directory.
 
-        The Parquet must contain the core columns:
-        ``id``, ``datetime``, ``geometry``, ``assets``, ``scene_bbox``.
+        Tries Hive-style partitioning first (year/month), falls back to
+        plain Parquet.  Validates that the core contract columns are present.
+
         See the `Schema Contract <../explanation/schema-contract/>`_ docs page.
         """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Parquet not found at {path}")
 
-        dataset = ds.dataset(str(path), format="parquet")
+        try:
+            dataset = ds.dataset(
+                str(path),
+                format="parquet",
+                partitioning="hive",
+                exclude_invalid_files=True,
+            )
+        except pa.ArrowInvalid:
+            dataset = ds.dataset(
+                str(path),
+                format="parquet",
+                exclude_invalid_files=True,
+            )
+
         required = {"id", "datetime", "geometry", "assets", "scene_bbox"}
         missing = required - set(dataset.schema.names)
         if missing:
@@ -185,8 +241,23 @@ class Collection:
                 "See the Schema Contract page in docs for the expected schema."
             )
 
-        name = name or path.stem
-        return cls(dataset=dataset, name=name)
+        meta = cls._metadata_from_schema(dataset)
+        resolved_name = name or meta.get("name") or path.stem
+
+        start_date = None
+        end_date = None
+        dr = meta.get("date_range", "")
+        if "," in dr:
+            start_date, end_date = dr.split(",", 1)
+
+        return cls(
+            dataset=dataset,
+            name=resolved_name,
+            data_source=meta.get("data_source", ""),
+            description=meta.get("description", ""),
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     def subset(
         self,
@@ -589,6 +660,52 @@ class Collection:
             return raster
         raise ValueError("No raster records found in collection")
 
+    @property
+    def bands(self) -> list[str]:
+        """Available band codes in this collection."""
+        if self.dataset is None:
+            return []
+        return [
+            c.removesuffix("_metadata")
+            for c in self.dataset.schema.names
+            if c.endswith("_metadata")
+        ]
+
+    @property
+    def bounds(self) -> tuple[float, float, float, float] | None:
+        """Spatial extent as ``(minx, miny, maxx, maxy)`` or ``None``."""
+        if self.dataset is None:
+            return None
+        names = set(self.dataset.schema.names)
+        cols = ("bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy")
+        if not all(c in names for c in cols):
+            return None
+        t = self.dataset.to_table(columns=list(cols))
+        return (
+            pc.min(t["bbox_minx"]).as_py(),
+            pc.min(t["bbox_miny"]).as_py(),
+            pc.max(t["bbox_maxx"]).as_py(),
+            pc.max(t["bbox_maxy"]).as_py(),
+        )
+
+    def __repr__(self) -> str:
+        n_bands = len(self.bands)
+        try:
+            n_rows = self.dataset.count_rows() if self.dataset is not None else 0
+        except Exception:
+            n_rows = "?"
+
+        parts = [f"Collection({self.name!r}"]
+        if self.data_source:
+            parts.append(f"source={self.data_source!r}")
+        parts.append(f"bands={n_bands}")
+        parts.append(f"records={n_rows}")
+        if self.start_date and self.end_date:
+            s = str(self.start_date)[:10]
+            e = str(self.end_date)[:10]
+            parts.append(f"{s}..{e}")
+        return ", ".join(parts) + ")"
+
     def _validate_parquet_dataset(self) -> None:
         """Basic dataset validation."""
         if not isinstance(self.dataset, ds.Dataset):
@@ -724,7 +841,7 @@ class Collection:
         backend: Any = None,
         time_series: bool = False,
         target_crs: int | None = None,
-    ) -> Any:
+    ) -> RasteretGeoDataset:
         """Create a TorchGeo GeoDataset backed by this Collection.
 
         This integration is optional and requires ``torchgeo`` and its
@@ -830,7 +947,7 @@ class Collection:
         backend: Any = None,
         target_crs: int | None = None,
         **filters: Any,
-    ) -> Any:
+    ) -> xr.Dataset:
         """Load selected bands into an xarray Dataset.
 
         Parameters
@@ -886,7 +1003,7 @@ class Collection:
         backend: Any = None,
         target_crs: int | None = None,
         **filters: Any,
-    ) -> Any:
+    ) -> gpd.GeoDataFrame:
         """Load selected bands into a GeoDataFrame.
 
         Parameters

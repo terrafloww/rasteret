@@ -69,7 +69,7 @@ class TestInferDataSource:
             pq.write_to_dataset(
                 table, root_path=str(path), partition_cols=["year", "month"]
             )
-            c = Collection.from_local(path)
+            c = Collection._load_cached(path)
             c.data_source = data_source
             return infer_data_source(c)
 
@@ -161,7 +161,7 @@ class TestDetectTargetCrs:
             path = Path(tmp) / "single_crs"
             path.mkdir()
             pq.write_table(table, str(path / "data.parquet"))
-            c = Collection.from_local(path)
+            c = Collection._load_cached(path)
             assert _detect_target_crs(c, {}) is None
 
     def test_multi_crs_returns_most_common(self):
@@ -171,7 +171,7 @@ class TestDetectTargetCrs:
             path = Path(tmp) / "multi_crs"
             path.mkdir()
             pq.write_table(table, str(path / "data.parquet"))
-            c = Collection.from_local(path)
+            c = Collection._load_cached(path)
             result = _detect_target_crs(c, {})
             assert result == 32632
 
@@ -182,6 +182,6 @@ class TestDetectTargetCrs:
             path = Path(tmp) / "equal_crs"
             path.mkdir()
             pq.write_table(table, str(path / "data.parquet"))
-            c = Collection.from_local(path)
+            c = Collection._load_cached(path)
             result = _detect_target_crs(c, {})
             assert result in (32632, 32633)
