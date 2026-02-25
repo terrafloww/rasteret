@@ -46,8 +46,8 @@ print(f"Rows: {collection.dataset.count_rows()}")
 
 When `name` is provided, the collection is cached to
 `~/rasteret_workspace/{name}_records/` and discoverable via
-`rasteret cache list`. Subsequent calls with the same name load
-from the cache instantly. Pass `force=True` to rebuild.
+`rasteret collections list`. Subsequent calls with the same name load
+from the local collection instantly. Pass `force=True` to rebuild.
 
 See [`build_from_table()`](../reference/rasteret.md) API reference.
 
@@ -168,7 +168,7 @@ For more on what the enrichment columns contain, see
 ## CLI
 
 ```bash
-rasteret cache import maxar-opendata \
+rasteret collections import maxar-opendata \
   --record-table "s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet"
 ```
 

@@ -2,22 +2,23 @@
 
 Build, discover, filter, and manage Rasteret collections.
 
-Rasteret has two CLI groups: `rasteret cache` manages local Collections
+Rasteret has two CLI groups: `rasteret collections` manages local Collections
 (build, import, inspect, delete); `rasteret datasets` manages the
-dataset catalog (list, search, build from registry).
+dataset catalog (list, search, build from registry). There is also a
+top-level `rasteret build` shortcut that mirrors the Python `build()` API.
 
-This page focuses on **Collections** and the local cache lifecycle.
+This page focuses on **Collections** and the local collection lifecycle.
 For dataset catalog usage, see
 [Dataset Catalog](dataset-catalog.md).
 
-If you are new, start with: `cache build` -> `cache list` -> `cache info`.
+If you are new, start with: `rasteret build` or `collections build` -> `collections list` -> `collections info`.
 
 ## CLI
 
 ### Build from STAC
 
 ```bash
-rasteret cache build bangalore \
+rasteret collections build bangalore \
   --stac-api https://earth-search.aws.element84.com/v1 \
   --collection sentinel-2-l2a \
   --bbox 77.55,13.01,77.58,13.08 \
@@ -31,30 +32,30 @@ STAC GeoParquet, or your own catalog. See [Build from Parquet](build-from-parque
 
 ```bash
 # Source Cooperative (public, no credentials needed)
-AWS_NO_SIGN_REQUEST=YES rasteret cache import maxar-opendata \
+AWS_NO_SIGN_REQUEST=YES rasteret collections import maxar-opendata \
   --record-table s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet
 
 # Any Parquet with required columns (id, datetime, geometry, assets)
-rasteret cache import my-collection \
+rasteret collections import my-collection \
   --record-table s3://my-bucket/stac-items.parquet
 ```
 
-### List cached collections
+### List local collections
 
 ```bash
-rasteret cache list
+rasteret collections list
 ```
 
 ### Inspect a collection
 
 ```bash
-rasteret cache info bangalore
+rasteret collections info bangalore
 ```
 
 ### Delete a collection
 
 ```bash
-rasteret cache delete bangalore
+rasteret collections delete bangalore
 ```
 
 All CLI commands accept `--workspace-dir` (default: `~/rasteret_workspace`)
@@ -82,7 +83,7 @@ See [Dataset Catalog](dataset-catalog.md) for `register-local`,
 
 - STAC builds use standardized names: `{custom}_{date-range}_{source-prefix}`.
 - `custom` is normalised for filesystem safety (underscores become dashes).
-- `build_from_table()` and CLI `cache import` write collections as `{name}_records`.
+- `build_from_table()` and CLI `collections import` write collections as `{name}_records`.
 - Local Collections built/imported in a workspace are cached locally;
   they are not auto-added to the dataset catalog.
 - Dataset catalog workflows are documented in

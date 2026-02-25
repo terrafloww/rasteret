@@ -6,7 +6,7 @@ Maintainer notes for cutting a new release.
 
 ### 1. Version bump
 
-- [ ] Update `version` in `pyproject.toml`
+- [ ] Version is derived from git tags via `hatch-vcs` (no manual edit in `pyproject.toml`)
 - [ ] Update `version` and `date-released` in `CITATION.cff`
 - [ ] Update version header in `docs/explanation/compatibility-matrix.md`
 

@@ -36,7 +36,7 @@ BUILD                          QUERY                       READ
 ─────                          ─────                       ────
 build_from_stac()         Collection.subset()         COGReader
 build_from_table()        Collection.where()          RasterAccessor
-rasteret cache build      Collection.select_split()   header_parser
+rasteret collections build Collection.select_split()   header_parser
 
 ingest/                   core/collection.py          fetch/cog.py
   stac_indexer.py                                     fetch/header_parser.py
@@ -67,7 +67,7 @@ it should be treated as a correctness change and validated carefully.
 ```text
 src/rasteret/
 ├── __init__.py              Top-level public API (build_from_stac, load, etc.)
-├── cli.py                   CLI entry point (rasteret cache build/list/info/delete/import)
+├── cli.py                   CLI entry point (rasteret collections build/list/info/delete/import, rasteret build)
 ├── cloud.py                 [CloudConfig](reference/cloud.md), [ObstoreBackend](reference/cloud.md), StorageBackend protocol, rewrite_url()
 ├── catalog.py               DatasetRegistry, DatasetDescriptor, built-in + local catalog
 ├── constants.py             BandRegistry, built-in band mappings

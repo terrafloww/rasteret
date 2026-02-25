@@ -36,7 +36,7 @@
 
 - Arrow-native geometry internals (GeoArrow replaces Shapely in hot paths).
 - obstore as base dependency for Rust-native HTTP backend.
-- CLI: `rasteret cache build|list|info|delete|import`.
+- CLI: `rasteret collections build|list|info|delete|import`, `rasteret build` shortcut.
 - CLI: `rasteret datasets list|info|build|register-local|export-local|unregister-local`.
 - Polished documentation, tutorials, and example scripts.
 - CI workflow fixes and public repo cleanup.
