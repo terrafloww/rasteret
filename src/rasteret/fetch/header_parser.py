@@ -26,6 +26,40 @@ from rasteret.types import CogMetadata
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# TIFF / GeoTIFF tag IDs
+# ---------------------------------------------------------------------------
+# Baseline TIFF 6.0
+TAG_IMAGE_WIDTH = 256
+TAG_IMAGE_LENGTH = 257
+TAG_BITS_PER_SAMPLE = 258
+TAG_COMPRESSION = 259
+TAG_PHOTOMETRIC = 262
+TAG_SAMPLES_PER_PIXEL = 277
+TAG_PLANAR_CONFIGURATION = 284
+TAG_PREDICTOR = 317
+TAG_TILE_WIDTH = 322
+TAG_TILE_LENGTH = 323
+TAG_TILE_OFFSETS = 324
+TAG_TILE_BYTE_COUNTS = 325
+TAG_SAMPLE_FORMAT = 339
+TAG_EXTRA_SAMPLES = 338
+
+# GeoTIFF
+TAG_MODEL_PIXEL_SCALE = 33550
+TAG_MODEL_TIEPOINT = 33922
+TAG_MODEL_TRANSFORM = 34264
+TAG_GEO_KEY_DIRECTORY = 34735
+TAG_GEO_DOUBLE_PARAMS = 34736
+TAG_GEO_ASCII_PARAMS = 34737
+
+# GDAL extensions
+TAG_GDAL_METADATA = 42112
+TAG_GDAL_NODATA = 42113
+
+COMPRESSION_JPEG = 7
+
+
 def _parse_nodata(raw: str) -> float | int | None:
     """Parse a GDAL_NODATA ASCII string into a numeric value.
 
@@ -64,9 +98,9 @@ def get_crs_from_tiff_tags(tags: dict[int, Any]) -> int | None:
     int or None
         EPSG code if found, ``None`` otherwise.
     """
-    # Method 1: GeoTiff WKT string (tag 34737 - GeoAsciiParamsTag)
-    if 34737 in tags:
-        wkt = tags[34737]
+    # Method 1: GeoTiff WKT string (GeoAsciiParamsTag)
+    if TAG_GEO_ASCII_PARAMS in tags:
+        wkt = tags[TAG_GEO_ASCII_PARAMS]
         # _parse_tiff_tag_value returns tuples; unwrap to string.
         if isinstance(wkt, tuple):
             wkt = wkt[0] if wkt else ""
@@ -81,8 +115,8 @@ def get_crs_from_tiff_tags(tags: dict[int, Any]) -> int | None:
             logger.debug(f"Failed to parse WKT string: {e}")
 
     # Method 2: GeoKey directory (tag 34735) with GeoDoubleParams (34736) support
-    geokeys = tags.get(34735)
-    geo_doubles = tags.get(34736)  # GeoDoubleParamsTag
+    geokeys = tags.get(TAG_GEO_KEY_DIRECTORY)
+    geo_doubles = tags.get(TAG_GEO_DOUBLE_PARAMS)
     if geokeys:
         try:
             num_keys = geokeys[3]
@@ -98,7 +132,11 @@ def get_crs_from_tiff_tags(tags: dict[int, Any]) -> int | None:
                 if key_id in (3072, 2048):
                     if tiff_tag_loc == 0 and count == 1:  # Direct value
                         crs_candidates[key_id] = int(value)
-                    elif tiff_tag_loc == 34736 and geo_doubles and count == 1:
+                    elif (
+                        tiff_tag_loc == TAG_GEO_DOUBLE_PARAMS
+                        and geo_doubles
+                        and count == 1
+                    ):
                         idx = int(value)
                         if 0 <= idx < len(geo_doubles):
                             crs_candidates[key_id] = int(geo_doubles[idx])
@@ -119,7 +157,7 @@ def get_raster_type_from_geokeys(tags: dict[int, Any]) -> int:
     Defaults to 1 (PixelIsArea) per OGC spec.
     See GDAL RFC 33: https://gdal.org/development/rfc/rfc33_gtiff_pixelispoint.html
     """
-    geokeys = tags.get(34735)
+    geokeys = tags.get(TAG_GEO_KEY_DIRECTORY)
     if not geokeys:
         return 1  # default: PixelIsArea
 
@@ -307,17 +345,17 @@ class AsyncCOGHeaderParser:
                 )
 
             # Extract essential metadata
-            image_width = tags.get(256)[0]  # ImageWidth
-            image_height = tags.get(257)[0]  # ImageLength
-            tile_width = tags.get(322, [image_width])[0]  # TileWidth
-            tile_height = tags.get(323, [image_height])[0]  # TileLength
+            image_width = tags.get(TAG_IMAGE_WIDTH)[0]
+            image_height = tags.get(TAG_IMAGE_LENGTH)[0]
+            tile_width = tags.get(TAG_TILE_WIDTH, [image_width])[0]
+            tile_height = tags.get(TAG_TILE_LENGTH, [image_height])[0]
 
-            compression = tags.get(259, (1,))[0]  # Compression
-            predictor = tags.get(317, (1,))[0]  # Predictor
+            compression = tags.get(TAG_COMPRESSION, (1,))[0]
+            predictor = tags.get(TAG_PREDICTOR, (1,))[0]
 
             # Data type
-            sample_format = tags.get(339, (1,))[0]
-            bits_per_sample = tags.get(258, (8,))[0]
+            sample_format = tags.get(TAG_SAMPLE_FORMAT, (1,))[0]
+            bits_per_sample = tags.get(TAG_BITS_PER_SAMPLE, (8,))[0]
             dtype_key = (sample_format, bits_per_sample)
             dtype = self.dtype_map.get(dtype_key)
             if dtype is None:
@@ -327,14 +365,14 @@ class AsyncCOGHeaderParser:
                 )
 
             # Band/sample layout
-            samples_per_pixel = tags.get(277, (1,))[0]  # SamplesPerPixel
-            planar_configuration = tags.get(284, (1,))[0]  # PlanarConfiguration
-            photometric = tags.get(262, (None,))[0]  # PhotometricInterpretation
-            extra_samples = tags.get(338)  # ExtraSamples (tuple or None)
+            samples_per_pixel = tags.get(TAG_SAMPLES_PER_PIXEL, (1,))[0]
+            planar_configuration = tags.get(TAG_PLANAR_CONFIGURATION, (1,))[0]
+            photometric = tags.get(TAG_PHOTOMETRIC, (None,))[0]
+            extra_samples = tags.get(TAG_EXTRA_SAMPLES)
 
-            # GDAL nodata (tag 42113 - ASCII string like "-128" or "nan")
+            # GDAL nodata (ASCII string like "-128" or "nan")
             nodata = None
-            raw_nodata = tags.get(42113)
+            raw_nodata = tags.get(TAG_GDAL_NODATA)
             if raw_nodata is not None:
                 nodata_str = (
                     raw_nodata[0] if isinstance(raw_nodata, tuple) else raw_nodata
@@ -342,19 +380,19 @@ class AsyncCOGHeaderParser:
                 if isinstance(nodata_str, (bytes, bytearray)):
                     try:
                         nodata_str = nodata_str.decode("ascii", errors="ignore")
-                    except Exception:
+                    except (UnicodeDecodeError, AttributeError):
                         nodata_str = ""
                 if isinstance(nodata_str, str) and nodata_str:
                     nodata = _parse_nodata(nodata_str)
             else:
-                # Some GeoTIFFs store nodata in GDALMetadata XML (tag 42112)
+                # Some GeoTIFFs store nodata in GDALMetadata XML
                 # instead of the dedicated GDAL_NODATA tag.
-                raw_xml = tags.get(42112)
+                raw_xml = tags.get(TAG_GDAL_METADATA)
                 xml_str = raw_xml[0] if isinstance(raw_xml, tuple) else raw_xml
                 if isinstance(xml_str, (bytes, bytearray)):
                     try:
                         xml_str = xml_str.decode("utf-8", errors="ignore")
-                    except Exception:
+                    except (UnicodeDecodeError, AttributeError):
                         xml_str = ""
                 if isinstance(xml_str, str) and xml_str.strip():
                     try:
@@ -369,30 +407,32 @@ class AsyncCOGHeaderParser:
                                     # NODATA_VALUES may contain multiple values; take the first.
                                     nodata = _parse_nodata(text.split()[0])
                                     break
-                    except Exception:
-                        # Best-effort: ignore malformed metadata XML.
-                        pass
+                    except ET.ParseError:
+                        # Best-effort: ignore malformed GDALMetadata XML.
+                        logger.debug(
+                            "Malformed GDALMetadata XML, skipping nodata extraction"
+                        )
 
-            # Tile layout (tags 324/325 are only present in tiled TIFFs/COGs)
-            tile_offsets = list(tags.get(324, []))  # TileOffsets
-            tile_byte_counts = list(tags.get(325, []))  # TileByteCounts
+            # Tile layout (only present in tiled TIFFs/COGs)
+            tile_offsets = list(tags.get(TAG_TILE_OFFSETS, []))
+            tile_byte_counts = list(tags.get(TAG_TILE_BYTE_COUNTS, []))
 
             if not tile_offsets or not tile_byte_counts:
                 raise NotImplementedError(
                     "Rasteret requires a tiled GeoTIFF/COG "
                     "(no TileOffsets/TileByteCounts)."
                 )
-            if compression == 7:
+            if compression == COMPRESSION_JPEG:
                 raise NotImplementedError(
-                    "TIFF JPEG compression (tag 259 = 7) is not supported yet. "
+                    "TIFF JPEG compression is not supported yet. "
                     "Some TIFFs also use shared JPEGTables (tag 347), which requires "
                     "concatenating the tables with each tile stream during decode."
                 )
 
             # Geotransform
-            pixel_scale = tags.get(33550)  # ModelPixelScaleTag
-            tiepoint = tags.get(33922)  # ModelTiepointTag
-            model_transform = tags.get(34264)  # ModelTransformationTag (4x4 matrix)
+            pixel_scale = tags.get(TAG_MODEL_PIXEL_SCALE)
+            tiepoint = tags.get(TAG_MODEL_TIEPOINT)
+            model_transform = tags.get(TAG_MODEL_TRANSFORM)
 
             # Calculate transform
             transform = None

@@ -146,6 +146,17 @@ class _AsyncCOGReaderPool:
         loop.call_soon_threadsafe(loop.stop)
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                logger.warning(
+                    "COG reader pool thread did not join within 5 s; "
+                    "resources may leak"
+                )
+
+    def __enter__(self) -> _AsyncCOGReaderPool:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def __del__(self) -> None:
         self.close()

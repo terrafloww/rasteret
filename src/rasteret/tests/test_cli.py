@@ -42,23 +42,23 @@ def _write_cached_collection(path: Path) -> None:
     pq.write_to_dataset(table, root_path=str(path), partition_cols=["year", "month"])
 
 
-def test_cache_list_outputs_cached_collection(tmp_path, capsys) -> None:
+def test_collections_list_outputs_cached_collection(tmp_path, capsys) -> None:
     cache_dir = tmp_path / "demo_202401-01_sentinel_stac"
     _write_cached_collection(cache_dir)
 
-    exit_code = main(["cache", "list", "--workspace-dir", str(tmp_path)])
+    exit_code = main(["collections", "list", "--workspace-dir", str(tmp_path)])
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "demo_202401-01_sentinel" in output
 
 
-def test_cache_info_json(tmp_path, capsys) -> None:
+def test_collections_info_json(tmp_path, capsys) -> None:
     cache_name = "demo_202401-01_sentinel"
     cache_dir = tmp_path / f"{cache_name}_stac"
     _write_cached_collection(cache_dir)
 
     exit_code = main(
-        ["cache", "info", cache_name, "--workspace-dir", str(tmp_path), "--json"]
+        ["collections", "info", cache_name, "--workspace-dir", str(tmp_path), "--json"]
     )
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
@@ -67,21 +67,21 @@ def test_cache_info_json(tmp_path, capsys) -> None:
     assert payload["has_split_column"] is True
 
 
-def test_cache_delete_yes_removes_collection(tmp_path, capsys) -> None:
+def test_collections_delete_yes_removes_collection(tmp_path, capsys) -> None:
     cache_name = "demo_202401-01_sentinel"
     cache_dir = tmp_path / f"{cache_name}_stac"
     _write_cached_collection(cache_dir)
     assert cache_dir.exists()
 
     exit_code = main(
-        ["cache", "delete", cache_name, "--workspace-dir", str(tmp_path), "--yes"]
+        ["collections", "delete", cache_name, "--workspace-dir", str(tmp_path), "--yes"]
     )
     assert exit_code == 0
     assert not cache_dir.exists()
     assert "Deleted:" in capsys.readouterr().out
 
 
-def test_cache_build_passes_args_and_returns_summary(
+def test_collections_build_passes_args_and_returns_summary(
     tmp_path, monkeypatch, capsys
 ) -> None:
     captured: dict[str, object] = {}
@@ -97,7 +97,7 @@ def test_cache_build_passes_args_and_returns_summary(
 
     exit_code = main(
         [
-            "cache",
+            "collections",
             "build",
             "demo",
             "--stac-api",
@@ -125,7 +125,7 @@ def test_cache_build_passes_args_and_returns_summary(
     assert captured["query"] == {"eo:cloud_cover": {"lt": 20}}
 
 
-def test_cache_import_materializes_record_table(tmp_path, capsys) -> None:
+def test_collections_import_materializes_record_table(tmp_path, capsys) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     record_table_path = input_dir / "items.parquet"
@@ -144,7 +144,7 @@ def test_cache_import_materializes_record_table(tmp_path, capsys) -> None:
 
     exit_code = main(
         [
-            "cache",
+            "collections",
             "import",
             "demo",
             "--record-table",

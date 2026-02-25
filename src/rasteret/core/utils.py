@@ -9,6 +9,7 @@ import math
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pyarrow as pa
 from pyproj import Transformer
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -74,9 +75,9 @@ def infer_data_source(collection: "Collection") -> str:
                     source = value.as_py() if hasattr(value, "as_py") else value
                     if isinstance(source, str) and source:
                         return source
-        except Exception:
-            # This is a best-effort fallback; failure here should not break reads.
-            pass
+        except (pa.ArrowInvalid, pa.ArrowKeyError, OSError) as exc:
+            # Best-effort fallback; failure here should not break reads.
+            logger.debug("Failed to read 'collection' column: %s", exc)
 
     logger.debug("Could not infer data_source for Collection")
     return ""

@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import re
 from dataclasses import dataclass
 from datetime import timedelta as _timedelta
 from typing import Literal
@@ -22,8 +23,10 @@ from affine import Affine
 from rasterio.mask import geometry_mask
 
 try:
+    from obstore.exceptions import GenericError as _ObstoreGenericError
     from obstore.exceptions import UnknownConfigurationKeyError
 except ImportError:  # pragma: no cover - obstore is a runtime dependency
+    _ObstoreGenericError = Exception
     UnknownConfigurationKeyError = TypeError
 
 from rasteret.core.geometry import (
@@ -66,8 +69,10 @@ _OBSTORE_RETRY_CONFIG: dict[str, object] = {
 }
 
 
-_S3_HOST_RE = None  # lazy-compiled regex for S3 virtual-hosted URLs
-_AZURE_BLOB_RE = None  # lazy-compiled regex for Azure Blob hosts
+_S3_HOST_RE = re.compile(
+    r"^([a-z0-9][a-z0-9.\-]+)\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$"
+)
+_AZURE_BLOB_RE = re.compile(r"^([a-z0-9]+)\.blob\.core\.windows\.net$")
 _CREDENTIAL_PROVIDER_EXCEPTIONS = (TypeError, UnknownConfigurationKeyError)
 
 
@@ -76,13 +81,6 @@ def _extract_s3_bucket(netloc: str) -> str | None:
 
     Returns ``None`` if *netloc* is not an S3-style host.
     """
-    global _S3_HOST_RE  # noqa: PLW0603
-    if _S3_HOST_RE is None:
-        import re
-
-        _S3_HOST_RE = re.compile(
-            r"^([a-z0-9][a-z0-9.\-]+)\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$"
-        )
     m = _S3_HOST_RE.match(netloc)
     return m.group(1) if m else None
 
@@ -93,11 +91,6 @@ def _extract_azure_account(netloc: str) -> str | None:
     Matches ``<account>.blob.core.windows.net``.
     Returns ``None`` if *netloc* is not an Azure Blob host.
     """
-    global _AZURE_BLOB_RE  # noqa: PLW0603
-    if _AZURE_BLOB_RE is None:
-        import re
-
-        _AZURE_BLOB_RE = re.compile(r"^([a-z0-9]+)\.blob\.core\.windows\.net$")
     m = _AZURE_BLOB_RE.match(netloc)
     return m.group(1) if m else None
 
@@ -446,7 +439,9 @@ class _AutoObstoreBackend:
         try:
             buf = await obs.get_range_async(store, path, start=start, length=length)
             return bytes(buf)
-        except Exception as exc:
+        except _ObstoreGenericError as exc:
+            # obstore raises GenericError for S3 region redirects.  There is
+            # no typed redirect exception, so we check the message string.
             parsed = urlparse(url)
             bucket = (
                 parsed.netloc
@@ -456,6 +451,9 @@ class _AutoObstoreBackend:
             if not bucket or "Received redirect without LOCATION" not in str(exc):
                 raise
 
+            logger.debug(
+                "S3 region redirect for bucket '%s', discovering region", bucket
+            )
             region = self._s3_regions.get(bucket) or _discover_s3_bucket_region(bucket)
             if not region:
                 raise RuntimeError(
@@ -481,7 +479,7 @@ class _AutoObstoreBackend:
                 store, path, starts=list(starts), lengths=list(lengths)
             )
             return [bytes(b) for b in buffers]
-        except Exception as exc:
+        except _ObstoreGenericError as exc:
             parsed = urlparse(url)
             bucket = (
                 parsed.netloc
@@ -491,6 +489,9 @@ class _AutoObstoreBackend:
             if not bucket or "Received redirect without LOCATION" not in str(exc):
                 raise
 
+            logger.debug(
+                "S3 region redirect for bucket '%s', discovering region", bucket
+            )
             region = self._s3_regions.get(bucket) or _discover_s3_bucket_region(bucket)
             if not region:
                 raise RuntimeError(
