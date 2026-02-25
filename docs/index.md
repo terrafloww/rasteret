@@ -4,14 +4,14 @@
 
 ---
 
-!!! failure "The problem no one fixed"
+!!! failure "The cold-start tax"
 
     Your colleague read those Sentinel-2 scenes last Tuesday. The tools
     re-parsed every file header over HTTP - per scene, per band. So did CI.
     So did the intern's notebook. PyTorch respawns DataLoader workers every
     epoch, so your own training run re-parses them hundreds of times over.
 
-    A single project racks up **millions of redundant requests** across a
+    A single project repeats **millions of redundant requests** across a
     team - zero pixels delivered.
 
 !!! success "What Rasteret does"
@@ -77,8 +77,7 @@ for d in rasteret.DatasetRegistry.list():
 ```
 
 The catalog is open and community-driven. Each entry is ~20 lines of Python.
-One PR adds a dataset and every user gets accelerated access on the next
-release. No proprietary APIs, no platform lock-in. See
+One PR adds a dataset and every user gets access on the next release. No proprietary APIs, no platform lock-in. See
 [Dataset Catalog](how-to/dataset-catalog.md) for details, or
 [Design Decisions](explanation/design-decisions.md) for the thinking behind it.
 
@@ -196,7 +195,7 @@ For how Rasteret relates to other tools, see
     ---
 
     Add a dataset, improve docs, or build something new.
-    Every contribution benefits the whole ecosystem.
+    All contributions are welcome.
 
     [:octicons-arrow-right-24: Contributing](contributing.md)
 

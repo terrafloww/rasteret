@@ -18,7 +18,7 @@
 Every cold start re-parses satellite image metadata over HTTP - per
 scene, per band. Sentinel-2, Landsat, NAIP, every time. Your colleague
 did it last Tuesday, CI did it overnight, PyTorch respawns DataLoader
-workers every epoch. A single project racks up **millions of redundant
+workers every epoch. A single project repeats **millions of redundant
 requests** before a pixel moves.
 
 Rasteret parses those headers **once**, caches them in Parquet, and its
@@ -94,7 +94,7 @@ Each entry includes license metadata sourced from the authoritative STAC API,
 and a `commercial_use` flag for quick filtering.
 
 The catalog is open and community-driven. Each dataset entry is ~20 lines of
-Python: One PR adds a dataset; every user gets accelerated access on the next release.
+Python: One PR adds a dataset; every user gets access on the next release.
 
 Pick any ID and pass it to `build()`. Don't see your dataset? Use
 `build_from_stac()` for any STAC API, `build_from_table()` for existing
@@ -251,13 +251,13 @@ Full docs at **[terrafloww.github.io/rasteret](https://terrafloww.github.io/rast
 
 ## Contributing
 
-The catalog grows fastest with community help:
+The catalog grows with community help:
 
 - **Add a dataset**: write a ~20 line descriptor in `catalog.py`, open a PR. See [prerequisites](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#prerequisites-for-contributing-a-built-in-dataset) and [guide](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#add-your-own-catalog-entries-advanced)
 - **Improve docs**: fix a typo, add an example, clarify a section
 - **Build something new**: ingest drivers, cloud backends, readers. See [Architecture](https://terrafloww.github.io/rasteret/explanation/architecture/)
 
-Every contribution benefits the whole community.
+All contributions are welcome.
 See [Contributing](https://terrafloww.github.io/rasteret/contributing/) for dev setup and we are happy to discuss all aspects of library.
 Ideas welcome on [GitHub Discussions](https://github.com/terrafloww/rasteret/discussions) or join our [Discord](https://discord.gg/V5vvuEBc) to just chat.
 
