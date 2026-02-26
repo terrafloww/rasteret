@@ -32,6 +32,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _is_cloud_uri(path: str) -> bool:
+    """Return True for s3://, gs://, az:// and similar cloud URIs."""
+    return "://" in path and not path.startswith("file://")
+
+
+def _open_parquet_dataset(path_str: str, *, try_hive: bool = True) -> ds.Dataset:
+    """Open a Parquet dataset from a local path or cloud URI.
+
+    PyArrow's ``ds.dataset()`` handles both local paths and cloud URIs
+    (s3://, gs://) when the string is passed directly.  We try Hive-style
+    partitioning first, then fall back to plain Parquet.
+    """
+    kwargs: dict[str, Any] = {
+        "format": "parquet",
+        "exclude_invalid_files": True,
+    }
+    if try_hive:
+        try:
+            return ds.dataset(path_str, partitioning="hive", **kwargs)
+        except pa.ArrowInvalid:
+            pass
+    return ds.dataset(path_str, **kwargs)
+
+
+def _stem_from_path(path_str: str) -> str:
+    """Extract the filename stem from a local path or cloud URI."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(path_str)
+    tail = parsed.path.rstrip("/") if parsed.scheme else path_str.rstrip("/")
+    return Path(tail).stem if tail else ""
+
+
 # WKB geometry type id → GeoParquet type name (OGC Simple Features).
 _WKB_TYPE_NAMES: dict[int, str] = {
     1: "Point",
@@ -169,28 +203,20 @@ class Collection:
         For user-facing loading, use :meth:`from_parquet` or
         :func:`rasteret.load` instead.
         """
-        path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Dataset not found at {path}")
+        path_str = str(path)
+        if not _is_cloud_uri(path_str):
+            p = Path(path_str)
+            if not p.exists():
+                raise FileNotFoundError(f"Dataset not found at {path_str}")
 
         try:
-            dataset = ds.dataset(
-                str(path),
-                format="parquet",
-                partitioning="hive",
-                exclude_invalid_files=True,
-            )
-        except pa.ArrowInvalid:
-            dataset = ds.dataset(
-                str(path),
-                format="parquet",
-                exclude_invalid_files=True,
-            )
+            dataset = _open_parquet_dataset(path_str)
+        except Exception as exc:
+            raise FileNotFoundError(f"Cannot open Parquet at {path_str}") from exc
 
         meta = cls._metadata_from_schema(dataset)
-        name = meta.get("name") or path.stem.removesuffix("_stac").removesuffix(
-            "_records"
-        )
+        stem = _stem_from_path(path_str)
+        name = meta.get("name") or stem.removesuffix("_stac").removesuffix("_records")
 
         start_date = None
         end_date = None
@@ -213,28 +239,24 @@ class Collection:
     def from_parquet(cls, path: str | Path, name: str = "") -> Collection:
         """Load a Collection from any Parquet file or directory.
 
+        Accepts local paths **and** cloud URIs (``s3://``, ``gs://``).
         Tries Hive-style partitioning first (year/month), falls back to
         plain Parquet.  Validates that the core contract columns are present.
 
         See the `Schema Contract <../explanation/schema-contract/>`_ docs page.
         """
-        path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Parquet not found at {path}")
+        path_str = str(path)
+        if not _is_cloud_uri(path_str):
+            p = Path(path_str)
+            if not p.exists():
+                raise FileNotFoundError(f"Parquet not found at {path_str}")
 
         try:
-            dataset = ds.dataset(
-                str(path),
-                format="parquet",
-                partitioning="hive",
-                exclude_invalid_files=True,
-            )
-        except pa.ArrowInvalid:
-            dataset = ds.dataset(
-                str(path),
-                format="parquet",
-                exclude_invalid_files=True,
-            )
+            dataset = _open_parquet_dataset(path_str)
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise FileNotFoundError(f"Cannot open Parquet at {path_str}") from exc
 
         required = {"id", "datetime", "geometry", "assets", "scene_bbox"}
         missing = required - set(dataset.schema.names)
@@ -245,7 +267,7 @@ class Collection:
             )
 
         meta = cls._metadata_from_schema(dataset)
-        resolved_name = name or meta.get("name") or path.stem
+        resolved_name = name or meta.get("name") or _stem_from_path(path_str)
 
         start_date = None
         end_date = None
@@ -534,12 +556,14 @@ class Collection:
         Parameters
         ----------
         path : str or Path
-            Output directory.
+            Output directory.  Accepts local paths and cloud URIs
+            (``s3://``, ``gs://``).
         partition_by : sequence of str
             Columns to partition by. Defaults to ``("year", "month")``.
         """
-        path = Path(path)
-        path.mkdir(parents=True, exist_ok=True)
+        path_str = str(path)
+        if not _is_cloud_uri(path_str):
+            Path(path_str).mkdir(parents=True, exist_ok=True)
 
         if self.dataset is None:
             raise ValueError("No Pyarrow dataset provided")
@@ -594,7 +618,7 @@ class Collection:
         # Write dataset
         pq.write_to_dataset(
             table_with_metadata,
-            root_path=str(path),
+            root_path=path_str,
             partition_cols=partition_by,
             compression="zstd",
             compression_level=3,

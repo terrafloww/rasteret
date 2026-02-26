@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import threading
+import warnings
 from collections.abc import Callable, Coroutine, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
@@ -259,6 +260,8 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 Spatial chip size in pixels. Used for sampler hints.
             label_field : str, optional
                 Column name in the collection table to use as a label.
+                In ``time_series=True`` mode the label is taken from the
+                **first** (earliest) timestep only.
             geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict, optional
                 Spatial filter: only scenes intersecting these geometries are included.
                 Accepts ``(minx, miny, maxx, maxy)`` bbox tuples, Arrow arrays
@@ -306,6 +309,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             self._backend = backend
             self._pool: _AsyncCOGReaderPool | None = None
             self._pool_pid: int | None = None
+            self._warned_ts_temporal_skip = False
 
             columns = [
                 "id",
@@ -370,15 +374,13 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 if len(df) < original_len:
                     n_dropped = original_len - len(df)
                     n_zones = int(epsg_series.nunique())
-                    logger.warning(
-                        "%d of %d records dropped (CRS != EPSG:%d). "
-                        "Collection spans %d CRS zones. Pass target_crs= "
-                        "to reproject instead of dropping.",
-                        n_dropped,
-                        original_len,
-                        self.epsg,
-                        n_zones,
+                    msg = (
+                        f"{n_dropped} of {original_len} records dropped "
+                        f"(CRS != EPSG:{self.epsg}). Collection spans "
+                        f"{n_zones} CRS zones. Pass target_crs= to "
+                        f"reproject instead of dropping."
                     )
+                    warnings.warn(msg, UserWarning, stacklevel=2)
                 if df.empty:
                     raise ValueError(f"No records with EPSG:{self.epsg}")
             crs = CRS.from_epsg(self.epsg)
@@ -466,6 +468,11 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             valid_rows: list[int] = []
             footprints: list[shapely.Geometry] = []
             intervals: list[tuple[datetime, datetime]] = []
+            _skip_no_datetime = 0
+            _skip_no_metadata = 0
+            _skip_no_dimensions = 0
+            _res_mismatch_count = 0
+            total_rows = len(df)
 
             for i, row in df.iterrows():
                 dt = row.get("datetime")
@@ -474,19 +481,30 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 if pd.isna(dt):
                     dt = row.get("end_datetime")
                 if pd.isna(dt):
+                    _skip_no_datetime += 1
                     continue
 
                 band_meta = _as_dict(row[f"{self.bands[0]}_metadata"])
                 if not band_meta:
+                    _skip_no_metadata += 1
                     continue
                 try:
                     sx, tx, sy, ty = normalize_transform(band_meta.get("transform"))
                 except (TypeError, ValueError):
+                    _skip_no_metadata += 1
                     continue
+
+                row_res = (abs(float(sx)), abs(float(sy)))
+                if not (
+                    np.isclose(row_res[0], self._res[0], rtol=1e-6, atol=1e-9)
+                    and np.isclose(row_res[1], self._res[1], rtol=1e-6, atol=1e-9)
+                ):
+                    _res_mismatch_count += 1
 
                 width = band_meta.get("image_width")
                 height = band_meta.get("image_height")
                 if width is None or height is None:
+                    _skip_no_dimensions += 1
                     continue
 
                 xmin = float(tx)
@@ -509,8 +527,43 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 intervals.append((timestamp, timestamp))
                 valid_rows.append(i)
 
+            skipped = total_rows - len(valid_rows)
+            if skipped:
+                parts = []
+                if _skip_no_datetime:
+                    parts.append(f"no datetime: {_skip_no_datetime}")
+                if _skip_no_metadata:
+                    parts.append(f"missing/invalid metadata: {_skip_no_metadata}")
+                if _skip_no_dimensions:
+                    parts.append(f"missing dimensions: {_skip_no_dimensions}")
+                logger.warning(
+                    "%d of %d records skipped (%s). "
+                    "Ensure the collection was built with enrich_cog=True.",
+                    skipped,
+                    total_rows,
+                    "; ".join(parts),
+                )
+
+            if _res_mismatch_count:
+                warnings.warn(
+                    f"{_res_mismatch_count} of {len(valid_rows)} valid records "
+                    f"have a different native resolution than the dataset "
+                    f"resolution {self._res} (derived from the first record). "
+                    f"Chips for those records will be resampled.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
             if not valid_rows:
-                raise ValueError("No valid records found for TorchGeo dataset creation")
+                raise ValueError(
+                    f"No valid records found for TorchGeo dataset creation. "
+                    f"All {total_rows} records were skipped "
+                    f"(no datetime: {_skip_no_datetime}, "
+                    f"missing/invalid metadata: {_skip_no_metadata}, "
+                    f"missing dimensions: {_skip_no_dimensions}). "
+                    f"Build the collection with enrich_cog=True to populate "
+                    f"per-band metadata."
+                )
 
             df = df.loc[valid_rows].reset_index(drop=True)
 
@@ -662,6 +715,10 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             Reuses the pool's persistent COGReader (and its obstore backend)
             so every request shares the same connection pool.
             Returns one ``(CogReadResult, CogMetadata)`` per request.
+
+            Individual read failures are caught and logged; the failed
+            request is excluded from the result list.  Callers must
+            handle a shorter-than-expected result when reads fail.
             """
             reader = pool.reader
 
@@ -681,10 +738,19 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     )
                     for url, meta, band_index in requests
                 ]
-                results = list(await asyncio.gather(*tasks))
-                return [
-                    (r, meta) for r, (_url, meta, _band_index) in zip(results, requests)
-                ]
+                raw = await asyncio.gather(*tasks, return_exceptions=True)
+                out: list[tuple[Any, CogMetadata]] = []
+                for result, (url, meta, _band_index) in zip(raw, requests):
+                    if isinstance(result, BaseException):
+                        logger.warning(
+                            "COG read failed for %s (band_index=%s): %s",
+                            url,
+                            _band_index,
+                            result,
+                        )
+                        continue
+                    out.append((result, meta))
+                return out
 
             return pool.run(_gather())
 
@@ -714,14 +780,20 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
 
             t_step = 1 if t.step is None else int(t.step)
             if self.time_series:
-                # TorchGeo semantics: time_series stacks ALL spatially
-                # overlapping records regardless of the sampler's time slice.
-                # TorchGeo's own RasterDataset effectively does this because
-                # files without parseable dates get [Timestamp.min, .max],
-                # making every sampler query match every file.  Rasteret
-                # stores precise per-scene dates from STAC, so we must skip
-                # the time filter here; users control date range upstream
-                # via build(date_range=...) or collection.subset().
+                # time_series=True stacks ALL spatially overlapping records
+                # regardless of the sampler's time slice.  Rasteret stores
+                # precise per-scene dates from STAC, so applying the sampler's
+                # narrow time window would miss most scenes.  Users control
+                # date range upstream via build(date_range=...) or
+                # collection.subset().
+                if not self._warned_ts_temporal_skip:
+                    self._warned_ts_temporal_skip = True
+                    logger.info(
+                        "time_series=True: sampler time slices are ignored; "
+                        "all spatially overlapping records are stacked. "
+                        "Use collection.subset(date_range=...) to limit the "
+                        "temporal range before creating the dataset."
+                    )
                 df = self.index.cx[x.start : x.stop, y.start : y.stop]
                 df = df.iloc[::t_step]
             else:
@@ -777,6 +849,16 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     pool,
                     out_shape=fetch_out_shape,
                 )
+
+                expected = n_timesteps * n_bands
+                got = len(fetch_results)
+                if got == 0:
+                    raise ValueError("All COG reads failed for time series sample")
+                if got != expected:
+                    raise ValueError(
+                        f"{expected - got} of {expected} COG reads failed "
+                        f"for time series sample (check warnings above)"
+                    )
 
                 # When multi-CRS, reproject every array to the target CRS grid.
                 # This guarantees consistent (H, W) across all records/bands.
@@ -921,6 +1003,9 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     # [C, H, W] -> [H, W] when C==1
                     sample["mask"] = image.squeeze(0)
             if self.label_field is not None:
+                # Use the first (earliest) record's label.  For time_series
+                # this means the label is NOT per-timestep — it represents
+                # the scene-level label of the earliest observation.
                 label_value = None
                 if not df.empty:
                     rid0 = int(df.iloc[0]["rid"])

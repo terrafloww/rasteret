@@ -38,6 +38,89 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def _rewrite_url_simple(url: str, patterns: dict[str, str]) -> str:
+    """Apply URL rewrite patterns (e.g. S3 → HTTPS)."""
+    for src_prefix, dst_prefix in patterns.items():
+        if url.startswith(src_prefix):
+            return url.replace(src_prefix, dst_prefix, 1)
+    return url
+
+
+def prepare_record_table(
+    table: pa.Table,
+    *,
+    href_column: str | None = None,
+    band_index_map: dict[str, int] | None = None,
+    url_rewrite_patterns: dict[str, str] | None = None,
+) -> pa.Table:
+    """Normalise column types and construct ``assets`` when absent.
+
+    This is a pure function (no instance state) so it can be used from both
+    :class:`RecordTableBuilder` and the in-memory ``build_from_table()`` path
+    without constructing a builder object.
+
+    Steps:
+
+    1. Auto-coerce ``id``: integer → string.
+    2. Auto-coerce ``datetime``: integer year → timestamp.
+    3. Construct ``assets`` from *href_column* + *band_index_map*.
+    4. Derive ``proj:epsg`` from a ``crs`` column when present.
+    """
+    names = set(table.schema.names)
+    rewrites = url_rewrite_patterns or {}
+
+    # --- id: int → string ---
+    if "id" in names and pa.types.is_integer(table.schema.field("id").type):
+        table = table.set_column(
+            table.schema.get_field_index("id"),
+            "id",
+            pc.cast(table.column("id"), pa.string()),
+        )
+
+    # --- datetime: int year → timestamp ---
+    if "datetime" in names and pa.types.is_integer(table.schema.field("datetime").type):
+        years = table.column("datetime").to_pylist()
+        timestamps = pa.array(
+            [datetime(int(y), 1, 1) if y is not None else None for y in years],
+            type=pa.timestamp("us"),
+        )
+        table = table.set_column(
+            table.schema.get_field_index("datetime"),
+            "datetime",
+            timestamps,
+        )
+
+    # --- assets: construct from href_column + band_index_map ---
+    if "assets" not in names and href_column and band_index_map:
+        if href_column not in names:
+            raise ValueError(
+                f"href_column '{href_column}' not found in table. "
+                f"Available: {sorted(names)}"
+            )
+        urls = table.column(href_column).to_pylist()
+        assets_list: list[dict[str, dict[str, object]]] = []
+        for url in urls:
+            if url is None:
+                assets_list.append({})
+                continue
+            rewritten = _rewrite_url_simple(str(url), rewrites)
+            assets_list.append(
+                {
+                    band: {"href": rewritten, "band_index": idx}
+                    for band, idx in band_index_map.items()
+                }
+            )
+        table = table.append_column("assets", pa.array(assets_list))
+
+    # --- proj:epsg: derive from crs column ---
+    if "proj:epsg" not in names and "crs" in names:
+        crs_values = table.column("crs").to_pylist()
+        epsg_array = pa.array([parse_epsg(v) for v in crs_values], type=pa.int32())
+        table = table.append_column("proj:epsg", epsg_array)
+
+    return table
+
+
 def _apply_column_map_aliases(
     table: pa.Table, column_map: dict[str, str] | None
 ) -> pa.Table:
@@ -178,74 +261,14 @@ class RecordTableBuilder(CollectionBuilder):
     def _prepare_table(self, table: pa.Table) -> pa.Table:
         """Normalise column types and construct ``assets`` when absent.
 
-        Called after ``_apply_column_map_aliases`` but before enrichment.
-
-        1. Auto-coerce ``id``: integer → string.
-        2. Auto-coerce ``datetime``: integer year → timestamp.
-        3. Construct ``assets`` from ``href_column`` + ``band_index_map``.
-        4. Derive ``proj:epsg`` from a ``crs`` column when present.
+        Delegates to :func:`prepare_record_table`.
         """
-        names = set(table.schema.names)
-
-        # --- id: int → string ---
-        if "id" in names and pa.types.is_integer(table.schema.field("id").type):
-            table = table.set_column(
-                table.schema.get_field_index("id"),
-                "id",
-                pc.cast(table.column("id"), pa.string()),
-            )
-
-        # --- datetime: int year → timestamp ---
-        if "datetime" in names and pa.types.is_integer(
-            table.schema.field("datetime").type
-        ):
-            years = table.column("datetime").to_pylist()
-            timestamps = pa.array(
-                [datetime(int(y), 1, 1) if y is not None else None for y in years],
-                type=pa.timestamp("us"),
-            )
-            table = table.set_column(
-                table.schema.get_field_index("datetime"),
-                "datetime",
-                timestamps,
-            )
-
-        # --- assets: construct from href_column + band_index_map ---
-        if "assets" not in names and self.href_column and self.band_index_map:
-            if self.href_column not in names:
-                raise ValueError(
-                    f"href_column '{self.href_column}' not found in table. "
-                    f"Available: {sorted(names)}"
-                )
-            urls = table.column(self.href_column).to_pylist()
-            assets_list: list[dict[str, dict[str, object]]] = []
-            for url in urls:
-                if url is None:
-                    assets_list.append({})
-                    continue
-                rewritten = self._rewrite_url(str(url))
-                assets_list.append(
-                    {
-                        band: {"href": rewritten, "band_index": idx}
-                        for band, idx in self.band_index_map.items()
-                    }
-                )
-            table = table.append_column("assets", pa.array(assets_list))
-
-        # --- proj:epsg: derive from crs column ---
-        if "proj:epsg" not in names and "crs" in names:
-            crs_values = table.column("crs").to_pylist()
-            epsg_array = pa.array([parse_epsg(v) for v in crs_values], type=pa.int32())
-            table = table.append_column("proj:epsg", epsg_array)
-
-        return table
-
-    def _rewrite_url(self, url: str) -> str:
-        """Apply URL rewrite patterns (e.g. S3 → HTTPS)."""
-        for src_prefix, dst_prefix in self.url_rewrite_patterns.items():
-            if url.startswith(src_prefix):
-                return url.replace(src_prefix, dst_prefix, 1)
-        return url
+        return prepare_record_table(
+            table,
+            href_column=self.href_column,
+            band_index_map=self.band_index_map,
+            url_rewrite_patterns=self.url_rewrite_patterns,
+        )
 
     def build(self, **kwargs: Any) -> "Collection":
         """Read the record table and return a normalized Collection.
@@ -292,7 +315,7 @@ class RecordTableBuilder(CollectionBuilder):
             {band for bands in url_index.values() for band in bands}
         )
 
-        if not url_index:
+        if not url_index or not band_codes:
             logger.warning("No asset URLs found for COG enrichment")
             return table
 

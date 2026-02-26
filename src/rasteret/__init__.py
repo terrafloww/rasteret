@@ -335,13 +335,21 @@ def build(
                 f"credentials via environment variables / ~/.netrc.{extra_hint}"
             )
 
+    from rasteret.core.collection import _is_cloud_uri
+
     resolved_workspace: str | Path | None = workspace_dir
     if workspace_dir is not None:
-        workspace = Path(workspace_dir)
-        if workspace.name.endswith(("_stac", "_records")):
-            resolved_workspace = workspace
+        ws_str = str(workspace_dir)
+        if _is_cloud_uri(ws_str):
+            stem = ws_str.rstrip("/").rsplit("/", 1)[-1]
+            if not stem.endswith(("_stac", "_records")):
+                resolved_workspace = f"{ws_str.rstrip('/')}/{name}_records"
         else:
-            resolved_workspace = workspace / f"{name}_records"
+            workspace = Path(workspace_dir)
+            if workspace.name.endswith(("_stac", "_records")):
+                resolved_workspace = workspace
+            else:
+                resolved_workspace = workspace / f"{name}_records"
 
     # Resolve band_codes from descriptor for GeoParquet enrichment.
     descriptor_band_codes = (
@@ -686,28 +694,38 @@ def build_from_table(
     -------
     Collection
     """
-    from rasteret.core.collection import Collection
+    # Resolve workspace path with _records suffix convention so that
+    # list_collections() and the CLI can discover this collection.
+    from rasteret.core.collection import Collection, _is_cloud_uri
     from rasteret.ingest.normalize import build_collection_from_table
     from rasteret.ingest.parquet_record_table import (
         RecordTableBuilder,
         _apply_column_map_aliases,
+        prepare_record_table,
     )
 
-    # Resolve workspace path with _records suffix convention so that
-    # list_collections() and the CLI can discover this collection.
     resolved_workspace: str | Path | None = workspace_dir
     if workspace_dir is not None:
-        ws = Path(workspace_dir)
-        if not ws.name.endswith(("_stac", "_records")):
-            resolved_workspace = ws / f"{name}_records" if name else ws
+        ws_str = str(workspace_dir)
+        if _is_cloud_uri(ws_str):
+            # Cloud URIs: use string manipulation to avoid Path mangling.
+            stem = ws_str.rstrip("/").rsplit("/", 1)[-1]
+            if not stem.endswith(("_stac", "_records")):
+                resolved_workspace = (
+                    f"{ws_str.rstrip('/')}/{name}_records" if name else ws_str
+                )
+        else:
+            ws = Path(workspace_dir)
+            if not ws.name.endswith(("_stac", "_records")):
+                resolved_workspace = ws / f"{name}_records" if name else ws
     elif name:
         resolved_workspace = Path.home() / "rasteret_workspace" / f"{name}_records"
 
     # Cache hit: reuse existing collection.
     if resolved_workspace is not None:
-        rw = Path(resolved_workspace)
-        if rw.exists() and not force:
-            return Collection._load_cached(rw)
+        rw_str = str(resolved_workspace)
+        if not _is_cloud_uri(rw_str) and Path(rw_str).exists() and not force:
+            return Collection._load_cached(rw_str)
 
     # Arrow-native path: accept an in-memory Arrow table / dataset.
     import pyarrow as pa
@@ -723,13 +741,12 @@ def build_from_table(
                 table = dataset.to_table(columns=columns, filter=filter_expr)
 
         table = _apply_column_map_aliases(table, column_map)
-
-        # Run the same normalisation that RecordTableBuilder._prepare_table does.
-        _builder = RecordTableBuilder.__new__(RecordTableBuilder)
-        _builder.href_column = href_column
-        _builder.band_index_map = band_index_map
-        _builder.url_rewrite_patterns = url_rewrite_patterns or {}
-        table = _builder._prepare_table(table)
+        table = prepare_record_table(
+            table,
+            href_column=href_column,
+            band_index_map=band_index_map,
+            url_rewrite_patterns=url_rewrite_patterns,
+        )
 
         if enrich_cog:
             from rasteret.core.utils import run_sync
@@ -742,7 +759,9 @@ def build_from_table(
             resolved_band_codes = band_codes or sorted(
                 {band for bands in url_index.values() for band in bands}
             )
-            if url_index and resolved_band_codes:
+            if not url_index or not resolved_band_codes:
+                logger.warning("No asset URLs found for COG enrichment")
+            else:
                 table = run_sync(
                     enrich_table_with_cog_metadata(
                         table,

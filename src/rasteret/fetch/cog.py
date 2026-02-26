@@ -470,6 +470,9 @@ class _AutoObstoreBackend:
             return bytes(buf)
 
     async def get_ranges(self, url: str, ranges: list[tuple[int, int]]) -> list[bytes]:
+        if not ranges:
+            return []
+
         import obstore as obs
 
         store, path = self._store_for(url)
