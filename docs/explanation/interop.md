@@ -28,6 +28,40 @@ sampler = RandomGeoSampler(dataset, size=256, length=100)
 loader  = DataLoader(dataset, sampler=sampler, batch_size=4, collate_fn=stack_samples)
 ```
 
+#### GeoDataset contract
+
+`RasteretGeoDataset` subclasses TorchGeo's `GeoDataset` and honors the
+full contract that samplers and dataset composition rely on:
+
+| Surface | What Rasteret does |
+|---|---|
+| `__getitem__(GeoSlice) -> Sample` | Returns `{"image": Tensor, "bounds": Tensor, "transform": Tensor}` (or `"mask"` when `is_image=False`) |
+| `index` | GeoPandas GeoDataFrame with `IntervalIndex` named `"datetime"` and Shapely footprint geometry |
+| `crs` | Set from the collection's EPSG code via `CRS.from_epsg()` |
+| `res` | Derived from the first record's COG metadata transform |
+| Samplers | Works with `RandomGeoSampler`, `GridGeoSampler`, and any sampler that reads `bounds`, `index`, and `res` |
+| Dataset composition | Works with `IntersectionDataset` and `UnionDataset` — the index is designed so `reset_index()` does not conflict |
+
+Rasteret replaces the I/O backend (async obstore instead of rasterio/GDAL)
+but speaks the same interface. Nothing downstream of the dataset object
+needs to change.
+
+#### Rasteret additions
+
+These are features Rasteret adds on top of the GeoDataset contract. They
+do not break interop because TorchGeo ignores unknown sample keys, and
+constructor parameters are Rasteret-specific.
+
+| Feature | What it does | Interop impact |
+|---|---|---|
+| `label_field` | Adds `sample["label"]` from a metadata column | None — extra key, ignored by TorchGeo trainers |
+| `time_series=True` | Stacks all spatially overlapping records into `[T, C, H, W]` | None — standard tensor shape, works with TorchGeo transforms |
+| `target_crs=` | Reprojects scenes from different CRS zones on the fly | None — result has uniform CRS, transparent to samplers |
+| `cloud_config=` | Configures authenticated cloud reads (requester-pays, signed URLs) | None — constructor-level, transparent to samplers |
+| `allow_resample=True` | Resamples bands with different native resolutions onto a common grid | None — output tensor has uniform resolution |
+
+#### Behavior details
+
 Rasteret preserves the native COG dtype (e.g., `uint16` for Sentinel-2)
 whereas TorchGeo converts to `float32` by default (via its `dtype` property).
 
@@ -45,6 +79,10 @@ dimension, matching TorchGeo `RasterDataset` conventions).
 If requested bands have different resolutions, Rasteret fails fast by default.
 To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
 `allow_resample=True` to `Collection.to_torchgeo_dataset(...)`.
+
+When records in a collection have different native resolutions, Rasteret warns
+at dataset creation time. The read path resamples each tile to the query grid
+correctly regardless.
 
 See [Tutorial 02](../tutorials/02_torchgeo_09_accelerator.ipynb) and
 [Tutorial 05](../tutorials/05_torchgeo_comparison.ipynb).

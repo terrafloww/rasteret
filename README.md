@@ -280,11 +280,24 @@ stay in GeoTIFF/COGs, and Parquet stays the index.
 <details>
 <summary><strong>TorchGeo interop</strong></summary>
 
-`to_torchgeo_dataset()` returns a standard TorchGeo `GeoDataset`, so you keep
-using TorchGeo for sampling and training while Rasteret handles async tile I/O
-underneath. This is pipeline-level interop, not a replacement for TorchGeo's
-rasterio/GDAL-backed `RasterDataset` path (which is still the right choice for
-non-tiled TIFFs and non-TIFF formats).
+`RasteretGeoDataset` is a standard TorchGeo `GeoDataset` subclass. It honors
+the full GeoDataset contract:
+
+- `__getitem__(GeoSlice)` returns `{"image": Tensor, "bounds": Tensor, "transform": Tensor}`
+- `index` is a GeoPandas GeoDataFrame with an IntervalIndex named `"datetime"`
+- `crs` and `res` are set correctly for sampler compatibility
+- Works with `RandomGeoSampler`, `GridGeoSampler`, and any custom sampler
+- Works with `IntersectionDataset` and `UnionDataset` for dataset composition
+
+Rasteret replaces the I/O backend (async obstore instead of rasterio/GDAL) but
+speaks the same interface. Your samplers, DataLoader, transforms, and training
+loop do not change.
+
+Rasteret can also add extra keys to the sample dict (e.g. `label` from a
+metadata column) without breaking interop - TorchGeo ignores unknown keys.
+
+TorchGeo's rasterio/GDAL-backed `RasterDataset` remains the right choice for
+non-tiled TIFFs and non-TIFF formats.
 
 </details>
 

@@ -140,9 +140,11 @@ For full methodology and numbers, see [Benchmarks](explanation/benchmark.md).
 - Non-tiled GeoTIFFs and non-TIFF formats (NetCDF, HDF5) are best handled by TorchGeo or rasterio directly.
 - CRS is encoded via CF conventions (pyproj); no rioxarray dependency.
 
-Rasteret is an **opt-in accelerator**: it integrates cleanly with TorchGeo by
-returning a standard `GeoDataset`, and it does not try to replace TorchGeo's
-samplers, DataLoader patterns, or transforms.
+Rasteret is an **opt-in accelerator**: `RasteretGeoDataset` is a standard
+TorchGeo `GeoDataset` subclass that honors the full contract (`index`, `crs`,
+`res`, `__getitem__`). Samplers, DataLoader, transforms, and dataset composition
+(`IntersectionDataset`, `UnionDataset`) all work unchanged. Rasteret replaces
+the I/O backend, not the training interface.
 For how Rasteret relates to other tools, see
 [Ecosystem Comparison](explanation/interop.md).
 
