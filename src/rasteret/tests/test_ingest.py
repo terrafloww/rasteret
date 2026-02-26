@@ -130,6 +130,27 @@ class TestRecordTableBuilder:
         assert isinstance(collection, Collection)
         assert collection.name == "manifest"
 
+    def test_workspace_dir_cloud_uri_not_mangled(self, tmp_path, monkeypatch):
+        path = tmp_path / "manifest.parquet"
+        _write_manifest(path)
+        captured: dict[str, object] = {}
+
+        def _fake_build_collection_from_table(table: pa.Table, **kwargs):
+            captured["workspace_dir"] = kwargs.get("workspace_dir")
+            return Collection(dataset=ds.dataset(table), name="manifest")
+
+        monkeypatch.setattr(
+            "rasteret.ingest.parquet_record_table.build_collection_from_table",
+            _fake_build_collection_from_table,
+        )
+
+        builder = RecordTableBuilder(
+            path,
+            workspace_dir="s3://demo-bucket/workspace_records",
+        )
+        builder.build()
+        assert captured["workspace_dir"] == "s3://demo-bucket/workspace_records"
+
     def test_column_remapping(self, tmp_path):
         table = pa.table(
             {

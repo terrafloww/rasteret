@@ -44,7 +44,16 @@ class CollectionBuilder(ABC):
     ) -> None:
         self.name = name
         self.data_source = data_source
-        self.workspace_dir = Path(workspace_dir) if workspace_dir else None
+        if workspace_dir is None:
+            self.workspace_dir: str | Path | None = None
+        elif isinstance(workspace_dir, Path):
+            self.workspace_dir = workspace_dir
+        else:
+            ws = str(workspace_dir)
+            if "://" in ws and not ws.startswith("file://"):
+                self.workspace_dir = ws
+            else:
+                self.workspace_dir = Path(ws)
 
     @abstractmethod
     def build(self, **kwargs: Any) -> "Collection":
