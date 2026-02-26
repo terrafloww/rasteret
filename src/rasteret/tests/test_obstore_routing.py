@@ -332,7 +332,7 @@ class TestMultiCloudRouting:
         assert "azure://landsateuwest/landsat-c2" in backend._stores
 
     def test_azure_sas_routes_to_http_store(self):
-        """SAS-signed URLs have query params → HTTPStore (self-authenticating)."""
+        """SAS-signed URLs have query params -> HTTPStore (self-authenticating)."""
         backend = _create_obstore_backend()
         url = (
             "https://landsateuwest.blob.core.windows.net/landsat-c2/file.tif"

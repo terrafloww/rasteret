@@ -265,7 +265,7 @@ def _compare_arrays(
     band: str,
     dataset_id: str,
 ) -> None:
-    """Compare two arrays — exact shape and pixel match required.
+    """Compare two arrays: exact shape and pixel match required.
 
     For integer dtypes: exact equality.
     For float dtypes: np.allclose with atol=0, equal_nan=True.

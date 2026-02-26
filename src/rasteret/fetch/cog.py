@@ -190,11 +190,11 @@ class _AutoObstoreBackend:
 
     Routes URLs to the appropriate native store:
 
-    - ``s3://`` and ``*.s3.*.amazonaws.com`` → ``S3Store``
-    - ``gs://`` and ``storage.googleapis.com`` → ``GCSStore``
-    - ``*.blob.core.windows.net`` → ``AzureStore``
-    - Pre-signed / SAS-signed URLs (query params) → ``HTTPStore``
-    - Other HTTPS → ``HTTPStore``
+    - ``s3://`` and ``*.s3.*.amazonaws.com`` -> ``S3Store``
+    - ``gs://`` and ``storage.googleapis.com`` -> ``GCSStore``
+    - ``*.blob.core.windows.net`` -> ``AzureStore``
+    - Pre-signed / SAS-signed URLs (query params) -> ``HTTPStore``
+    - Other HTTPS -> ``HTTPStore``
 
     Each store holds a Rust ``reqwest`` connection pool, so
     one-per-origin is the correct granularity.
@@ -249,13 +249,13 @@ class _AutoObstoreBackend:
                 break
         parsed = urlparse(url)
 
-        # --- s3:// scheme → S3Store ---
+        # --- s3:// scheme -> S3Store ---
         if parsed.scheme == "s3":
             bucket = parsed.netloc
             path = parsed.path.lstrip("/")
             return self._get_s3_store(bucket), path
 
-        # --- gs:// scheme → GCSStore ---
+        # --- gs:// scheme -> GCSStore ---
         if parsed.scheme == "gs":
             bucket = parsed.netloc
             return self._get_gcs_store(bucket), parsed.path.lstrip("/")
@@ -274,12 +274,12 @@ class _AutoObstoreBackend:
                 self._stores[url] = store
             return store, ""
 
-        # --- S3 virtual-hosted HTTPS → S3Store ---
+        # --- S3 virtual-hosted HTTPS -> S3Store ---
         bucket = _extract_s3_bucket(parsed.netloc)
         if bucket:
             return self._get_s3_store(bucket), parsed.path.lstrip("/")
 
-        # --- Azure Blob HTTPS → AzureStore ---
+        # --- Azure Blob HTTPS -> AzureStore ---
         azure_account = _extract_azure_account(parsed.netloc)
         if azure_account:
             parts = parsed.path.lstrip("/").split("/", 1)
@@ -295,7 +295,7 @@ class _AutoObstoreBackend:
                 path = path[len(store_prefix) :].lstrip("/")
             return store, path
 
-        # --- GCS HTTPS → GCSStore ---
+        # --- GCS HTTPS -> GCSStore ---
         if parsed.netloc == "storage.googleapis.com":
             parts = parsed.path.lstrip("/").split("/", 1)
             bucket = parts[0]

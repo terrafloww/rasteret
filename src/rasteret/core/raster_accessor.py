@@ -225,7 +225,7 @@ class RasterAccessor:
         # TODO: Apply radiometric correction (scale/offset from STAC
         # raster:bands) when opted in.  See _get_band_radiometric_params().
         # Needs: opt-in flag (apply_scale_offset=False default),
-        # nodata masking, and dtype promotion (uint16 → float32).
+        # nodata masking, and dtype promotion (uint16 -> float32).
 
         return {"data": result.data, "transform": result.transform, "band": band_code}
 

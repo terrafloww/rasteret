@@ -39,7 +39,7 @@ obstore (auto-routes to S3Store / AzureStore / GCSStore / HTTPStore)
 to declare:
 
 - how to find the data (STAC API / static catalog / GeoParquet URI)
-- how to resolve bands (band code → STAC asset key, optional `band_index_map`)
+- how to resolve bands (band code -> asset key, optional `band_index_map`)
 - how to access it (auth/requester-pays, URL signing/rewrites)
 
 At runtime, Rasteret stores band-resolution and cloud-access settings in two

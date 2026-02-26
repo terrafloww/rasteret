@@ -51,7 +51,7 @@ class TestComputeDstGridFromSrc:
     """Tests for compute_dst_grid_from_src (GDAL-backed grid computation)."""
 
     def test_identity_same_crs(self):
-        """Same CRS → output dimensions should match input."""
+        """Same CRS -> output dimensions should match input."""
         tf, shape = compute_dst_grid_from_src(
             32632,
             32632,
@@ -64,7 +64,7 @@ class TestComputeDstGridFromSrc:
         assert abs(tf.a) == pytest.approx(10.0, rel=0.01)
 
     def test_utm_to_utm(self):
-        """UTM zone 32N → 33N: both metres, dimensions similar."""
+        """UTM zone 32N -> 33N: both metres, dimensions similar."""
         tf, shape = compute_dst_grid_from_src(
             32632,
             32633,
@@ -80,10 +80,10 @@ class TestComputeDstGridFromSrc:
         assert abs(tf.e) == pytest.approx(10.0, rel=0.5)
 
     def test_utm_to_4326_cross_unit(self):
-        """UTM metres → EPSG:4326 degrees: the critical cross-unit case.
+        """UTM metres -> EPSG:4326 degrees: the critical cross-unit case.
 
-        This is the bug that compute_dst_grid would produce 0×0 pixels for,
-        because it would try round(~0.01° / 10m) = 0.
+        This is the bug that compute_dst_grid would produce 0x0 pixels for,
+        because it would try round(~0.01 deg / 10m) = 0.
         """
         tf, shape = compute_dst_grid_from_src(
             32632,
@@ -95,7 +95,7 @@ class TestComputeDstGridFromSrc:
         # Must produce non-zero dimensions
         assert shape[0] > 0, "Cross-unit CRS produced 0-height output"
         assert shape[1] > 0, "Cross-unit CRS produced 0-width output"
-        # Pixel size should be in degrees (~0.0001°), NOT metres
+        # Pixel size should be in degrees (~0.0001 deg), NOT metres
         assert abs(tf.a) < 1.0, f"Pixel size {abs(tf.a)} looks like metres, not degrees"
         assert abs(tf.e) < 1.0, f"Pixel size {abs(tf.e)} looks like metres, not degrees"
         # Dimensions should be >50 (preserving spatial information)
@@ -103,7 +103,7 @@ class TestComputeDstGridFromSrc:
         assert shape[1] > 50
 
     def test_4326_to_utm(self):
-        """EPSG:4326 degrees → UTM metres: reverse cross-unit case."""
+        """EPSG:4326 degrees -> UTM metres: reverse cross-unit case."""
         tf, shape = compute_dst_grid_from_src(
             4326,
             32632,
@@ -119,7 +119,7 @@ class TestComputeDstGridFromSrc:
 
 class TestTransformBbox:
     def test_basic_crs_conversion(self):
-        # WGS84 bbox for a small area → UTM zone 32N (EPSG:32632)
+        # WGS84 bbox for a small area -> UTM zone 32N (EPSG:32632)
         bbox_4326 = (9.0, 48.0, 10.0, 49.0)
         result = transform_bbox(bbox_4326, 4326, 32632)
         assert len(result) == 4

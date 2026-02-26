@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 def _rewrite_url_simple(url: str, patterns: dict[str, str]) -> str:
-    """Apply URL rewrite patterns (e.g. S3 → HTTPS)."""
+    """Apply URL rewrite patterns (e.g. S3 -> HTTPS)."""
     for src_prefix, dst_prefix in patterns.items():
         if url.startswith(src_prefix):
             return url.replace(src_prefix, dst_prefix, 1)
@@ -61,15 +61,15 @@ def prepare_record_table(
 
     Steps:
 
-    1. Auto-coerce ``id``: integer → string.
-    2. Auto-coerce ``datetime``: integer year → timestamp.
+    1. Auto-coerce ``id``: integer -> string.
+    2. Auto-coerce ``datetime``: integer year -> timestamp.
     3. Construct ``assets`` from *href_column* + *band_index_map*.
     4. Derive ``proj:epsg`` from a ``crs`` column when present.
     """
     names = set(table.schema.names)
     rewrites = url_rewrite_patterns or {}
 
-    # --- id: int → string ---
+    # --- id: int -> string ---
     if "id" in names and pa.types.is_integer(table.schema.field("id").type):
         table = table.set_column(
             table.schema.get_field_index("id"),
@@ -77,7 +77,7 @@ def prepare_record_table(
             pc.cast(table.column("id"), pa.string()),
         )
 
-    # --- datetime: int year → timestamp ---
+    # --- datetime: int year -> timestamp ---
     if "datetime" in names and pa.types.is_integer(table.schema.field("datetime").type):
         years = table.column("datetime").to_pylist()
         timestamps = pa.array(
@@ -178,7 +178,7 @@ class RecordTableBuilder(CollectionBuilder):
         ``href_column`` to build per-band asset references.
     url_rewrite_patterns : dict, optional
         ``{source_prefix: target_prefix}`` patterns applied to URLs
-        during assets construction (e.g. S3 → HTTPS rewriting).
+        during assets construction (e.g. S3 -> HTTPS rewriting).
     filesystem : pyarrow.fs.FileSystem, optional
         PyArrow filesystem for reading remote URIs (e.g.
         ``S3FileSystem(anonymous=True)``).
@@ -273,7 +273,7 @@ class RecordTableBuilder(CollectionBuilder):
     def build(self, **kwargs: Any) -> "Collection":
         """Read the record table and return a normalized Collection.
 
-        Pipeline: read → alias → prepare → enrich → normalize.
+        Pipeline: read -> alias -> prepare -> enrich -> normalize.
 
         Parameters
         ----------

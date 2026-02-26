@@ -226,7 +226,7 @@ def reproject_array(
     from rasterio.warp import Resampling, reproject
 
     # Always use a float dtype so NaN fill works correctly.
-    # Integer dtypes (uint16, int8, etc.) silently cast NaN → 0.
+    # Integer dtypes (uint16, int8, etc.) silently cast NaN -> 0.
     out_dtype = src_array.dtype
     if not np.issubdtype(out_dtype, np.floating):
         out_dtype = np.float32
@@ -253,7 +253,7 @@ def compute_dst_grid(
     The caller must supply *res* in the **destination CRS units**.  When
     the source and destination CRS share the same linear unit (e.g. both
     UTM metres) the source resolution can be passed directly.  For
-    cross-unit reprojection (e.g. UTM metres → EPSG:4326 degrees) use
+    cross-unit reprojection (e.g. UTM metres -> EPSG:4326 degrees) use
     :func:`compute_dst_grid_from_src` instead, which delegates to
     ``rasterio.warp.calculate_default_transform``.
 
@@ -286,7 +286,7 @@ def compute_dst_grid_from_src(
 
     Wraps ``rasterio.warp.calculate_default_transform`` which delegates to
     GDAL's ``GDALSuggestedWarpOutput2``.  This correctly handles cross-unit
-    CRS conversions (e.g. UTM metres → EPSG:4326 degrees) by sampling the
+    CRS conversions (e.g. UTM metres -> EPSG:4326 degrees) by sampling the
     source grid, transforming points, and computing an optimal destination
     pixel size that preserves spatial-information density.
 

@@ -66,7 +66,7 @@ def _stem_from_path(path_str: str) -> str:
     return Path(tail).stem if tail else ""
 
 
-# WKB geometry type id → GeoParquet type name (OGC Simple Features).
+# WKB geometry type id -> GeoParquet type name (OGC Simple Features).
 _WKB_TYPE_NAMES: dict[int, str] = {
     1: "Point",
     2: "LineString",

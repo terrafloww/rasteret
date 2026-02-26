@@ -42,12 +42,12 @@ LANDSAT_C2L2_BANDS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# BandRegistry: extensible mapping of collection id → band names
+# BandRegistry: extensible mapping of collection id -> band names
 # ---------------------------------------------------------------------------
 
 
 class BandRegistry:
-    """Registry of collection → band-name mappings.
+    """Registry of collection -> band-name mappings.
 
     Built-in collections (Sentinel-2, Landsat) are pre-registered.
     Users can register custom collections at any time::

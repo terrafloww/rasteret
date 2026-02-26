@@ -10,15 +10,15 @@ so the full suite runs in ~1 min, not ~5 min.
 Run with:
     uv run pytest --network -k test_torchgeo_network -v
 
-Coverage map (pitch table row → test):
-    1. [T, C, H, W] time_series      → test_time_series_shape
-    2. IntervalIndex contract         → test_geodataset_index_contract
-    3. Spatial-only intersection      → test_spatial_only_intersection
-    4. Concurrent async reads         → test_multi_band_multi_scene_correctness
-    5. Multi-CRS reprojection         → test_cross_crs_*, test_crs_drop_warning
-    6. collection.subset() filtering  → test_subset_to_dataset
-    7. STAC / GeoParquet sources      → test_export_reload_roundtrip
-    8. Samplers / collation / comp.   → test_*_sampler, test_*_dataset, test_mask_chip
+Coverage map (pitch table row -> test):
+    1. [T, C, H, W] time_series      -> test_time_series_shape
+    2. IntervalIndex contract         -> test_geodataset_index_contract
+    3. Spatial-only intersection      -> test_spatial_only_intersection
+    4. Concurrent async reads         -> test_multi_band_multi_scene_correctness
+    5. Multi-CRS reprojection         -> test_cross_crs_*, test_crs_drop_warning
+    6. collection.subset() filtering  -> test_subset_to_dataset
+    7. STAC / GeoParquet sources      -> test_export_reload_roundtrip
+    8. Samplers / collation / comp.   -> test_*_sampler, test_*_dataset, test_mask_chip
 
 Pixel-level accuracy is separately verified by test_dataset_pixel_comparison.py
 across all 12 catalog datasets.
@@ -54,7 +54,7 @@ DATE_RANGE_CROSS_CRS = ("2024-04-01", "2024-04-30")
 
 
 # ---------------------------------------------------------------------------
-# Module-scoped fixtures — each collection builds once, reused across tests
+# Module-scoped fixtures: each collection builds once, reused across tests
 # ---------------------------------------------------------------------------
 
 
@@ -173,7 +173,7 @@ def test_geodataset_index_contract(s2_collection: rasteret.Collection) -> None:
 
 
 def test_image_chip_random_sampler(s2_collection: rasteret.Collection) -> None:
-    """RandomGeoSampler → DataLoader → batch [B, C, H, W]."""
+    """RandomGeoSampler -> DataLoader -> batch [B, C, H, W]."""
     pytest.importorskip("torch")
     pytest.importorskip("torchgeo")
     from torch.utils.data import DataLoader
@@ -254,7 +254,7 @@ def test_time_series_shape(s2_collection: rasteret.Collection) -> None:
 def test_multi_band_multi_scene_correctness(
     s2_collection: rasteret.Collection,
 ) -> None:
-    """4 bands × multiple timesteps: each band returns non-zero data."""
+    """4 bands x multiple timesteps: each band returns non-zero data."""
     pytest.importorskip("torch")
     pytest.importorskip("torchgeo")
 
@@ -454,7 +454,7 @@ def test_subset_to_dataset(s2_collection: rasteret.Collection) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Export → reload → read chip (Claim 7)
+# Export -> reload -> read chip (Claim 7)
 # ---------------------------------------------------------------------------
 
 

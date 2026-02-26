@@ -831,7 +831,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 # Sort chronologically so T dimension is time-ordered.
                 df = df.sort_index()
 
-                # Build all T×C requests, fire concurrently via asyncio.gather.
+                # Build all TxC requests, fire concurrently via asyncio.gather.
                 all_requests: list[tuple[str, CogMetadata, int | None]] = []
                 n_timesteps = len(df)
                 source_crs_per_request: list[int] = []
@@ -908,9 +908,9 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
 
                 # arrays is flat: [t0_band0, t0_band1, ..., t1_band0, ...]
                 # Reshape into [T, C, H, W] with minimal copies:
-                #   np.stack at band level  → [C, H, W] (1 contiguous alloc per timestep)
-                #   np.stack at time level  → [T, C, H, W] (1 contiguous alloc)
-                #   torch.from_numpy        → zero-copy view
+                #   np.stack at band level  -> [C, H, W] (1 contiguous alloc per timestep)
+                #   np.stack at time level  -> [T, C, H, W] (1 contiguous alloc)
+                #   torch.from_numpy        -> zero-copy view
                 timesteps = [
                     np.stack(arrays[t_idx * n_bands : (t_idx + 1) * n_bands], axis=0)
                     for t_idx in range(n_timesteps)
@@ -981,7 +981,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                         for (r, meta) in fetch_results
                     ]
 
-                # np.stack → [C, H, W] (1 alloc), torch.from_numpy → zero-copy.
+                # np.stack -> [C, H, W] (1 alloc), torch.from_numpy -> zero-copy.
                 image = torch.from_numpy(np.stack(arrays, axis=0))  # [C, H, W]
 
             transform = torch.tensor(
@@ -1004,7 +1004,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     sample["mask"] = image.squeeze(0)
             if self.label_field is not None:
                 # Use the first (earliest) record's label.  For time_series
-                # this means the label is NOT per-timestep — it represents
+                # this means the label is NOT per-timestep - it represents
                 # the scene-level label of the earliest observation.
                 label_value = None
                 if not df.empty:

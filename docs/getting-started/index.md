@@ -40,7 +40,7 @@ python -c "import rasteret; print(rasteret.version())"
 
 === "Jupyter / JupyterLab"
 
-    Jupyter runs each notebook in a **kernel** — a separate Python process.
+    Jupyter runs each notebook in a **kernel**, a separate Python process.
     To use your Rasteret environment as a kernel:
 
     ```bash
@@ -52,7 +52,7 @@ python -c "import rasteret; print(rasteret.version())"
 
 === "marimo"
 
-    [marimo](https://marimo.io) manages dependencies inline — no kernel
+    [marimo](https://marimo.io) manages dependencies inline, no kernel
     registration needed.  Just `uv pip install marimo` alongside Rasteret
     and run `marimo edit notebook.py`.
 

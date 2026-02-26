@@ -334,7 +334,7 @@ class TestApplyMaskAndCrop:
         return data, transform
 
     def test_normal_mask(self):
-        """Triangle inside raster → cropped array with fill outside polygon."""
+        """Triangle inside raster -> cropped array with fill outside polygon."""
         data, transform = self._make_data_and_transform()
         # Triangle inside the raster; its bounding box will include corners
         # that are outside the triangle, producing NaN pixels.
@@ -364,7 +364,7 @@ class TestApplyMaskAndCrop:
         assert result_transform.f <= transform.f
 
     def test_empty_mask_returns_nan(self):
-        """Geometry does not intersect any pixels → fill-valued array."""
+        """Geometry does not intersect any pixels -> fill-valued array."""
         data, transform = self._make_data_and_transform()
         # Geometry far outside the raster extent
         geojson = {
@@ -382,7 +382,7 @@ class TestApplyMaskAndCrop:
         assert result_transform == transform
 
     def test_full_coverage(self):
-        """Geometry covers the entire raster → all pixels valid, no NaN."""
+        """Geometry covers the entire raster -> all pixels valid, no NaN."""
         data, transform = self._make_data_and_transform(rows=10, cols=10)
         # Box that fully covers the 10x10 raster
         geojson = {
@@ -434,14 +434,14 @@ class TestComputeTileIndices:
         """Geometry bbox spans across multiple tiles."""
         bbox = (500000.0, 996000.0, 504000.0, 1000000.0)
         transform = [10.0, 500000.0, -10.0, 1000000.0]
-        # 1000x1000 image with 256x256 tiles → 4x4 tile grid
+        # 1000x1000 image with 256x256 tiles -> 4x4 tile grid
         indices = compute_tile_indices(
             bbox, transform, tile_size=(256, 256), image_size=(1000, 1000)
         )
         assert len(indices) > 1
 
     def test_no_intersection(self):
-        """Geometry bbox completely outside raster extent → empty list."""
+        """Geometry bbox completely outside raster extent -> empty list."""
         bbox = (0.0, 0.0, 1.0, 1.0)
         transform = [10.0, 500000.0, -10.0, 1000000.0]
         indices = compute_tile_indices(

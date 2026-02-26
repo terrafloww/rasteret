@@ -2,15 +2,12 @@
 
 TorchGeo `GeoDataset` adapter for Rasteret collections.
 
-`RasteretGeoDataset` wraps a Rasteret `Collection` as a standard TorchGeo
-`GeoDataset`. It fetches COG tiles on-the-fly via async HTTP range reads and
-returns samples as `{"image": Tensor, "bounds": Tensor, "transform": Tensor}`.
-Compatible with all
-TorchGeo samplers (`RandomGeoSampler`, `GridGeoSampler`, etc.), collation
-helpers, and transforms.
-
-This adapter provides **pipeline-level interop** (a TorchGeo dataset object).
-It does not replace TorchGeo's rasterio/GDAL-backed `RasterDataset` backend.
+`RasteretGeoDataset` is a standard TorchGeo `GeoDataset` subclass. It
+replaces the I/O backend (async obstore instead of rasterio/GDAL) while
+honoring the full GeoDataset contract: `index`, `crs`, `res`,
+`__getitem__(GeoSlice) -> Sample`. Compatible with all TorchGeo samplers,
+collation helpers (`stack_samples`, `concat_samples`), transforms, and
+dataset composition (`IntersectionDataset`, `UnionDataset`).
 
 ## Typical usage
 
@@ -24,13 +21,28 @@ sampler = RandomGeoSampler(dataset, size=256, length=100)
 loader = DataLoader(dataset, sampler=sampler, collate_fn=stack_samples)
 ```
 
-## Output contract
+## GeoDataset contract (what TorchGeo requires)
 
-- Keys always include `bounds` and `transform`.
-- If `is_image=True` (default), samples include `image: Tensor` with shape `[C, H, W]` (or `[T, C, H, W]` when `time_series=True`).
-- If `is_image=False`, samples include `mask: Tensor` and follow TorchGeo `RasterDataset` conventions:
-  - Single-scene: `[H, W]` when `C == 1` (channel dimension squeezed).
-  - Time series: `[T, H, W]` when `C == 1`.
+Rasteret honors all of these:
+
+- **`__getitem__(GeoSlice) -> Sample`**: returns a `dict[str, Any]`
+- **`index`**: GeoPandas GeoDataFrame with `IntervalIndex` named `"datetime"` and Shapely footprint geometry
+- **`crs`**: set from the collection's EPSG code
+- **`res`**: derived from the first record's COG metadata transform
+- **Dataset composition**: `IntersectionDataset(rasteret_ds, other_ds)` and `UnionDataset` work correctly
+
+## Sample dict keys
+
+**Standard keys** (always present):
+
+- `bounds`: `Tensor` of spatial bounds
+- `transform`: `Tensor` of affine transform coefficients
+- `image`: `Tensor` with shape `[C, H, W]` (or `[T, C, H, W]` when `time_series=True`), when `is_image=True`
+- `mask`: `Tensor` with shape `[H, W]` (or `[T, H, W]`), when `is_image=False` (channel dim squeezed when `C == 1`, matching TorchGeo `RasterDataset` conventions)
+
+**Rasteret additions** (optional, do not break interop):
+
+- `label`: scalar or tensor label from a metadata column, when `label_field` is set. TorchGeo's collate functions handle arbitrary keys, so this passes through `stack_samples` and `concat_samples` without issue.
 
 Rasteret's low-level read APIs return a `valid_mask` for ML-safe workflows, but it
 is intentionally **not** included in TorchGeo samples by default to preserve

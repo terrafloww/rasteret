@@ -165,7 +165,7 @@ class TestDetectTargetCrs:
             assert _detect_target_crs(c, {}) is None
 
     def test_multi_crs_returns_most_common(self):
-        # 3× EPSG:32632, 1× EPSG:32633 → should pick 32632
+        # 3x EPSG:32632, 1x EPSG:32633 -> should pick 32632
         table, _ = self._make_collection([32632, 32632, 32632, 32633])
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "multi_crs"
@@ -176,7 +176,7 @@ class TestDetectTargetCrs:
             assert result == 32632
 
     def test_multi_crs_equal_counts_picks_one(self):
-        # 2× each → should pick one deterministically
+        # 2x each -> should pick one deterministically
         table, _ = self._make_collection([32632, 32632, 32633, 32633])
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "equal_crs"

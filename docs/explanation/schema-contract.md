@@ -54,7 +54,7 @@ byte-range tile reads, rather than storing raster payloads in Parquet.
 
 Rasteret uses `DatasetDescriptor` objects to describe how a dataset is discovered
 (STAC API vs GeoParquet), accessed (cloud auth / URL rewriting), and mapped
-(band codes → STAC assets + optional `band_index` for multi-sample GeoTIFFs).
+(band codes -> asset keys + optional `band_index` for multi-sample GeoTIFFs).
 
 See:
 
