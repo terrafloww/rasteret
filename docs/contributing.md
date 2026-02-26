@@ -202,27 +202,28 @@ tile reads.
 ## Adding a dataset to the catalog
 
 The built-in catalog lives in `src/rasteret/catalog.py`. Each entry is a
-`DatasetDescriptor`: roughly 20 lines of Python declaring a STAC URL,
-band map, license info, and coverage hints.
+`DatasetDescriptor`: roughly 20 lines of Python declaring a data source
+(STAC API, static STAC catalog, or GeoParquet URI), band map, license
+info, and coverage hints.
 
 Before adding a dataset, work through the
 [prerequisites checklist](how-to/dataset-catalog.md#prerequisites-for-contributing-a-built-in-dataset).
 The short version:
 
-1. **STAC access works**: `pystac_client` for STAC APIs, `pystac` for
-   static catalogs (`catalog.json` on S3).
+1. **Data source is reachable**: STAC API, static catalog, or GeoParquet
+   file. Verify you can query it or read it with PyArrow.
 2. **Band map has at least one working COG**: Rasteret parses COG headers
    during `build()`. If no asset can be parsed, Rasteret can't index or read
    the dataset.
-3. **End-to-end `build()` succeeds**: run `rasteret.build()` with
-   `query={"max_items": 2}` and verify `count_rows() > 0`.
+3. **End-to-end `build()` succeeds**: run `rasteret.build()` with a small
+   scope and verify `len(col) > 0`.
 4. **License is verified from the authoritative source**: pull `license`,
-   `license_url`, and `commercial_use` from the STAC collection metadata.
-   Do not guess.
+   `license_url`, and `commercial_use` from the data provider. Do not guess.
 5. **Descriptor includes required metadata**: include `id`, `name`, `description`,
    `stac_api` (or `geoparquet_uri`), `band_map`, `license`, `license_url`,
    `spatial_coverage`, `temporal_range`. For static catalogs, set
-   `static_catalog=True`.
+   `static_catalog=True`. For GeoParquet sources, include `column_map` if
+   columns need renaming.
 
 For static STAC catalogs (no `/search` endpoint), set `static_catalog=True`
 on the descriptor. Rasteret uses `pystac.Catalog.from_file()` to traverse

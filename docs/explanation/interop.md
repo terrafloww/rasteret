@@ -40,7 +40,7 @@ full contract that samplers and dataset composition rely on:
 | `crs` | Set from the collection's EPSG code via `CRS.from_epsg()` |
 | `res` | Derived from the first record's COG metadata transform |
 | Samplers | Works with `RandomGeoSampler`, `GridGeoSampler`, and any sampler that reads `bounds`, `index`, and `res` |
-| Dataset composition | Works with `IntersectionDataset` and `UnionDataset` — the index is designed so `reset_index()` does not conflict |
+| Dataset composition | Works with `IntersectionDataset` and `UnionDataset`; the index is designed so `reset_index()` does not conflict |
 
 Rasteret replaces the I/O backend (async obstore instead of rasterio/GDAL)
 but speaks the same interface. Nothing downstream of the dataset object
@@ -54,11 +54,11 @@ constructor parameters are Rasteret-specific.
 
 | Feature | What it does | Interop impact |
 |---|---|---|
-| `label_field` | Adds `sample["label"]` from a metadata column | None — extra key, ignored by TorchGeo trainers |
-| `time_series=True` | Stacks all spatially overlapping records into `[T, C, H, W]` | None — standard tensor shape, works with TorchGeo transforms |
-| `target_crs=` | Reprojects scenes from different CRS zones on the fly | None — result has uniform CRS, transparent to samplers |
-| `cloud_config=` | Configures authenticated cloud reads (requester-pays, signed URLs) | None — constructor-level, transparent to samplers |
-| `allow_resample=True` | Resamples bands with different native resolutions onto a common grid | None — output tensor has uniform resolution |
+| `label_field` | Adds `sample["label"]` from a metadata column | None: extra key, ignored by TorchGeo trainers |
+| `time_series=True` | Stacks all spatially overlapping records into `[T, C, H, W]` | None: standard tensor shape, works with TorchGeo transforms |
+| `target_crs=` | Reprojects scenes from different CRS zones on the fly | None: result has uniform CRS, transparent to samplers |
+| `cloud_config=` | Configures authenticated cloud reads (requester-pays, signed URLs) | None: constructor-level, transparent to samplers |
+| `allow_resample=True` | Resamples bands with different native resolutions onto a common grid | None: output tensor has uniform resolution |
 
 #### Behavior details
 
@@ -183,7 +183,7 @@ comparison uses `rasterio.merge.merge` as the oracle, matching what TorchGeo's
 own `_merge_or_stack` calls. Coverage spans 12 datasets including Sentinel-2,
 Landsat, NAIP, Copernicus DEM, ESA WorldCover, and AEF (south-up). See
 `test_dataset_pixel_comparison.py` (requires `--network`), plus
-`test_public_network_smoke.py`, `test_torchgeo_network_usage.py`, and
+`test_public_network_smoke.py`, `test_torchgeo_network.py`, and
 `test_network_smoke.py`.
 
 If you encounter edge cases where output differs from rasterio, please

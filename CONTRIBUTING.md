@@ -32,10 +32,11 @@ uv run pytest -q
 
 ## Adding a dataset to the catalog
 
-Add a `DatasetDescriptor` to `src/rasteret/catalog.py`. Before opening a PR,
-verify the [prerequisites](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#prerequisites-for-contributing-a-built-in-dataset):
-STAC access works, band map points to parseable COGs, `build()` succeeds
-end-to-end, and license metadata is sourced from the authoritative STAC API.
+Add a `DatasetDescriptor` to `src/rasteret/catalog.py`. Entries can point
+to a STAC API, a static STAC catalog, or a GeoParquet file. Before opening
+a PR, verify the [prerequisites](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#prerequisites-for-contributing-a-built-in-dataset):
+data source is reachable, band map points to parseable COGs, `build()`
+succeeds end-to-end, and license metadata is verified from the provider.
 
 ## Full contributor guide
 

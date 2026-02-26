@@ -71,7 +71,7 @@ See [Getting Started](https://terrafloww.github.io/rasteret/getting-started/) fo
 
 ## Built-in datasets
 
-Rasteret ships with a growing catalog of datasets, no STAC URLs to memorize:
+Rasteret ships with a growing catalog of datasets. Pick an ID and go:
 
 ```
 $ rasteret datasets list
@@ -90,11 +90,12 @@ pc/usda-cdl                 USDA Cropland Data Layer                   conus    
 aef/v1-annual               AlphaEarth Foundation Embeddings (Annual)  global         CC-BY-4.0      none
 ```
 
-Each entry includes license metadata sourced from the authoritative STAC API,
-and a `commercial_use` flag for quick filtering.
+Each entry includes license metadata and a `commercial_use` flag for quick
+filtering.
 
-The catalog is open and community-driven. Each dataset entry is ~20 lines of
-Python: One PR adds a dataset; every user gets access on the next release.
+The catalog is open and community-driven. Each entry is ~20 lines of
+Python pointing to a STAC API or a GeoParquet file. One PR adds a dataset,
+every user gets access on the next release.
 
 Pick any ID and pass it to `build()`. Don't see your dataset? Use
 `build_from_stac()` for any STAC API, `build_from_table()` for existing
@@ -118,9 +119,9 @@ collection = rasteret.build(
 )
 ```
 
-`build()` picks the dataset from the catalog, queries the STAC API, parses
-COG headers, and caches everything as Parquet. The next run loads in
-milliseconds.
+`build()` picks the dataset from the catalog (backed by a STAC API or a
+GeoParquet file, depending on the entry), parses COG headers, and caches
+everything as Parquet. The next run loads in milliseconds.
 
 ### Inspect and filter
 
@@ -130,7 +131,7 @@ collection.bands  # ['B01', 'B02', ..., 'B12', 'SCL']
 len(collection)   # 47
 
 
-# Filter in memory — no network calls
+# Filter in memory, no network calls
 filtered = collection.subset(cloud_cover_lt=15, date_range=("2024-03-01", "2024-06-01"))
 ```
 

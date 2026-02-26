@@ -1,20 +1,19 @@
 # Dataset Catalog
 
 Rasteret ships with a built-in **dataset catalog**: a registry of known
-datasets so you can build a Collection without remembering STAC API URLs or
-endpoint details. Most users only need the `build()` function shown below;
-the later sections cover browsing, local registration, and advanced
-customisation.
+datasets so you can build a Collection by ID without remembering endpoints
+or file paths. Each entry points to a STAC API, a GeoParquet file, or both.
+Most users only need the `build()` function shown below; the later sections
+cover browsing, local registration, and advanced customisation.
 
 The built-in catalog includes 12 datasets: Sentinel-2, Landsat,
 NAIP, Copernicus DEM, ESRI Land Cover, ESA WorldCover, USDA CDL,
 ALOS DEM, NASADEM, and AlphaEarth Foundation embeddings. Run
 `rasteret datasets list` to see them all.
 
-Each catalog entry includes **license metadata** sourced from the
-authoritative STAC API: a license identifier, a URL to the full license
-text, and a `commercial_use` flag so you can quickly tell whether the
-data can be used commercially.
+Each catalog entry includes **license metadata**: a license identifier, a
+URL to the full license text, and a `commercial_use` flag so you can quickly
+tell whether the data can be used commercially.
 
 In short:
 
@@ -55,7 +54,7 @@ Many entries include an **Example bbox** and **Example time**. These are known-g
 ```python
 import rasteret
 
-# Build from a catalog entry (STAC-backed datasets require bbox + date_range)
+# STAC-backed entries need bbox + date_range; GeoParquet entries may not
 collection = rasteret.build(
     "earthsearch/sentinel-2-l2a",
     name="bangalore",
@@ -105,9 +104,9 @@ If you want explicit control over STAC endpoints and collection IDs, use
 
     TorchGeo ships per-dataset Python classes that download data locally
     and read from disk via rasterio/GDAL. Rasteret's catalog points at
-    cloud-hosted data (STAC APIs, GeoParquet): no downloads, no custom
-    code per dataset. You get a standard `Collection` from any catalog
-    entry, then read pixels on demand from the cloud.
+    cloud-hosted data (STAC APIs or GeoParquet files): no downloads, no
+    custom code per dataset. You get a standard `Collection` from any
+    catalog entry, then read pixels on demand from the cloud.
 
 ---
 
@@ -182,7 +181,8 @@ There are two supported patterns:
    )
    ```
 
-   The `band_map` maps user-facing band codes to STAC asset keys.
+   The `band_map` maps user-facing band codes to asset keys (STAC
+   asset keys, or column-derived keys for GeoParquet sources).
    It is auto-registered so downstream code resolves band names
    without users needing to touch `BandRegistry` directly.
 
@@ -202,39 +202,69 @@ requirements. Every built-in entry must actually work with Rasteret's
 pipeline. Listing a dataset that can't be ingested is worse than not
 listing it at all.
 
-### 1. STAC access works
+A catalog entry can point to a **STAC API**, a **static STAC catalog**,
+or a **GeoParquet file** (like the built-in AEF embeddings dataset).
+The verification steps differ slightly depending on the source type.
 
-The dataset must be reachable via either a **STAC API** (with a `/search`
-endpoint) or a **static STAC catalog** (`catalog.json` on S3). Verify
-with:
+### 1. Data source is reachable
 
-```python
-# STAC API
-import pystac_client
-client = pystac_client.Client.open("<stac_api_url>")
-col = client.get_collection("<collection_id>")
+=== "STAC API / static catalog"
 
-# Static catalog
-import pystac
-cat = pystac.Catalog.from_file("<catalog_json_url>")
-items = list(cat.get_all_items())  # should return items
-```
+    The dataset must be reachable via either a **STAC API** (with a `/search`
+    endpoint) or a **static STAC catalog** (`catalog.json` on S3). Verify
+    with:
 
-### 2. Band map has at least one working COG asset
+    ```python
+    # STAC API
+    import pystac_client
+    client = pystac_client.Client.open("<stac_api_url>")
+    col = client.get_collection("<collection_id>")
 
-The `band_map` must map at least one band code to a STAC asset key that
-points to a Cloud-Optimized GeoTIFF (COG). Rasteret parses COG headers
+    # Static catalog
+    import pystac
+    cat = pystac.Catalog.from_file("<catalog_json_url>")
+    items = list(cat.get_all_items())  # should return items
+    ```
+
+=== "GeoParquet"
+
+    The Parquet file must be readable by PyArrow and contain the four
+    required columns (`id`, `datetime`, `geometry`, `assets`), or columns
+    that can be mapped to them via `column_map`. Verify with:
+
+    ```python
+    import pyarrow.parquet as pq
+    table = pq.read_table("<parquet_uri>")
+    print(table.schema)
+    # Confirm id, datetime, geometry, and asset URL columns exist
+    ```
+
+### 2. Assets point to tiled GeoTIFFs (COGs)
+
+The `band_map` must map at least one band code to an asset key that
+points to a Cloud-Optimized GeoTIFF. Rasteret parses COG headers
 during `build()`. If no assets can be parsed, Rasteret can't index or read
 the dataset.
 
-Check a sample item's asset keys:
+=== "STAC"
 
-```python
-item = items[0]
-for key, asset in item.assets.items():
-    print(f"{key}: {asset.media_type}")
-# Look for "image/tiff" or "application=geotiff" entries
-```
+    Check a sample item's asset keys:
+
+    ```python
+    item = items[0]
+    for key, asset in item.assets.items():
+        print(f"{key}: {asset.media_type}")
+    # Look for "image/tiff" or "application=geotiff" entries
+    ```
+
+=== "GeoParquet"
+
+    Check that the `assets` column (or `href_column`) contains URLs
+    pointing to `.tif` / `.tiff` files:
+
+    ```python
+    print(table.column("assets")[0])  # or your href column
+    ```
 
 ### 3. End-to-end `build()` succeeds
 
@@ -245,28 +275,29 @@ import rasteret
 col = rasteret.build(
     "<dataset_id>",
     name="smoke-test",
-    query={"max_items": 2},
+    query={"max_items": 2},  # STAC only; ignored for GeoParquet
     force=True,
 )
-print(col.dataset.count_rows())  # should be > 0
+print(len(col))  # should be > 0
 ```
 
-For STAC API datasets (non-static catalogs), `bbox` and `date_range` are required.
+For STAC API datasets (non-static catalogs), `bbox` and `date_range` are
+required. GeoParquet-backed entries may not need them (the Parquet file
+is the complete record set).
 
 ### 4. License is verified from the authoritative source
 
-Pull the license from the STAC API or catalog metadata. Do not guess:
+Pull the license from the data provider. Do not guess:
 
 ```python
 # STAC API
 col = client.get_collection("<collection_id>")
 print(col.license)  # "CC-BY-4.0", "proprietary", etc.
 license_links = [l.href for l in col.links if l.rel == "license"]
-
-# Static catalog - check item-level properties
-item = items[0]
-print(item.properties.get("license"))
 ```
+
+For GeoParquet-only datasets, check the data provider's website or
+repository for license terms.
 
 Set `commercial_use=False` when the license prohibits it (e.g.
 `CC-BY-NC-4.0`).
@@ -276,6 +307,9 @@ Set `commercial_use=False` when the license prohibits it (e.g.
 Include at minimum: `id`, `name`, `description`, `stac_api` (or
 `geoparquet_uri`), `band_map`, `license`, `license_url`, `spatial_coverage`,
 `temporal_range`. For static catalogs, set `static_catalog=True`.
+For GeoParquet sources, include `column_map` if the source uses
+non-standard column names, and `href_column` if asset URLs live in a
+single column rather than a struct.
 
 ---
 

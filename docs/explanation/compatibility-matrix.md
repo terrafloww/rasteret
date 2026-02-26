@@ -27,7 +27,7 @@ points to the tests that cover them.
 |---|---|---|---|
 | `get_xarray()` | rasterio windowed read | Sentinel-2 uint16, AEF int8 | `test_execution.py` |
 | `get_gdf()` | rasterio windowed read | Sentinel-2 uint16 | `test_execution.py` |
-| `to_torchgeo_dataset()` | Pure TorchGeo GeoDataset | Sentinel-2 uint16 | `test_torchgeo_network_usage.py` |
+| `to_torchgeo_dataset()` | Pure TorchGeo GeoDataset | Sentinel-2 uint16 | `test_torchgeo_network.py` |
 
 ## Running live smoke locally
 
