@@ -44,6 +44,18 @@ Architecture overview, testing details, how to write ingest drivers, and
 code style conventions are in the
 [Contributing docs](https://terrafloww.github.io/rasteret/contributing/).
 
+## DCO sign-off
+
+All commits must include a `Signed-off-by` line to certify the
+[Developer Certificate of Origin](https://developercertificate.org/).
+Use `git commit -s` to add it automatically.
+
+```text
+Signed-off-by: Your Name <your@email.com>
+```
+
+Unsigned commits will be rejected by CI.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under

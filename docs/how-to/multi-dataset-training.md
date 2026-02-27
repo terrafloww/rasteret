@@ -18,7 +18,7 @@ from torchgeo.samplers import RandomGeoSampler
 from torchgeo.datasets.utils import stack_samples
 
 s2 = s2_collection.to_torchgeo_dataset(bands=["B04", "B03", "B02"], chip_size=256)
-aef = aef_collection.to_torchgeo_dataset(bands=["emb_0", "emb_1"], chip_size=256)
+aef = aef_collection.to_torchgeo_dataset(bands=["A00", "A01"], chip_size=256)
 
 combined = s2 & aef  # IntersectionDataset: channels concatenated
 
@@ -68,7 +68,7 @@ with standard xarray:
 import xarray as xr
 
 ds_s2 = s2_collection.get_xarray(geometries=aoi, bands=["B04", "B08"])
-ds_aef = aef_collection.get_xarray(geometries=aoi, bands=["emb_0"])
+ds_aef = aef_collection.get_xarray(geometries=aoi, bands=["A00"])
 combined = xr.merge([ds_s2, ds_aef])
 ```
 

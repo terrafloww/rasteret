@@ -6,9 +6,10 @@ or file paths. Each entry points to a STAC API, a GeoParquet file, or both.
 Most users only need the `build()` function shown below; the later sections
 cover browsing, local registration, and advanced customisation.
 
-The built-in catalog includes 12 datasets: Sentinel-2, Landsat,
-NAIP, Copernicus DEM, ESRI Land Cover, ESA WorldCover, USDA CDL,
-ALOS DEM, NASADEM, and AlphaEarth Foundation embeddings. Run
+The built-in catalog includes 12 entries across Earth Search, Planetary
+Computer, and AlphaEarth Foundation -- covering Sentinel-2, Landsat,
+NAIP, Copernicus DEM (30 m and 90 m), ESRI Land Cover, ESA WorldCover,
+USDA CDL, ALOS DEM, NASADEM, and AEF embeddings. Run
 `rasteret datasets list` to see them all.
 
 Each catalog entry includes **license metadata**: a license identifier, a
@@ -85,8 +86,7 @@ If you want explicit control over STAC endpoints and collection IDs, use
     dataset, document which extras and credentials are required to run it
     locally, and keep those prerequisites explicit in the PR description.
 
-    See the [Compatibility Matrix](../explanation/compatibility-matrix.md) and
-    [Contributing](../contributing.md) for how the test suite is structured.
+    See [Contributing](../contributing.md) for how the test suite is structured.
 
 ??? tip "Browsing the catalog programmatically"
 

@@ -53,7 +53,7 @@ and produces a Collection backed by Rasteret's Parquet schema.
 No network access, no pixel reads.
 
 **READ** uses cached COG metadata from the Parquet index to fetch only the
-exact tiles needed. This is where the over 20x speedup comes from.
+exact tiles needed. This is where the up to 20x speedup comes from.
 
 ## Correctness contract
 
@@ -250,6 +250,18 @@ conventions and works alongside TorchGeo:
   and `stack_samples` collation.
 - Output is a standard `GeoDataset`. Users do not need to learn
   Rasteret internals to use it.
+
+## DCO sign-off
+
+All commits must include a `Signed-off-by` line to certify the
+[Developer Certificate of Origin](https://developercertificate.org/).
+Use `git commit -s` to add it automatically.
+
+```text
+Signed-off-by: Your Name <your@email.com>
+```
+
+Unsigned commits will be rejected by CI.
 
 ## Code style
 

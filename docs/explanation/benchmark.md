@@ -11,6 +11,9 @@ Apples-to-apples time-series comparison using
 `stack_samples` collate. Both paths output identical
 `[batch, T, C, H, W]` tensors.
 
+DataLoader uses default settings (no custom `num_workers`, `prefetch_factor`,
+or `persistent_workers`) for both paths.
+
 TorchGeo runs with its recommended GDAL settings (`rasterio_best_practices`
 from Pangeo COG best practices) for best-case remote COG performance:
 
@@ -66,6 +69,25 @@ before pixel reads begin.
    re-parses headers over HTTP per file (sequential), while Rasteret
    reads cached headers from disk and fetches pixels concurrently.
 2. Cross-CRS adds reprojection overhead (~0.1-0.3 s) to both paths.
+
+## HF `datasets` baseline (Major TOM keyed patches)
+
+Separate benchmark against Hugging Face payload-Parquet workflows using
+`datasets.load_dataset(...)` with Parquet filters (PyArrow-backed):
+
+| Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
+|---:|---:|---:|---:|
+| 120 | 46.83 s | 12.09 s | **3.88x** |
+| 1000 | 771.59 s | 118.69 s | **6.50x** |
+
+![HF vs Rasteret processing time](../assets/benchmark_hf_results.png)
+![HF vs Rasteret speedup](../assets/benchmark_hf_speedup.png)
+
+Major TOM notebooks often use HF streaming generators for exploration; the
+table above uses the stronger parquet-filter baseline for fairness.
+
+Diagnostic note: fsspec-style payload reads can be much slower on small
+samples (we observed >100x) and are not used as the primary baseline.
 
 ## Where the difference comes from
 
