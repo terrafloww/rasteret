@@ -25,6 +25,13 @@ Rasteret parses those headers **once**, caches them in Parquet, and its
 own reader fetches pixels concurrently with no GDAL in the path.
 **Up to 20x faster** on cold starts.
 
+We call this pattern **index-first geospatial image retrieval**:
+
+- **Control plane**: a queryable Parquet index (scene metadata, COG header metadata, user columns like splits/labels)
+- **Data plane**: on-demand tile reads from the original GeoTIFF/COG objects
+
+This keeps metadata and experiment logic in tables while leaving imagery bytes in source COGs.
+
 - **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
 - **Zero downloads** - work with terabytes of imagery while storing only megabytes of metadata
 - **No STAC at training time** - query once at setup; zero API calls during training

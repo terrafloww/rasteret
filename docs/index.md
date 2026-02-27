@@ -24,6 +24,13 @@
            (once)                 (queryable)          (no GDAL, no headers)
     ```
 
+!!! info "Category: index-first geospatial retrieval"
+
+    Rasteret treats Parquet as the **control plane** (scene metadata + COG
+    header metadata + user-enriched columns), and COG object storage as the
+    **data plane** (pixel bytes fetched on demand). Metadata stays table-native;
+    imagery bytes stay in source COGs.
+
 ---
 
 <div class="grid cards" markdown>

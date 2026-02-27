@@ -4,6 +4,16 @@ This page documents the key design choices behind Rasteret and the reasoning
 that drives them. It is aimed at contributors and advanced users who want to
 understand *why* things work the way they do.
 
+## Category framing
+
+Rasteret follows an **index-first geospatial retrieval** architecture:
+
+- **Control plane (tables/Parquet)**: discovery, filtering, splits/labels, and cached COG header metadata.
+- **Data plane (COG object storage)**: on-demand tile byte reads from source GeoTIFFs.
+
+This separation is intentional. It preserves table interoperability for metadata
+workflows while avoiding payload-in-Parquet duplication for routine pixel reads.
+
 ## Why Parquet indexes?
 
 Remote COGs require an HTTP HEAD + IFD range read per file just to discover
