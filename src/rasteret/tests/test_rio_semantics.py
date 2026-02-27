@@ -50,14 +50,14 @@ def _merge_oracle(
 
 
 def test_merge_semantics_matches_rasterio_merge_at_extent_boundary() -> None:
-    # Source raster: 5x5 pixels, unit resolution, north-up.
-    src = (np.arange(25, dtype=np.uint8).reshape(5, 5) + 1).astype(np.uint8)
-    src_transform = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 5.0)  # bounds: x=[0,5], y=[0,5]
+    rng = np.random.default_rng(17)
+    src = rng.integers(0, 1000, size=(9, 11), dtype=np.uint16)
+    src_transform = Affine(10.0, 0.0, 500000.0, 0.0, -10.0, 4200000.0)
     crs = 3857
-
-    # Query grid extends above the source by 0.6 units. This is the class of case
-    # where rasterio.merge.merge and warp-style semantics can differ by 1 pixel.
-    grid = MergeGrid(bounds=(0.0, 0.6, 5.0, 5.6), res=(1.0, 1.0))
+    grid = MergeGrid(
+        bounds=(500020.0, 4199905.0, 500110.0, 4200005.0),
+        res=(10.0, 10.0),
+    )
     oracle = _merge_oracle(
         src, transform=src_transform, crs_epsg=crs, bounds=grid.bounds, res=grid.res
     )
@@ -66,8 +66,8 @@ def test_merge_semantics_matches_rasterio_merge_at_extent_boundary() -> None:
         src,
         src_crop_transform=src_transform,
         src_full_transform=src_transform,
-        src_full_width=5,
-        src_full_height=5,
+        src_full_width=11,
+        src_full_height=9,
         src_crs=crs,
         grid=grid,
         resampling="nearest",
@@ -79,16 +79,10 @@ def test_merge_semantics_matches_rasterio_merge_at_extent_boundary() -> None:
 
 
 def test_merge_semantics_with_crop_transform_translation() -> None:
-    # Full source raster.
     full = (np.arange(100, dtype=np.uint16).reshape(10, 10) + 1).astype(np.uint16)
     full_transform = Affine(1.0, 0.0, 100.0, 0.0, -1.0, 200.0)
     crs = 3857
 
-    # Crop a window that simulates Rasteret's reader contract: bounds are
-    # snapped using floor/ceil in full pixel space, so the crop includes
-    # any boundary pixels that rasterio.merge.merge may include via win_align.
-    #
-    # For the grid below, this corresponds to full rows [1:6) and cols [3:7).
     crop = full[1:6, 3:7]
     crop_transform = Affine(1.0, 0.0, 103.0, 0.0, -1.0, 199.0)
 
@@ -115,3 +109,33 @@ def test_merge_semantics_with_crop_transform_translation() -> None:
 
     assert out.shape == oracle.shape
     np.testing.assert_array_equal(out, oracle)
+
+
+def test_merge_semantics_aligned_nearest_uses_fast_path(monkeypatch) -> None:
+    src = (np.arange(25, dtype=np.uint16).reshape(5, 5) + 1).astype(np.uint16)
+    src_transform = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 5.0)
+    crs = 3857
+    grid = MergeGrid(bounds=(1.0, 1.0, 4.0, 4.0), res=(1.0, 1.0))
+
+    import rasterio.io
+
+    class _BoomMemoryFile:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("Expected fast path without MemoryFile fallback")
+
+    monkeypatch.setattr(rasterio.io, "MemoryFile", _BoomMemoryFile)
+
+    out = merge_semantic_resample_single_source(
+        src,
+        src_crop_transform=src_transform,
+        src_full_transform=src_transform,
+        src_full_width=5,
+        src_full_height=5,
+        src_crs=crs,
+        grid=grid,
+        resampling="nearest",
+        src_nodata=0,
+    )
+
+    expected = src[1:4, 1:4]
+    np.testing.assert_array_equal(out, expected)

@@ -28,10 +28,16 @@ except ModuleNotFoundError:  # pragma: no cover
 
 try:  # optional dependency
     from torchgeo.datasets import GeoDataset  # type: ignore
-    from torchgeo.datasets.utils import GeoSlice  # type: ignore
+    from torchgeo.datasets.utils import (  # type: ignore
+        GeoSlice,
+    )
+    from torchgeo.datasets.utils import (
+        array_to_tensor as _torchgeo_array_to_tensor,
+    )
 except ModuleNotFoundError:  # pragma: no cover
     GeoDataset = None
     GeoSlice = None
+    _torchgeo_array_to_tensor = None
 
 from rasteret.cloud import CloudConfig, backend_config_from_cloud_config
 from rasteret.constants import BandRegistry
@@ -52,6 +58,49 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 Sample = dict[str, Any]
+
+_TORCHGEO_DTYPE_CAST_MAP: dict[np.dtype[Any], np.dtype[Any]] = {
+    np.dtype(np.uint16): np.dtype(np.int32),
+    np.dtype(np.uint32): np.dtype(np.int64),
+}
+
+
+def _array_to_image_tensor_torchgeo_compatible(
+    array: np.ndarray,
+) -> tuple["torch.Tensor", tuple[np.dtype[Any], np.dtype[Any]] | None]:
+    """Convert image array to tensor with TorchGeo-compatible dtype mapping.
+
+    Mapping mirrors ``torchgeo.datasets.utils.array_to_tensor``:
+    uint16 -> int32, uint32 -> int64.
+
+    For all other dtypes, this path uses ``torch.from_numpy`` for zero-copy when
+    the input is C-contiguous.
+    """
+    if torch is None:
+        raise ImportError(
+            "Torch is required for TorchGeo integration. Install rasteret[torchgeo]."
+        )
+
+    source_dtype = np.dtype(array.dtype)
+    target_dtype = _TORCHGEO_DTYPE_CAST_MAP.get(source_dtype, source_dtype)
+    cast_info: tuple[np.dtype[Any], np.dtype[Any]] | None = None
+
+    if target_dtype != source_dtype:
+        cast_info = (source_dtype, target_dtype)
+        array = array.astype(target_dtype, copy=False)
+
+    if not array.flags.c_contiguous:
+        array = np.ascontiguousarray(array)
+
+    try:
+        return torch.from_numpy(array), cast_info
+    except (TypeError, ValueError):
+        # Extremely defensive fallback. On modern torch this should not happen,
+        # but keeps behavior compatible with environments where from_numpy has
+        # narrower dtype support.
+        if _torchgeo_array_to_tensor is not None:
+            return _torchgeo_array_to_tensor(array), cast_info
+        return torch.tensor(array), cast_info
 
 
 class _AsyncCOGReaderPool:
@@ -310,6 +359,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             self._pool: _AsyncCOGReaderPool | None = None
             self._pool_pid: int | None = None
             self._warned_ts_temporal_skip = False
+            self._warned_image_dtype_casts: set[tuple[str, str]] = set()
 
             columns = [
                 "id",
@@ -760,6 +810,62 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             except Exception as exc:  # pragma: no cover
                 raise IndexError(f"Invalid rid={rid}") from exc
 
+        def _warn_image_dtype_cast_once(
+            self,
+            source_dtype: np.dtype[Any],
+            target_dtype: np.dtype[Any],
+        ) -> None:
+            key = (str(source_dtype), str(target_dtype))
+            if key in self._warned_image_dtype_casts:
+                return
+            self._warned_image_dtype_casts.add(key)
+            warnings.warn(
+                "RasteretGeoDataset casting image dtype "
+                f"{source_dtype} -> {target_dtype} to match TorchGeo "
+                "array_to_tensor semantics (uint16->int32, uint32->int64).",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        def _merge_resample_to_query_grid(
+            self,
+            data: np.ndarray,
+            data_transform: Affine,
+            meta: CogMetadata,
+            query_grid: MergeGrid,
+            *,
+            resampling: str,
+        ) -> np.ndarray:
+            return merge_semantic_resample_single_source(
+                data,
+                src_crop_transform=data_transform,
+                src_full_transform=Affine(
+                    *(
+                        lambda sx, tx, sy, ty: (
+                            float(sx),
+                            0.0,
+                            float(tx),
+                            0.0,
+                            float(sy),
+                            float(ty),
+                        )
+                    )(*normalize_transform(meta.transform))
+                ),
+                src_full_width=int(meta.width),
+                src_full_height=int(meta.height),
+                src_crs=int(meta.crs or self.epsg),
+                grid=query_grid,
+                resampling=resampling,  # TorchGeo-like
+                src_nodata=meta.nodata,
+            )
+
+        def _image_tensor_from_numpy(self, array: np.ndarray) -> torch.Tensor:
+            tensor, cast_info = _array_to_image_tensor_torchgeo_compatible(array)
+            if cast_info is not None:
+                src_dtype, dst_dtype = cast_info
+                self._warn_image_dtype_cast_once(src_dtype, dst_dtype)
+            return tensor
+
         def __getitem__(self, index: GeoSlice) -> Sample:
             """Return a sample dict for the given spatio-temporal slice.
 
@@ -878,44 +984,29 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                         )
                     ]
                 else:
-                    arrays = [
-                        merge_semantic_resample_single_source(
-                            r.data,
-                            src_crop_transform=r.transform,
-                            src_full_transform=Affine(
-                                *(
-                                    lambda sx, tx, sy, ty: (
-                                        float(sx),
-                                        0.0,
-                                        float(tx),
-                                        0.0,
-                                        float(sy),
-                                        float(ty),
-                                    )
-                                )(*normalize_transform(meta.transform))
-                            ),
-                            src_full_width=int(meta.width),
-                            src_full_height=int(meta.height),
-                            src_crs=int(meta.crs or self.epsg),
-                            grid=query_grid,
-                            resampling=_auto_resampling_for_dtype(
-                                r.data.dtype
-                            ),  # TorchGeo-like
-                            src_nodata=meta.nodata,
+                    arrays = []
+                    for r, meta in fetch_results:
+                        arrays.append(
+                            self._merge_resample_to_query_grid(
+                                r.data,
+                                r.transform,
+                                meta,
+                                query_grid,
+                                resampling=_auto_resampling_for_dtype(r.data.dtype),
+                            )
                         )
-                        for (r, meta) in fetch_results
-                    ]
 
                 # arrays is flat: [t0_band0, t0_band1, ..., t1_band0, ...]
                 # Reshape into [T, C, H, W] with minimal copies:
                 #   np.stack at band level  -> [C, H, W] (1 contiguous alloc per timestep)
                 #   np.stack at time level  -> [T, C, H, W] (1 contiguous alloc)
-                #   torch.from_numpy        -> zero-copy view
+                #   torch.from_numpy        -> zero-copy view when dtype is unchanged
                 timesteps = [
                     np.stack(arrays[t_idx * n_bands : (t_idx + 1) * n_bands], axis=0)
                     for t_idx in range(n_timesteps)
                 ]
-                image = torch.from_numpy(np.stack(timesteps, axis=0))  # [T, C, H, W]
+                image_np = np.stack(timesteps, axis=0)
+                image = self._image_tensor_from_numpy(image_np)  # [T, C, H, W]
 
             else:
                 # Minimal TorchGeo adapter behavior: select a single record for this
@@ -955,34 +1046,21 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                         for r, _meta in fetch_results
                     ]
                 else:
-                    arrays = [
-                        merge_semantic_resample_single_source(
-                            r.data,
-                            src_crop_transform=r.transform,
-                            src_full_transform=Affine(
-                                *(
-                                    lambda sx, tx, sy, ty: (
-                                        float(sx),
-                                        0.0,
-                                        float(tx),
-                                        0.0,
-                                        float(sy),
-                                        float(ty),
-                                    )
-                                )(*normalize_transform(meta.transform))
-                            ),
-                            src_full_width=int(meta.width),
-                            src_full_height=int(meta.height),
-                            src_crs=int(meta.crs or self.epsg),
-                            grid=query_grid,
-                            resampling=_auto_resampling_for_dtype(r.data.dtype),
-                            src_nodata=meta.nodata,
+                    arrays = []
+                    for r, meta in fetch_results:
+                        arrays.append(
+                            self._merge_resample_to_query_grid(
+                                r.data,
+                                r.transform,
+                                meta,
+                                query_grid,
+                                resampling=_auto_resampling_for_dtype(r.data.dtype),
+                            )
                         )
-                        for (r, meta) in fetch_results
-                    ]
 
-                # np.stack -> [C, H, W] (1 alloc), torch.from_numpy -> zero-copy.
-                image = torch.from_numpy(np.stack(arrays, axis=0))  # [C, H, W]
+                # np.stack -> [C, H, W] (1 alloc), then torch view/cast.
+                image_np = np.stack(arrays, axis=0)
+                image = self._image_tensor_from_numpy(image_np)  # [C, H, W]
 
             transform = torch.tensor(
                 [x.step, 0.0, x.start, 0.0, -y.step, y.stop], dtype=torch.float32

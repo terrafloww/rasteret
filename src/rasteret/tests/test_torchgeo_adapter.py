@@ -8,7 +8,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rasteret.integrations.torchgeo import _coerce_label_value
+from rasteret.integrations.torchgeo import (
+    _array_to_image_tensor_torchgeo_compatible,
+    _coerce_label_value,
+)
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("torchgeo")
@@ -67,3 +70,27 @@ class TestLabelCoercion:
 
     def test_nan_label_becomes_none(self):
         assert _coerce_label_value(np.nan) is None
+
+
+class TestImageTensorConversion:
+    def test_uint16_casts_to_int32_with_cast_info(self):
+        arr = np.arange(6, dtype=np.uint16).reshape(2, 3)
+        tensor, cast_info = _array_to_image_tensor_torchgeo_compatible(arr)
+        assert tensor.dtype == torch.int32
+        assert cast_info == (np.dtype(np.uint16), np.dtype(np.int32))
+        np.testing.assert_array_equal(tensor.numpy(), arr.astype(np.int32))
+
+    def test_uint32_casts_to_int64_with_cast_info(self):
+        arr = np.arange(6, dtype=np.uint32).reshape(2, 3)
+        tensor, cast_info = _array_to_image_tensor_torchgeo_compatible(arr)
+        assert tensor.dtype == torch.int64
+        assert cast_info == (np.dtype(np.uint32), np.dtype(np.int64))
+        np.testing.assert_array_equal(tensor.numpy(), arr.astype(np.int64))
+
+    def test_uint8_uses_zero_copy_when_contiguous(self):
+        arr = np.arange(6, dtype=np.uint8).reshape(2, 3)
+        tensor, cast_info = _array_to_image_tensor_torchgeo_compatible(arr)
+        assert cast_info is None
+        assert tensor.dtype == torch.uint8
+        arr[0, 0] = 255
+        assert int(tensor[0, 0].item()) == 255

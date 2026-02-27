@@ -66,11 +66,6 @@ def merge_semantic_resample_single_source(
     Rasterio's merge behavior is what TorchGeo uses, and it is known to differ
     from warp/reproject behavior by one pixel at extent boundaries.
     """
-    from rasterio.crs import CRS as RioCRS
-    from rasterio.enums import Resampling
-    from rasterio.io import MemoryFile
-    from rasterio.merge import merge as rio_merge
-
     if src_crop.ndim != 2:
         raise ValueError(f"Expected 2-D src_crop, got shape={src_crop.shape}")
 
@@ -169,6 +164,128 @@ def merge_semantic_resample_single_source(
                 e,
                 crop_top + row0 * e,
             )
+
+    # Fast path: if the query grid is exactly pixel-aligned with the source grid
+    # at the same resolution and using nearest resampling, we can copy directly
+    # from the fetched crop into the destination canvas and skip MemoryFile+merge.
+    #
+    # This is conservative by design: on any ambiguity we fall back to rasterio.
+    if resampling == "nearest":
+        tol = 1e-9
+
+        def _as_int_if_close(value: float) -> int | None:
+            rounded = int(round(float(value)))
+            if abs(float(value) - float(rounded)) <= tol:
+                return rounded
+            return None
+
+        def _fill_value_for_dtype(
+            dtype: np.dtype, nodata: float | int | None
+        ) -> float | int:
+            if nodata is None:
+                return np.array(0, dtype=dtype).item()
+            if isinstance(nodata, float) and np.isnan(nodata):
+                if dtype.kind != "f":
+                    raise ValueError("NaN nodata is only valid for float dtype")
+                return np.nan
+            if dtype.kind in {"i", "u", "b"}:
+                # Integer-like output: require a finite integer nodata representable
+                # by dtype; otherwise delegate to rasterio path.
+                if isinstance(nodata, float):
+                    if not np.isfinite(nodata) or not float(nodata).is_integer():
+                        raise ValueError("Non-integer nodata for integer dtype")
+                    nodata_i = int(nodata)
+                else:
+                    nodata_i = int(nodata)
+                info = np.iinfo(dtype)
+                if nodata_i < int(info.min) or nodata_i > int(info.max):
+                    raise ValueError("nodata outside integer dtype range")
+                return np.array(nodata_i, dtype=dtype).item()
+            if dtype.kind == "f":
+                nodata_f = float(nodata)
+                if np.isfinite(nodata_f):
+                    info = np.finfo(dtype)
+                    if nodata_f < float(info.min) or nodata_f > float(info.max):
+                        raise ValueError("nodata outside float dtype range")
+                return np.array(nodata_f, dtype=dtype).item()
+            raise ValueError(f"Unsupported dtype for fast path: {dtype}")
+
+        full_a = float(src_full_transform.a)
+        full_b = float(src_full_transform.b)
+        full_d = float(src_full_transform.d)
+        full_e = float(src_full_transform.e)
+
+        crop_a = float(src_crop_transform.a)
+        crop_b = float(src_crop_transform.b)
+        crop_d = float(src_crop_transform.d)
+        crop_e = float(src_crop_transform.e)
+
+        if (
+            abs(full_b) <= tol
+            and abs(full_d) <= tol
+            and abs(crop_b) <= tol
+            and abs(crop_d) <= tol
+            and full_a > 0.0
+            and full_e < 0.0
+            and abs(crop_a - full_a) <= tol
+            and abs(crop_e - full_e) <= tol
+            and abs(float(grid.res[0]) - full_a) <= tol
+            and abs(float(grid.res[1]) - abs(full_e)) <= tol
+        ):
+            full_left = float(src_full_transform.c)
+            full_top = float(src_full_transform.f)
+            crop_left = float(src_crop_transform.c)
+            crop_top = float(src_crop_transform.f)
+            grid_left, _grid_bottom, _grid_right, grid_top = grid.bounds
+
+            q_col0 = _as_int_if_close((float(grid_left) - full_left) / full_a)
+            q_row0 = _as_int_if_close((full_top - float(grid_top)) / abs(full_e))
+            c_col0 = _as_int_if_close((crop_left - full_left) / full_a)
+            c_row0 = _as_int_if_close((full_top - crop_top) / abs(full_e))
+
+            if (
+                q_col0 is not None
+                and q_row0 is not None
+                and c_col0 is not None
+                and c_row0 is not None
+            ):
+                try:
+                    fill_value = _fill_value_for_dtype(src_crop.dtype, src_nodata)
+                except ValueError:
+                    fill_value = None
+
+                if fill_value is not None:
+                    dst_h, dst_w = grid.shape
+                    if dst_h <= 0 or dst_w <= 0:
+                        return np.zeros((0, 0), dtype=src_crop.dtype)
+
+                    out = np.full((dst_h, dst_w), fill_value, dtype=src_crop.dtype)
+
+                    # Relative offset from the requested query-grid top-left pixel
+                    # to the provided source crop top-left pixel.
+                    rel_col = int(q_col0) - int(c_col0)
+                    rel_row = int(q_row0) - int(c_row0)
+
+                    src_h, src_w = src_crop.shape
+
+                    src_r0 = max(0, rel_row)
+                    src_c0 = max(0, rel_col)
+                    dst_r0 = max(0, -rel_row)
+                    dst_c0 = max(0, -rel_col)
+
+                    copy_h = min(src_h - src_r0, dst_h - dst_r0)
+                    copy_w = min(src_w - src_c0, dst_w - dst_c0)
+
+                    if copy_h > 0 and copy_w > 0:
+                        out[dst_r0 : dst_r0 + copy_h, dst_c0 : dst_c0 + copy_w] = (
+                            src_crop[src_r0 : src_r0 + copy_h, src_c0 : src_c0 + copy_w]
+                        )
+                    return out
+
+    from rasterio.crs import CRS as RioCRS
+    from rasterio.enums import Resampling
+    from rasterio.io import MemoryFile
+    from rasterio.merge import merge as rio_merge
 
     profile = {
         "driver": "GTiff",
