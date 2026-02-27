@@ -1,6 +1,30 @@
 # Changelog
 
-## v0.3.0 (unreleased)
+## v0.3.1
+
+### Added
+
+- **`as_collection()`**: lightweight re-entry from an in-memory Arrow
+  table or dataset back into a Collection. Validates contract columns
+  and COG band metadata structs without re-running ingest, enrichment,
+  or persistence. Use this after enriching a Collection's table with
+  DuckDB, Polars, PyArrow, or any other tool.
+  See [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md).
+
+### Changed
+
+- **Lifecycle docs**: all entry points (`build*`, `load`, `as_collection`)
+  now cross-reference each other in docstrings and how-to guides.
+  Contributing guide updated with four-layer architecture
+  (Build → Query → Read → Re-entry).
+- Major TOM on-the-fly example uses `as_collection()` + explicit
+  `export()` instead of `build_from_table(enrich_cog=False)`.
+  `enrich_major_tom_columns()` now preserves `year`/`month` partition
+  columns from the base Collection.
+
+---
+
+## v0.3.0
 
 ### Highlights
 
