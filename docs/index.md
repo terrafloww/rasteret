@@ -17,11 +17,13 @@
 !!! success "What Rasteret does"
 
     Parse headers **once**, cache in Parquet, read pixels concurrently
-    with no GDAL in the path.
+    with no GDAL in the path. Because the index is Parquet, it's also
+    the table you work with - filter, join, enrich, and query with
+    standard tools before you ever fetch a pixel.
 
     ```text
-    STAC API / GeoParquet  -->  Parquet Index  -->  Tile-level byte reads
-           (once)                 (queryable)          (no GDAL, no headers)
+    STAC API / GeoParquet  -->  Collection (Parquet)  -->  Tile-level byte reads
+           (once)              (queryable, enrichable)       (no GDAL, no headers)
     ```
 
 ---
@@ -55,6 +57,21 @@
 
     Same Parquet index = same records = same results.
     Share a few MB file and collaborators skip re-indexing.
+
+-   :material-table-edit:{ .lg .middle } **Your dataset is a table**
+
+    ---
+
+    Filter, join, enrich with DuckDB or PyArrow. Add splits,
+    labels, and quality flags as columns. The index is the dataset.
+
+-   :material-swap-horizontal:{ .lg .middle } **Any Parquet with COG URLs**
+
+    ---
+
+    `build_from_table()` turns existing GeoParquet into a
+    Collection. Source Cooperative exports, STAC GeoParquet,
+    custom catalogs - if it has URLs, Rasteret can read it.
 
 </div>
 

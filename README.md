@@ -25,17 +25,22 @@ Rasteret parses those headers **once**, caches them in Parquet, and its
 own reader fetches pixels concurrently with no GDAL in the path.
 **Up to 20x faster** on cold starts.
 
+Because the index is Parquet, it's not just a cache - it's a table you
+work with. Filter by cloud cover or date range, join with your own labels
+or AOI polygons, add train/val/test splits as columns, query with DuckDB
+or PyArrow. When you need pixels, Rasteret fetches them on demand from the
+same table.
+
 - **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
 - **Zero downloads** - work with terabytes of imagery while storing only megabytes of metadata
 - **No STAC at training time** - query once at setup; zero API calls during training
 - **Reproducible** - same Parquet index = same records = same results
 - **Native dtypes** - uint16 stays uint16 in tensors; xarray promotes only when NaN fill requires it
-- **Shareable cache** - a few MB index can capture scene selection, band metadata, and split assignments
+- **Your dataset is a table** - filter, enrich, version, and share a few MB Parquet file. The selection logic lives next to the data references.
 
-Rasteret is an **opt-in accelerator** that integrates with TorchGeo by
-returning a standard `GeoDataset`. Your samplers, DataLoader, xarray
-workflows, and analysis tools stay the same - Rasteret handles the async
-tile I/O underneath.
+Rasteret integrates with TorchGeo by returning a standard `GeoDataset`.
+Your samplers, DataLoader, xarray workflows, and analysis tools stay the
+same - Rasteret handles the async tile I/O underneath.
 
 ---
 
