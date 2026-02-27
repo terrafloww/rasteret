@@ -132,7 +132,7 @@ large (terabytes). This makes the Collection practical to share:
 
 - **Team workflows**: one person indexes 10,000 scenes, team members
   load the same index file and get identical accelerated reads.
-- **Academic Paper reproduction**: share a 5 MB Parquet file instead of
+- **Academic Paper reproduction**: share a few MB Parquet file instead of
   terabytes of imagery. A collaborator loads it, reads pixels from the
   same remote COGs, and gets the same results.
 - **CI/CD**: commit the index to version control. The training pipeline

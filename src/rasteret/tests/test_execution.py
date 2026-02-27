@@ -11,13 +11,19 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
+import numpy as np
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import xarray as xr
 
 from rasteret.core.collection import Collection
-from rasteret.core.execution import _detect_target_crs, get_collection_xarray
+from rasteret.core.execution import (
+    _detect_target_crs,
+    get_collection_numpy,
+    get_collection_xarray,
+)
 from rasteret.core.utils import infer_data_source, run_sync
 
 
@@ -131,6 +137,72 @@ class TestXarrayMerge:
                     data_source="sentinel-2-l2a",
                 )
         assert excinfo.value.__cause__ is first
+
+
+class TestNumpyOutput:
+    def test_numpy_stack_multiband(self):
+        frame = pd.DataFrame(
+            {
+                "band": ["B02", "B08", "B02", "B08"],
+                "data": [
+                    np.ones((2, 2), dtype=np.uint16),
+                    np.full((2, 2), 2, dtype=np.uint16),
+                    np.full((2, 2), 3, dtype=np.uint16),
+                    np.full((2, 2), 4, dtype=np.uint16),
+                ],
+            }
+        )
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([frame], [])),
+            ),
+        ):
+            out = get_collection_numpy(
+                collection=None,  # unused due patched _load_collection_data
+                geometries=[],
+                bands=["B02", "B08"],
+                data_source="sentinel-2-l2a",
+            )
+
+        assert out.shape == (2, 2, 2, 2)
+        assert out.dtype == np.uint16
+        assert np.all(out[0, 0] == 1)
+        assert np.all(out[0, 1] == 2)
+        assert np.all(out[1, 0] == 3)
+        assert np.all(out[1, 1] == 4)
+
+    def test_numpy_ragged_raises(self):
+        frame = pd.DataFrame(
+            {
+                "band": ["B02", "B02"],
+                "data": [
+                    np.ones((2, 2), dtype=np.uint16),
+                    np.ones((3, 3), dtype=np.uint16),
+                ],
+            }
+        )
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([frame], [])),
+            ),
+        ):
+            with pytest.raises(ValueError, match="Ragged shapes"):
+                get_collection_numpy(
+                    collection=None,
+                    geometries=[],
+                    bands=["B02"],
+                    data_source="sentinel-2-l2a",
+                )
 
 
 class TestDetectTargetCrs:

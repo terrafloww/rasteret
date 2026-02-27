@@ -30,7 +30,7 @@ own reader fetches pixels concurrently with no GDAL in the path.
 - **No STAC at training time** - query once at setup; zero API calls during training
 - **Reproducible** - same Parquet index = same records = same results
 - **Native dtypes** - uint16 stays uint16 in tensors; xarray promotes only when NaN fill requires it
-- **Shareable cache** - a 5 MB index captures scene selection, band metadata, and split assignments
+- **Shareable cache** - a few MB index can capture scene selection, band metadata, and split assignments
 
 Rasteret is an **opt-in accelerator** that integrates with TorchGeo by
 returning a standard `GeoDataset`. Your samplers, DataLoader, xarray
@@ -40,6 +40,8 @@ tile I/O underneath.
 ---
 
 ## Installation
+
+Requires **Python 3.12+**.
 
 ```bash
 uv pip install rasteret
@@ -75,19 +77,19 @@ Rasteret ships with a growing catalog of datasets. Pick an ID and go:
 
 ```
 $ rasteret datasets list
-ID                          Name                                       Coverage       License        Auth
-earthsearch/sentinel-2-l2a  Sentinel-2 Level-2A                        global         proprietary    none
-earthsearch/landsat-c2-l2   Landsat Collection 2 Level-2               global         proprietary    required
-earthsearch/naip            NAIP                                       north-america  proprietary    required
-earthsearch/cop-dem-glo-30  Copernicus DEM 30m                         global         proprietary    none
-earthsearch/cop-dem-glo-90  Copernicus DEM 90m                         global         proprietary    none
-pc/sentinel-2-l2a           Sentinel-2 Level-2A (Planetary Computer)   global         proprietary    required
-pc/io-lulc-annual-v02       ESRI 10m Land Use/Land Cover               global         CC-BY-4.0      required
-pc/alos-dem                 ALOS World 3D 30m DEM                      global         proprietary    required
-pc/nasadem                  NASADEM                                    global         proprietary    required
-pc/esa-worldcover           ESA WorldCover                             global         CC-BY-4.0      required
-pc/usda-cdl                 USDA Cropland Data Layer                   conus          proprietary    required
-aef/v1-annual               AlphaEarth Foundation Embeddings (Annual)  global         CC-BY-4.0      none
+ID                          Name                                       Coverage       License              Auth
+earthsearch/sentinel-2-l2a  Sentinel-2 Level-2A                        global         proprietary(free)    none
+earthsearch/landsat-c2-l2   Landsat Collection 2 Level-2               global         proprietary(free)    required
+earthsearch/naip            NAIP                                       north-america  proprietary(free)    required
+earthsearch/cop-dem-glo-30  Copernicus DEM 30m                         global         proprietary(free)    none
+earthsearch/cop-dem-glo-90  Copernicus DEM 90m                         global         proprietary(free)    none
+pc/sentinel-2-l2a           Sentinel-2 Level-2A (Planetary Computer)   global         proprietary(free)    required
+pc/io-lulc-annual-v02       ESRI 10m Land Use/Land Cover               global         CC-BY-4.0            required
+pc/alos-dem                 ALOS World 3D 30m DEM                      global         proprietary(free)    required
+pc/nasadem                  NASADEM                                    global         proprietary(free)    required
+pc/esa-worldcover           ESA WorldCover                             global         CC-BY-4.0            required
+pc/usda-cdl                 USDA Cropland Data Layer                   conus          proprietary(free)    required
+aef/v1-annual               AlphaEarth Foundation Embeddings (Annual)  global         CC-BY-4.0            none
 ```
 
 Each entry includes license metadata and a `commercial_use` flag for quick
@@ -126,17 +128,18 @@ everything as Parquet. The next run loads in milliseconds.
 ### Inspect and filter
 
 ```python
-collection        # Collection('s2_training', source='sentinel-2-l2a', bands=13, records=47, crs=32643)
+collection        # Collection('s2_training', source='sentinel-2-l2a', bands=13, records=42, crs=32643)
 collection.bands  # ['B01', 'B02', ..., 'B12', 'SCL']
-len(collection)   # 47
+len(collection)   # 42
 
 
 # Filter in memory, no network calls
 filtered = collection.subset(cloud_cover_lt=15, date_range=("2024-03-01", "2024-06-01"))
 ```
 
-`subset()` accepts `cloud_cover_lt`, `date_range`, `bbox`, `geometries`, and
-`split`. For raw Arrow expressions, use `collection.where(expr)`.
+`subset()` accepts `cloud_cover_lt`, `date_range`, `bbox`, `geometries`,
+`split`, and `split_column` (when your split field uses a custom name).
+For raw Arrow expressions, use `collection.where(expr)`.
 
 ### ML training (TorchGeo)
 
@@ -162,6 +165,16 @@ ds = collection.get_xarray(
     bands=["B04", "B08"],
 )
 ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
+```
+
+### Fast arrays (NumPy)
+
+```python
+arr = collection.get_numpy(
+    geometries=(77.55, 13.01, 77.58, 13.08),
+    bands=["B04", "B08"],
+)
+# shape: [N, C, H, W] for multi-band, [N, H, W] for single-band
 ```
 
 <details>
@@ -209,6 +222,22 @@ for full methodology.
 ![Processing time comparison](./assets/benchmark_results.png)
 ![Speedup breakdown](./assets/benchmark_breakdown.png)
 
+### HF `datasets` baseline (Major TOM keyed patches)
+
+Baseline method: `datasets.load_dataset(...)` with Parquet filters
+(PyArrow-backed), compared against Rasteret prebuilt index reads.
+
+| Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
+|---:|---:|---:|---:|
+| 120 | 46.83 s | 12.09 s | **3.88x** |
+| 1000 | 771.59 s | 118.69 s | **6.50x** |
+
+![HF vs Rasteret processing time](./assets/benchmark_hf_results.png)
+![HF vs Rasteret speedup](./assets/benchmark_hf_speedup.png)
+
+For exploration workflows, Major TOM notebooks often use HF streaming
+generators; the table above uses the stronger HF parquet-filter path.
+
 Notebook: [`05_torchgeo_comparison.ipynb`](docs/tutorials/05_torchgeo_comparison.ipynb)
 
 > [!NOTE]
@@ -244,7 +273,7 @@ Full docs at **[terrafloww.github.io/rasteret](https://terrafloww.github.io/rast
 | | |
 |---|---|
 | [Getting Started](https://terrafloww.github.io/rasteret/getting-started/) | Installation and first steps |
-| [Tutorials](https://terrafloww.github.io/rasteret/tutorials/) | Six hands-on notebooks |
+| [Tutorials](https://terrafloww.github.io/rasteret/tutorials/) | Hands-on notebooks |
 | [How-To Guides](https://terrafloww.github.io/rasteret/how-to/) | Task-oriented recipes |
 | [API Reference](https://terrafloww.github.io/rasteret/reference/) | Auto-generated from source |
 | [Architecture](https://terrafloww.github.io/rasteret/explanation/architecture/) | Design decisions |

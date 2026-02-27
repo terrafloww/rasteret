@@ -9,7 +9,7 @@ management and advanced configuration.
 |-------|-------------|
 | [Build from Parquet](build-from-parquet.md) | Build a Collection from any Parquet with GeoTIFF URLs (Source Cooperative, STAC GeoParquet, custom catalogs) |
 | [AEF Embeddings](aef-embeddings.md) | Read AlphaEarth Foundation 64-band embeddings (built-in catalog dataset) |
-| [Enriched Parquet Workflows](enriched-parquet-workflows.md) | Add AOIs, splits, labels; query with DuckDB or PyArrow |
+| [Enriched Parquet Workflows](enriched-parquet-workflows.md) | Add AOIs, splits, labels; query with DuckDB/PyArrow; Major TOM-style enrichment |
 | [ML Training with Splits](ml-training-splits.md) | Train/val/test splits with TorchGeo integration |
 | [Multi-Dataset Training](multi-dataset-training.md) | Combine Collections with TorchGeo `&` / `|` operators or xarray merge |
 | [Collection Management](collection-management.md) | Build, persist, discover, filter, and share collections |

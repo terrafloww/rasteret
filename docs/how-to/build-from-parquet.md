@@ -24,6 +24,43 @@ Any Parquet file works as long as it has the four required columns:
 GeoTIFF/COG URLs). See the [Schema Contract](../explanation/schema-contract.md)
 for details.
 
+If you only have raw COG files (local paths or `s3://...` URLs), first
+create this record table yourself, then call `build_from_table()`.
+Rasteret does not scan folders/globs of TIFFs directly.
+
+### Starting from raw COG paths (local or S3)
+
+```python
+import geopandas as gpd
+import pandas as pd
+import rasteret
+from shapely.geometry import box
+
+rows = [
+    {
+        "id": "scene-001",
+        "datetime": "2024-01-15T10:32:11Z",
+        "geometry": box(77.50, 12.90, 77.70, 13.10),  # scene footprint in EPSG:4326
+        "assets": {
+            "B04": {"href": "s3://my-bucket/scenes/scene-001_B04.tif"},
+            "B08": {"href": "s3://my-bucket/scenes/scene-001_B08.tif"},
+        },
+    }
+]
+gdf = gpd.GeoDataFrame(pd.DataFrame(rows), geometry="geometry", crs="EPSG:4326")
+gdf.to_parquet("my-scenes.parquet")  # writes valid GeoParquet metadata
+
+collection = rasteret.build_from_table(
+    "my-scenes.parquet",
+    name="my-scenes",
+    enrich_cog=True,  # parse COG headers for accelerated reads
+)
+```
+
+!!! note
+    Rasteret works with local or remote COGs. It is primarily optimized for
+    remote tiled COG workflows, where index-first reads provide the largest gains.
+
 ---
 
 ## Build from a remote Parquet
@@ -104,7 +141,7 @@ to select which sample/band the asset refers to.
 
 By default, `build_from_table()` imports the Parquet as-is. The resulting
 Collection works for filtering and metadata queries, but cannot do fast
-tiled reads (`get_xarray()`, `get_gdf()`, `to_torchgeo_dataset()`) because
+tiled reads (`get_xarray()`, `get_gdf()`, `get_numpy()`, `to_torchgeo_dataset()`) because
 it has no cached tile offsets.
 
 Pass `enrich_cog=True` to parse COG headers from the asset URLs during
@@ -132,7 +169,7 @@ specifying only the bands you need saves time and storage.
     |----------|---------------------|
     | Filtering by time, location, cloud cover | No |
     | Exporting / sharing the Collection | No |
-    | `get_xarray()`, `get_gdf()` - reading pixels | **Yes** |
+    | `get_xarray()`, `get_gdf()`, `get_numpy()` - reading pixels | **Yes** |
     | `to_torchgeo_dataset()` - ML training | **Yes** |
 
     If you built from a STAC API via `build()` or `build_from_stac()`,

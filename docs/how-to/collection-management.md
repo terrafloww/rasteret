@@ -40,6 +40,13 @@ rasteret collections import my-collection \
   --record-table s3://my-bucket/stac-items.parquet
 ```
 
+!!! note
+    `collections import` materializes the record table as a local Collection.
+    For accelerated pixel reads (`get_xarray()`, `get_numpy()`, TorchGeo),
+    the table must include enriched COG header columns. Use Python
+    `build_from_table(..., enrich_cog=True)` when your source table is not
+    already enriched.
+
 ### List local collections
 
 ```bash
@@ -81,7 +88,9 @@ See [Dataset Catalog](dataset-catalog.md) for `register-local`,
 
 ### Naming and registry behavior
 
-- STAC builds use standardized names: `{custom}_{date-range}_{source-prefix}`.
+- STAC builds are written under `..._stac` directories.
+- With `date_range`, names are `{custom}_{date-range}_{source-prefix}_stac`.
+- Without `date_range` (static catalogs), names are `{custom}_{source}_stac`.
 - `custom` is normalised for filesystem safety (underscores become dashes).
 - `build_from_table()` and CLI `collections import` write collections as `{name}_records`.
 - Local Collections built/imported in a workspace are cached locally;
@@ -125,7 +134,8 @@ collection = rasteret.build_from_table(
 ```
 
 When `name` is provided, the collection is cached to
-`~/rasteret_workspace/{name}_records/` -- same behavior as `build_from_stac()`.
+`~/rasteret_workspace/{name}_records/`.
+`build_from_stac()` uses `..._stac/` directories.
 
 ### Inspect a collection
 

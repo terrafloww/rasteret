@@ -69,14 +69,21 @@ def test_collection_analysis_methods_delegate_to_execution_layer() -> None:
         patch(
             "rasteret.core.collection.get_collection_gdf", return_value="gdf-result"
         ) as mocked_gdf,
+        patch(
+            "rasteret.core.collection.get_collection_numpy",
+            return_value="numpy-result",
+        ) as mocked_numpy,
     ):
         xarray_result = collection.get_xarray(geometries=[], bands=["B04"])
         gdf_result = collection.get_gdf(geometries=[], bands=["B04"])
+        numpy_result = collection.get_numpy(geometries=[], bands=["B04"])
 
     mocked_xarray.assert_called_once()
     mocked_gdf.assert_called_once()
+    mocked_numpy.assert_called_once()
     assert xarray_result == "xarray-result"
     assert gdf_result == "gdf-result"
+    assert numpy_result == "numpy-result"
 
 
 def test_public_api_surface_is_collection_first() -> None:

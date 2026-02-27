@@ -50,6 +50,12 @@ rasteret datasets export-local local/my-collection ./my-collection.dataset.json
 rasteret datasets unregister-local local/my-collection
 ```
 
+!!! note
+    `rasteret collections import` materializes the record table as a local
+    collection. If you need accelerated pixel reads, ensure the source table
+    already contains enriched COG metadata, or build via Python
+    `build_from_table(..., enrich_cog=True)`.
+
 !!! note "Authenticated datasets"
 
     - **Planetary Computer (`pc/*`)**: install `rasteret[azure]` for SAS signing.
@@ -67,13 +73,14 @@ Use `--json` on most commands for script-friendly output.
 
     Collections are stored as Parquet datasets under
     `~/rasteret_workspace/` (or the directory set by `--workspace-dir`).
-    The directory name follows a convention:
+    The directory name depends on the build path:
 
     | Build method | Directory name |
     |---|---|
-    | `datasets build` / `build()` | `{name}_{daterange}_{source}_stac/` |
+    | `datasets build` / `build()` (STAC-backed descriptor) | `{name}_{daterange}_{source}_stac/` (or `{name}_{source}_stac/` when no date range) |
+    | `datasets build` / `build()` (GeoParquet-backed descriptor) | `{name}_records/` |
     | `collections import` / `build_from_table()` | `{name}_records/` |
-    | `collections build` / `build_from_stac()` | `{name}_{daterange}_{source}_stac/` |
+    | `collections build` / `build_from_stac()` | `{name}_{daterange}_{source}_stac/` (or `{name}_{source}_stac/` when no date range) |
 
     For example, `datasets build earthsearch/sentinel-2-l2a my_s2 --date-range 2024-01-01,2024-06-30`
     creates `~/rasteret_workspace/my-s2_202401-06_sentinel_stac/`.

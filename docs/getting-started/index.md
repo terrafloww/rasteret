@@ -30,6 +30,8 @@ Combine extras: `uv pip install "rasteret[xarray,aws]"`
     | `dev` | pytest, ruff, pre-commit | Running tests and linting |
     | `docs` | mkdocs + plugins | Building documentation locally |
 
+`get_numpy()` and `get_gdf()` are available in the base install (no extra needed).
+
 Verify the installation:
 
 ```bash
@@ -200,6 +202,19 @@ Pick whichever output fits your workflow:
     objects, or raw WKB. See [Build from Parquet](../how-to/build-from-parquet.md)
     for the Arrow-native path.
 
+=== "Fast arrays (NumPy)"
+
+    ```python
+    arr = collection.get_numpy(
+        geometries=(77.55, 13.01, 77.58, 13.08),
+        bands=["B04", "B08"],
+    )
+    # shape: [N, C, H, W] for multi-band, [N, H, W] for single-band
+    ```
+
+    Use this when you want direct NumPy output for custom ML/data pipelines
+    without xarray coordinates.
+
 That's it for the basics. Two calls: `build()` to index, then read pixels.
 
 !!! info "Data types"
@@ -215,6 +230,7 @@ That's it for the basics. Two calls: `build()` to index, then read pixels.
     | Dataset in the catalog (Sentinel-2, Landsat, NAIP, ...) | `rasteret.build("earthsearch/sentinel-2-l2a", ...)` |
     | Custom STAC API not in the catalog | `rasteret.build_from_stac(stac_api="...", ...)` |
     | Existing Parquet with COG URLs ([Source Cooperative](https://source.coop), STAC GeoParquet, custom) | `rasteret.build_from_table("s3://...parquet", ...)` |
+    | Raw local/S3 COG files (no STAC/Parquet index yet) | First create a Parquet record table (`id`, `datetime`, `geometry`, `assets`), then `build_from_table(..., enrich_cog=True)` |
     | Someone shared a Collection with you | `rasteret.load("path/to/collection/")` |
 
 **Sharing**: `collection.export("path/")` writes a portable copy. Your teammate runs `rasteret.load("path/")`.

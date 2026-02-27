@@ -20,7 +20,7 @@ Prerequisites:
 
 | # | Notebook | What it covers |
 |---|----------|---------------|
-| 01 | `01_quickstart_xarray.ipynb` | STAC -> Collection -> `get_xarray()` -> NDVI |
+| 01 | `01_quickstart.ipynb` | STAC -> Collection -> `get_xarray()`/`get_numpy()`/`get_gdf()` -> NDVI |
 | 02 | `02_torchgeo_09_accelerator.ipynb` | Collection -> TorchGeo 0.9.0 `GeoDataset` -> sampler -> DataLoader |
 | 03 | `03_parquet_first_filtering.ipynb` | Save/load Parquet, `subset()`, `where()`, `build_from_table()` |
 | 04 | `04_custom_cloud_and_bands.ipynb` | `CloudConfig.register()`, `BandRegistry.register()`, `ObstoreBackend` |

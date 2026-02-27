@@ -19,7 +19,11 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-from rasteret.core.execution import get_collection_gdf, get_collection_xarray
+from rasteret.core.execution import (
+    get_collection_gdf,
+    get_collection_numpy,
+    get_collection_xarray,
+)
 from rasteret.core.raster_accessor import RasterAccessor
 from rasteret.types import RasterInfo
 
@@ -1193,6 +1197,59 @@ class Collection:
         if backend is None:
             backend = self._auto_backend(cloud_config, data_source)
         return get_collection_gdf(
+            collection=self,
+            geometries=geometries,
+            bands=bands,
+            data_source=data_source,
+            max_concurrent=max_concurrent,
+            backend=backend,
+            target_crs=target_crs,
+            **filters,
+        )
+
+    def get_numpy(
+        self,
+        geometries: Any,
+        bands: list[str],
+        *,
+        max_concurrent: int = 50,
+        cloud_config: Any = None,
+        data_source: str | None = None,
+        backend: Any = None,
+        target_crs: int | None = None,
+        **filters: Any,
+    ):
+        """Load selected bands into NumPy arrays.
+
+        Parameters
+        ----------
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict
+            Area(s) of interest to load.
+        bands : list of str
+            Band codes to load.
+        max_concurrent : int
+            Maximum concurrent HTTP requests.
+        cloud_config : CloudConfig, optional
+            Cloud configuration for URL rewriting.
+        data_source : str, optional
+            Override the inferred data source.
+        backend : StorageBackend, optional
+            Pluggable I/O backend.
+        target_crs : int, optional
+            Reproject all records to this CRS before assembly.
+        filters : kwargs
+            Additional keyword arguments passed to :meth:`subset`.
+
+        Returns
+        -------
+        numpy.ndarray
+            Single-band queries return ``[N, H, W]``.
+            Multi-band queries return ``[N, C, H, W]`` in requested band order.
+        """
+        self._validate_bands(bands)
+        if backend is None:
+            backend = self._auto_backend(cloud_config, data_source)
+        return get_collection_numpy(
             collection=self,
             geometries=geometries,
             bands=bands,

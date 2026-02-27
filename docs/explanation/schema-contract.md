@@ -179,7 +179,7 @@ Load the Collection's table, add columns with PyArrow, rebuild with
 
 ### Execution layer
 
-`Collection.get_xarray(...)` and `Collection.get_gdf(...)` iterate
+`Collection.get_numpy(...)`, `Collection.get_xarray(...)`, and `Collection.get_gdf(...)` iterate
 rasters via `Collection.iterate_rasters()`, which needs:
 
 - All four required columns
@@ -205,5 +205,5 @@ When introducing a new ingestion source:
 1. Emit the required core columns exactly as above.
 2. Use `build_collection_from_table()` for normalisation.
 3. Call `enrich_table_with_cog_metadata()` if the source has COG assets.
-4. Add a smoke test that creates a Collection and runs [`get_xarray()`](../reference/core/execution.md)
+4. Add a smoke test that creates a Collection and runs [`get_numpy()`](../reference/core/collection.md) or [`get_xarray()`](../reference/core/collection.md)
    on a small geometry.

@@ -26,6 +26,8 @@ Collection  (Arrow dataset wrapper)
     |
     +--> get_xarray()           --> xr.Dataset
     |
+    +--> get_numpy()            --> np.ndarray
+    |
     +--> get_gdf()              --> gpd.GeoDataFrame
     |
     +--> iterate_rasters()      --> async RasterAccessor stream
@@ -67,7 +69,7 @@ implementation details used to keep read-time code simple and fast.
 object. It wraps a `pyarrow.dataset.Dataset` and provides:
 
 - **Filtering**: [`subset()`](../reference/core/collection.md), [`where()`](../reference/core/collection.md), `select_split()`
-- **Output adapters**: [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md), [`get_xarray()`](../reference/core/execution.md), [`get_gdf()`](../reference/core/execution.md)
+- **Output adapters**: [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md), [`get_numpy()`](../reference/core/collection.md), [`get_xarray()`](../reference/core/collection.md), [`get_gdf()`](../reference/core/collection.md)
 - **Export**: [`export()`](../reference/core/collection.md)
 - **Discovery**: [`list_collections()`](../reference/core/collection.md)
 
@@ -124,7 +126,7 @@ partition columns.
 
 Rasteret pre-parses COG headers at index time and stores them in a local
 Parquet dataset. Subsequent reads skip all header fetching and jump straight
-to pixel byte ranges, cutting latency by over 20x.
+to pixel byte ranges, cutting latency by up to 20x.
 
 For a full discussion of why Parquet over Zarr manifests, JSON, or SQLite,
 see [Design Decisions](design-decisions.md#why-parquet-indexes).

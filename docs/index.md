@@ -54,7 +54,7 @@
     ---
 
     Same Parquet index = same records = same results.
-    Share a 5 MB file and collaborators skip re-indexing.
+    Share a few MB file and collaborators skip re-indexing.
 
 </div>
 
@@ -89,7 +89,7 @@ Pick any ID and pass it to `build()`. For datasets not in the catalog, use
 !!! note "New here?"
 
     Start with [Getting Started](getting-started/index.md), then run
-    [Tutorial 01 - Quickstart: xarray](tutorials/01_quickstart_xarray.ipynb).
+    the [Quickstart tutorial](tutorials/01_quickstart.ipynb).
 
 ## How it works
 
@@ -105,11 +105,12 @@ sub = collection.subset(cloud_cover_lt=20, date_range=("2024-03-01", "2024-06-01
 
 # 3. Read pixels - pass a bbox, Arrow column, Shapely geometry, or WKB
 ds = sub.get_xarray(geometries=(-122.5, 37.7, -122.3, 37.9), bands=["B04", "B08"])
+arr = sub.get_numpy(geometries=(-122.5, 37.7, -122.3, 37.9), bands=["B04", "B08"])  # [N, C, H, W]
 dataset = sub.to_torchgeo_dataset(bands=["B04", "B03", "B02"])    # TorchGeo
 ```
 
 `build()` picks from a growing catalog of pre-registered datasets across
-Earth Search and Planetary Computer. For existing Parquet
+Earth Search, Planetary Computer, and AlphaEarth Foundation. For existing Parquet
 files - [Source Cooperative](https://source.coop) exports, STAC GeoParquet,
 or your own catalog - use `build_from_table()`.
 For multi-band COGs like [AlphaEarth Foundation embeddings](how-to/aef-embeddings.md),
@@ -119,13 +120,30 @@ See the [API Reference](reference/index.md) for full method signatures.
 
 ## Benchmarks
 
-![Rasteret vs TorchGeo benchmark](assets/benchmark_breakdown.png)
+![Rasteret vs TorchGeo benchmark](assets/benchmark_results.png)
 
 These are cold-start numbers: no HTTP cache, no OS page cache. Every new
 notebook kernel, VM, k8s pod, or CI runner starts cold. That is the
 real-world scenario, and where Rasteret's Parquet index matters most.
 
 For full methodology and numbers, see [Benchmarks](explanation/benchmark.md).
+
+### HF `datasets` baseline (Major TOM keyed patches)
+
+Baseline method: Hugging Face `datasets.load_dataset(...)` with Parquet
+filters (PyArrow-backed), compared against Rasteret prebuilt index reads.
+
+| Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
+|---:|---:|---:|---:|
+| 120 | 46.83 s | 12.09 s | **3.88x** |
+| 1000 | 771.59 s | 118.69 s | **6.50x** |
+
+![HF vs Rasteret processing time](assets/benchmark_hf_results.png)
+![HF vs Rasteret speedup](assets/benchmark_hf_speedup.png)
+
+Major TOM exploration notebooks commonly use HF streaming generators; this
+table uses the stronger parquet-filter baseline.
+See [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md#major-tom-style-enrichment) for the full Major TOM workflow.
 
 !!! tip "Share your speed-ups"
 

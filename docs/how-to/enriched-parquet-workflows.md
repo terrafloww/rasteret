@@ -121,11 +121,13 @@ ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
 ```python
 # Monthly breakdown by split
 con.sql("""
-    SELECT split, month, count(*) AS scenes,
+    SELECT split,
+           month(datetime) AS mo,
+           count(*) AS scenes,
            round(avg("eo:cloud_cover"), 1) AS avg_cloud
     FROM enriched
-    GROUP BY split, month
-    ORDER BY split, month
+    GROUP BY split, mo
+    ORDER BY split, mo
 """).show()
 
 # Scenes per AOI (when using multiple AOIs)
@@ -237,10 +239,75 @@ enriched = enriched.append_column(
 | Add columns | `pa.Table.append_column()` | Yes |
 | Export | `collection.export()` | Yes |
 | Query | DuckDB / `pyarrow.compute` / GeoPandas | Yes (zero-copy reads) |
-| Fetch pixels | `collection.get_xarray(geometries=arrow_col)` | Yes -- Arrow WKB/GeoArrow direct |
+| Fetch pixels | `collection.get_xarray(...)` or `collection.get_numpy(...)` | Yes -- Arrow WKB/GeoArrow direct |
 
 Rasteret accepts Arrow columns, WKB bytes, Shapely geometries, bbox tuples,
 and GeoJSON dicts. Arrow columns are the zero-copy preferred path.
 
 Rasteret builds the index. You own the enrichment. Arrow tools query it.
 Rasteret fetches the pixels.
+
+## Major TOM-style enrichment
+
+Use this pattern when you want Major TOM-like metadata ergonomics but keep
+image bytes in source Sentinel-2 COGs. Parquet stays the control plane;
+Rasteret reads pixels directly from remote COGs.
+
+This gives you:
+
+- Major TOM-style keys in your Rasteret index (`major_tom_product_id`, `major_tom_grid_cell`)
+- Deterministic `train/val/test` split column at index level
+- Arrow-native geometry -> `get_numpy()` retrieval path (no per-row Python geometry conversion)
+
+### Build a Major TOM-style index from Sentinel-2
+
+Install the helper once:
+
+```bash
+pip install git+https://github.com/ESA-PhiLab/Major-TOM
+```
+
+Run the example script:
+
+```bash
+python examples/major_tom_on_the_fly_collection.py \
+  --name major-tom-on-the-fly \
+  --bbox -122.55 37.65 -122.30 37.90 \
+  --date-range 2024-01-01 2024-02-01 \
+  --samples 24 \
+  --bands B02 B08
+```
+
+What it does:
+
+1. Builds a Sentinel-2 Collection from the catalog
+2. Uses `majortom.grid.Grid` on scene centroids to derive `major_tom_grid_cell`
+3. Uses STAC `s2:product_uri` (without `.SAFE`) as `major_tom_product_id`
+4. Adds deterministic split labels from `grid_cell`
+5. Constructs per-scene patch geometries from scene centers, chip size, and resolution
+6. Fetches chips with `Collection.get_numpy()` scene-batched via Arrow WKB geometry
+
+### Retrieve pixels from Arrow geometry
+
+Retrieval is scene-batched: patches are grouped by `major_tom_product_id`,
+and each scene's patches are fetched in one `get_numpy()` call with an
+Arrow WKB geometry array:
+
+```python
+subset = collection.subset(split="train")
+scene_view = subset.where(ds.field("major_tom_product_id") == product_id)
+arr = scene_view.get_numpy(geometries=patch_wkb_array, bands=["B02", "B08"])
+```
+
+### Throughput vs HF best-practice baseline
+
+Measured on **February 26, 2026** with matched Major TOM keys:
+
+| Patches | HF `datasets` parquet filters (best-practice) | Rasteret index+COG | Speedup |
+|---:|---:|---:|---:|
+| 120 | 46.83 s | 12.09 s | 3.88x |
+| 1000 | 771.59 s | 118.69 s | 6.50x |
+
+Baseline method: Hugging Face `datasets.load_dataset(...)` with Parquet filters
+(PyArrow-backed) for keyed retrieval. This is a stronger baseline than the
+streaming-generator style commonly used in Major TOM exploration notebooks.

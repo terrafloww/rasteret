@@ -70,6 +70,7 @@ examples/outputs/
 # Claude Code
 .claude/
 CLAUDE.md
+AGENTS.md
 
 # Local scratch
 .plan.md

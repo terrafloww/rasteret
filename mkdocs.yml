@@ -2,7 +2,7 @@ site_name: Rasteret
 site_url: https://terrafloww.github.io/rasteret
 site_description: >-
   Index-first access to cloud-native GeoTIFF collections for ML and analysis.
-  A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), over 20x faster reads.
+  A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), up to 20x faster reads.
 site_author: Terrafloww Labs, Inc.
 repo_url: https://github.com/terrafloww/rasteret
 repo_name: terrafloww/rasteret
@@ -89,7 +89,7 @@ plugins:
       full_output: llms-full.txt
       markdown_description: >-
         Index-first access to cloud-native GeoTIFF collections for ML and analysis.
-        A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), over 20x faster reads.
+        A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), up to 20x faster reads.
       sections:
         Getting Started:
           - getting-started/index.md
@@ -132,7 +132,7 @@ nav:
   - Getting Started: getting-started/index.md
   - Tutorials:
     - tutorials/index.md
-    - "Quickstart: xarray": tutorials/01_quickstart_xarray.ipynb
+    - "Quickstart": tutorials/01_quickstart.ipynb
     - TorchGeo Integration: tutorials/02_torchgeo_09_accelerator.ipynb
     - Building from Parquet: tutorials/06_non_stac_cog_collections.ipynb
     - Parquet-first Filtering: tutorials/03_parquet_first_filtering.ipynb
@@ -151,7 +151,6 @@ nav:
   - Explanation:
     - explanation/index.md
     - Architecture: explanation/architecture.md
-    - Compatibility Matrix: explanation/compatibility-matrix.md
     - Design Decisions: explanation/design-decisions.md
     - Correctness Contract: explanation/correctness.md
     - Schema Contract: explanation/schema-contract.md

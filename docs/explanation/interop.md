@@ -13,6 +13,10 @@ support stabilizes.
 
 ### TorchGeo
 
+!!! note "Version requirement"
+    Rasteret requires **TorchGeo >= 0.9.0**. Earlier versions use a different
+    `GeoDataset` index structure that is incompatible with the adapter.
+
 `Collection.to_torchgeo_dataset()` returns a standard TorchGeo
 [`GeoDataset`](../reference/integrations/torchgeo.md). Your samplers,
 DataLoader, and training loop do not change.
@@ -84,18 +88,19 @@ When records in a collection have different native resolutions, Rasteret warns
 at dataset creation time. The read path resamples each tile to the query grid
 correctly regardless.
 
-See [Tutorial 02](../tutorials/02_torchgeo_09_accelerator.ipynb) and
-[Tutorial 05](../tutorials/05_torchgeo_comparison.ipynb).
+See [TorchGeo Integration](../tutorials/02_torchgeo_09_accelerator.ipynb) and
+[TorchGeo Benchmark](../tutorials/05_torchgeo_comparison.ipynb).
 
-### xarray / GeoPandas
+### xarray / GeoPandas / NumPy
 
 Rasteret handles the I/O (async byte-range reads via obstore), then hands
-off to standard xarray and GeoPandas objects for analysis:
+off to standard xarray, GeoPandas, or NumPy outputs:
 
-- [`Collection.get_xarray(...)`](../reference/core/execution.md) returns an `xr.Dataset`
-- [`Collection.get_gdf(...)`](../reference/core/execution.md) returns a `gpd.GeoDataFrame`
+- [`Collection.get_xarray(...)`](../reference/core/collection.md) returns an `xr.Dataset`
+- [`Collection.get_gdf(...)`](../reference/core/collection.md) returns a `gpd.GeoDataFrame`
+- [`Collection.get_numpy(...)`](../reference/core/collection.md) returns NumPy arrays (`[N, H, W]` or `[N, C, H, W]`)
 
-See [Tutorial 01](../tutorials/01_quickstart_xarray.ipynb).
+See [Quickstart](../tutorials/01_quickstart.ipynb).
 
 #### CRS encoding
 
@@ -124,7 +129,7 @@ by Rasteret reads.
 When a query spans records from multiple CRS zones (e.g., adjacent UTM
 zones), Rasteret auto-detects this and reprojects all tiles to the most
 common CRS before merging. A warning is logged. Pass `target_crs=` to
-`get_xarray()` or `get_gdf()` to override.
+`get_xarray()`, `get_numpy()`, or `get_gdf()` to override.
 
 ### rasterio
 
@@ -170,7 +175,7 @@ metadata.
 
 | Your data | Recommendation |
 |-----------|---------------|
-| Cloud-hosted tiled GeoTIFFs (Sentinel-2, Landsat, etc.) | Rasteret (over 20x faster) |
+| Cloud-hosted tiled GeoTIFFs (Sentinel-2, Landsat, etc.) | Rasteret (up to 20x faster) |
 | Local tiled GeoTIFFs | Rasteret works; speedup is smaller, but the index is still useful for filtering and sharing |
 | Non-tiled GeoTIFFs (striped layout) | TorchGeo / rasterio |
 | Non-TIFF formats (NetCDF, HDF5, GRIB) | TorchGeo / rasterio |

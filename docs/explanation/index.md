@@ -9,7 +9,6 @@ way it does.
 - [Schema Contract](schema-contract.md): column guarantees for contributors building ingest drivers
 - [Ecosystem Comparison](interop.md): how Rasteret relates to TorchGeo, xarray, rasterio, and similar tools
 - [Benchmarks](benchmark.md): apples-to-apples performance comparison
-- [Compatibility Matrix](compatibility-matrix.md): supported Python, dependency, and format versions
 - [TorchGeo Benchmark](../tutorials/05_torchgeo_comparison.ipynb): interactive notebook - Rasteret vs TorchGeo native, side-by-side
 
 Every design choice here (Parquet indexes, open catalog descriptors, decoupled
