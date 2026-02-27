@@ -179,6 +179,8 @@ def enrich_major_tom_columns(base: "rasteret.Collection", grid_km: int) -> pa.Ta
         "bbox_miny",
         "bbox_maxx",
         "bbox_maxy",
+        "year",
+        "month",
         "s2:product_uri",
         "collection",
     ]:
@@ -364,17 +366,14 @@ def main() -> None:
     print(f"base_rows={base.dataset.count_rows()}")
 
     enriched_table = enrich_major_tom_columns(base, args.grid_km)
-    enriched = rasteret.build_from_table(
+    enriched = rasteret.as_collection(
         enriched_table,
         name=args.name,
-        data_source="sentinel-2-l2a",
-        workspace_dir=args.workspace,
-        enrich_cog=False,
-        max_concurrent=args.max_concurrent,
-        force=True,
     )
+    collection_path = args.workspace / f"{args.name}_records"
+    enriched.export(collection_path)
     print(f"enriched_rows={enriched.dataset.count_rows()}")
-    print(f"collection_path={args.workspace / f'{args.name}_records'}")
+    print(f"collection_path={collection_path}")
 
     if args.metadata_path:
         report_metadata_overlap(enriched, args.metadata_path)

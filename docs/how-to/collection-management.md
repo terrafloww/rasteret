@@ -105,6 +105,14 @@ To make a local Collection appear in `rasteret datasets list`, see
 
 ## Python API
 
+### Choose the right entry point
+
+| Goal | Use | What it does |
+|---|---|---|
+| Ingest external STAC/Parquet into Rasteret schema | `build()`, `build_from_stac()`, `build_from_table()` | Normalizes schema, can enrich COG metadata, can persist cache |
+| Reopen an existing Collection artifact | `load(path)` | Opens an already-materialized Parquet collection |
+| Re-wrap an in-memory read-ready Arrow object | `as_collection(table)` | Validates required columns and wraps without rebuild |
+
 ### Build from STAC
 
 See [`build_from_stac()`](../reference/rasteret.md) API reference.

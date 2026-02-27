@@ -7,9 +7,18 @@ Most users need only a few of these:
 - **`build()`** - build a Collection from the [catalog](../how-to/dataset-catalog.md) by ID.
 - **`build_from_stac()`** / **`build_from_table()`** - full-control builders for STAC APIs or existing Parquet.
 - **`load()`** - reload a previously built Collection from Parquet.
+- **`as_collection()`** - wrap a read-ready Arrow table/dataset as a Collection (no enrich/persist).
 - **`register()`** - add a custom catalog entry to the in-memory registry.
 - **`register_local()`** - register a local Collection as a catalog entry (persists to `~/.rasteret/datasets.local.json`).
 - **`create_backend()`** - create an authenticated I/O backend for [multi-cloud reads](../how-to/custom-cloud-provider.md).
+
+Entrypoint semantics:
+
+| Function | Use when | Rebuild/enrich? |
+|---|---|---|
+| `build()` / `build_from_stac()` / `build_from_table()` | Ingesting external sources into Rasteret schema | Yes |
+| `load()` | Reopening an existing persisted Collection | No |
+| `as_collection()` | Re-wrapping a read-ready Arrow table/dataset in memory | No |
 
 See [Getting Started](../getting-started/index.md) for usage examples.
 
@@ -19,6 +28,7 @@ See [Getting Started](../getting-started/index.md) for usage examples.
         - build
         - build_from_stac
         - build_from_table
+        - as_collection
         - create_backend
         - load
         - register

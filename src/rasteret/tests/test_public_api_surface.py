@@ -91,6 +91,7 @@ def test_public_api_surface_is_collection_first() -> None:
     assert "build_from_stac" in exported
     assert "load" in exported
     assert "build_from_table" in exported
+    assert "as_collection" in exported
     assert "Collection" in exported
     assert "BandRegistry" in exported
 
@@ -148,3 +149,97 @@ def test_from_parquet_fallback_to_non_hive() -> None:
         _write_minimal_flat_collection(path)
         collection = Collection.from_parquet(path)
         assert isinstance(collection, Collection)
+
+
+def _minimal_read_ready_table() -> pa.Table:
+    metadata_type = pa.struct(
+        [
+            ("image_width", pa.int32()),
+            ("image_height", pa.int32()),
+            ("tile_width", pa.int32()),
+            ("tile_height", pa.int32()),
+            ("dtype", pa.string()),
+            ("transform", pa.list_(pa.float64())),
+            ("predictor", pa.int32()),
+            ("compression", pa.int32()),
+            ("tile_offsets", pa.list_(pa.int64())),
+            ("tile_byte_counts", pa.list_(pa.int64())),
+            ("pixel_scale", pa.list_(pa.float64())),
+            ("tiepoint", pa.list_(pa.float64())),
+            ("nodata", pa.float64()),
+            ("samples_per_pixel", pa.int32()),
+            ("planar_configuration", pa.int32()),
+            ("photometric", pa.int32()),
+            ("extra_samples", pa.list_(pa.int32())),
+        ]
+    )
+    return pa.table(
+        {
+            "id": pa.array(["scene-1"]),
+            "datetime": pa.array([datetime(2024, 1, 1)], type=pa.timestamp("us")),
+            "geometry": pa.array([None], type=pa.null()),
+            "assets": pa.array([{"B04": {"href": "https://example.com/test.tif"}}]),
+            "scene_bbox": pa.array(
+                [[0.0, 0.0, 1.0, 1.0]], type=pa.list_(pa.float64(), 4)
+            ),
+            "collection": pa.array(["sentinel-2-l2a"]),
+            "B04_metadata": pa.array(
+                [
+                    {
+                        "image_width": 512,
+                        "image_height": 512,
+                        "tile_width": 256,
+                        "tile_height": 256,
+                        "dtype": "uint16",
+                        "transform": [10.0, 0.0, 0.0, 0.0, -10.0, 0.0],
+                        "predictor": 2,
+                        "compression": 8,
+                        "tile_offsets": [0, 1024, 2048, 3072],
+                        "tile_byte_counts": [1024, 1024, 1024, 1024],
+                        "pixel_scale": [10.0, 10.0, 0.0],
+                        "tiepoint": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        "nodata": None,
+                        "samples_per_pixel": 1,
+                        "planar_configuration": 1,
+                        "photometric": 1,
+                        "extra_samples": None,
+                    }
+                ],
+                type=metadata_type,
+            ),
+        }
+    )
+
+
+def test_as_collection_wraps_read_ready_table() -> None:
+    table = _minimal_read_ready_table()
+    collection = rasteret.as_collection(table, name="wrapped")
+    assert isinstance(collection, Collection)
+    assert collection.name == "wrapped"
+    assert collection.data_source == "sentinel-2-l2a"
+
+
+def test_as_collection_requires_scene_bbox() -> None:
+    table = _minimal_read_ready_table().drop_columns(["scene_bbox"])
+    with pytest.raises(ValueError, match="missing required columns"):
+        rasteret.as_collection(table)
+
+
+def test_as_collection_requires_metadata_by_default() -> None:
+    table = _minimal_read_ready_table().drop_columns(["B04_metadata"])
+    with pytest.raises(ValueError, match="No '\\*_metadata' columns found"):
+        rasteret.as_collection(table)
+
+
+def test_as_collection_allows_metadata_optional_mode() -> None:
+    table = _minimal_read_ready_table().drop_columns(["B04_metadata"])
+    collection = rasteret.as_collection(table, require_band_metadata=False)
+    assert isinstance(collection, Collection)
+
+
+def test_as_collection_warns_for_large_in_memory_table(monkeypatch) -> None:
+    table = _minimal_read_ready_table()
+    monkeypatch.setattr(rasteret, "_total_ram_bytes", lambda: 512)
+    monkeypatch.setattr(rasteret, "_AS_COLLECTION_MEMORY_WARNING_EMITTED", False)
+    with pytest.warns(UserWarning, match="large in-memory pyarrow.Table"):
+        rasteret.as_collection(table, require_band_metadata=False)

@@ -231,9 +231,12 @@ That's it for the basics. Two calls: `build()` to index, then read pixels.
     | Custom STAC API not in the catalog | `rasteret.build_from_stac(stac_api="...", ...)` |
     | Existing Parquet with COG URLs ([Source Cooperative](https://source.coop), STAC GeoParquet, custom) | `rasteret.build_from_table("s3://...parquet", ...)` |
     | Raw local/S3 COG files (no STAC/Parquet index yet) | First create a Parquet record table (`id`, `datetime`, `geometry`, `assets`), then `build_from_table(..., enrich_cog=True)` |
+    | You already have a read-ready Arrow table from an existing Collection | `rasteret.as_collection(table, data_source=collection.data_source)` |
     | Someone shared a Collection with you | `rasteret.load("path/to/collection/")` |
 
 **Sharing**: `collection.export("path/")` writes a portable copy. Your teammate runs `rasteret.load("path/")`.
+
+`build*` functions ingest/normalize external data, `as_collection()` re-wraps read-ready in-memory Arrow objects, and `load()` reopens persisted artifacts.
 
 ---
 

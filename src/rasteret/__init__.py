@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import warnings
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_version
 from pathlib import Path
@@ -21,6 +24,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logging.getLogger("rasteret").addHandler(logging.NullHandler())
 
 logger = logging.getLogger(__name__)
+_AS_COLLECTION_MEMORY_WARNING_EMITTED = False
 
 
 def version() -> str:
@@ -585,11 +589,13 @@ def register_local(
 
 
 def load(path: str | Path, name: str = "") -> "Collection":
-    """Load an existing Rasteret Collection from Parquet.
+    """Load a persisted Rasteret Collection artifact from Parquet.
 
-    Use this when you've previously built a collection with
-    :func:`build_from_stac` or :func:`build_from_table` and want
-    to reload it.
+    Use this to reopen a collection previously written by
+    :func:`build`, :func:`build_from_stac`, :func:`build_from_table`,
+    or :meth:`rasteret.core.collection.Collection.export`.
+    If you already have a read-ready Arrow table/dataset in memory,
+    use :func:`as_collection` instead.
 
     Parameters
     ----------
@@ -605,6 +611,170 @@ def load(path: str | Path, name: str = "") -> "Collection":
     from rasteret.core.collection import Collection
 
     return Collection.from_parquet(path, name=name)
+
+
+def _total_ram_bytes() -> int | None:
+    """Best-effort total physical RAM in bytes."""
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        if isinstance(pages, int) and isinstance(page_size, int) and pages > 0:
+            return pages * page_size
+    except (AttributeError, OSError, ValueError):
+        pass
+    return None
+
+
+def as_collection(
+    table: "pa.Table | pads.Dataset",
+    *,
+    name: str = "",
+    data_source: str = "",
+    description: str = "",
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    require_band_metadata: bool = True,
+) -> "Collection":
+    """Wrap a read-ready Arrow object as a Collection.
+
+    This is the lightweight re-entry path for workflows where you already
+    have a table derived from an existing Collection and want to keep using
+    Rasteret reads without re-running ingest/enrichment.
+
+    Unlike :func:`build_from_table`, this function performs **no** COG
+    enrichment, normalization, or persistence. It validates the read contract
+    and wraps the provided Arrow object as-is.
+
+    Use :func:`build_from_table` for first-time external Parquet ingest.
+
+    Parameters
+    ----------
+    table : pyarrow.Table or pyarrow.dataset.Dataset
+        Arrow object to wrap. ``pyarrow.dataset.Dataset`` is recommended for
+        large collections to keep scans lazy. Despite the parameter name,
+        both table and dataset inputs are first-class.
+    name : str
+        Optional collection name.
+    data_source : str
+        Optional data source identifier. If omitted, Rasteret attempts to infer
+        it from schema metadata or the ``collection`` column.
+    description : str
+        Optional collection description.
+    start_date, end_date : datetime, optional
+        Optional temporal bounds to attach to the Collection object.
+    require_band_metadata : bool
+        When ``True`` (default), require at least one ``*_metadata`` column and
+        validate those columns are struct-typed with required COG metadata
+        fields.
+
+    Returns
+    -------
+    Collection
+        A wrapped Collection ready for ``get_numpy()``, ``get_xarray()``, and
+        ``to_torchgeo_dataset()`` when the necessary band metadata columns are
+        present.
+    """
+    import pyarrow as pa
+    import pyarrow.dataset as pads
+
+    from rasteret.core.collection import Collection
+    from rasteret.core.utils import infer_data_source_from_dataset
+
+    if not isinstance(table, (pa.Table, pads.Dataset)):
+        raise TypeError(
+            "as_collection() expects a pyarrow.Table or pyarrow.dataset.Dataset."
+        )
+
+    if isinstance(table, pa.Table):
+        global _AS_COLLECTION_MEMORY_WARNING_EMITTED
+        table_bytes = int(getattr(table, "nbytes", 0) or 0)
+        total_ram = _total_ram_bytes()
+        warn_large_absolute = table_bytes >= 2 * 1024**3
+        warn_large_ratio = (
+            total_ram is not None
+            and total_ram > 0
+            and (table_bytes / total_ram) >= 0.40
+        )
+        if (
+            warn_large_absolute or warn_large_ratio
+        ) and not _AS_COLLECTION_MEMORY_WARNING_EMITTED:
+            ram_text = (
+                f"{(table_bytes / total_ram):.0%} of system RAM"
+                if total_ram
+                else "a large fraction of system memory"
+            )
+            warnings.warn(
+                "as_collection() received a large in-memory pyarrow.Table "
+                f"({table_bytes / (1024**3):.2f} GiB, ~{ram_text}). For large "
+                "workloads, prefer a lazy pyarrow.dataset.Dataset or persist to "
+                "Parquet and use rasteret.load(...).",
+                UserWarning,
+                stacklevel=2,
+            )
+            _AS_COLLECTION_MEMORY_WARNING_EMITTED = True
+
+    dataset = pads.dataset(table) if isinstance(table, pa.Table) else table
+    schema_names = set(dataset.schema.names)
+
+    required = {"id", "datetime", "geometry", "assets", "scene_bbox"}
+    missing = required - schema_names
+    if missing:
+        raise ValueError(
+            f"Table is missing required columns for as_collection: {sorted(missing)}. "
+            "Use build_from_table(...) for external tables that still need "
+            "normalization."
+        )
+
+    if require_band_metadata:
+        metadata_columns = [
+            column for column in dataset.schema.names if column.endswith("_metadata")
+        ]
+        if not metadata_columns:
+            raise ValueError(
+                "No '*_metadata' columns found. as_collection() expects a "
+                "read-ready table. Use build_from_table(..., enrich_cog=True) "
+                "for first-time external ingest, or pass "
+                "require_band_metadata=False for metadata-only workflows."
+            )
+
+        required_meta_fields = {
+            "tile_offsets",
+            "tile_byte_counts",
+            "tile_width",
+            "tile_height",
+            "dtype",
+            "transform",
+        }
+        for column in metadata_columns:
+            field_type = dataset.schema.field(column).type
+            if not pa.types.is_struct(field_type):
+                raise ValueError(
+                    f"Column '{column}' must be a struct for as_collection()."
+                )
+            missing_fields = required_meta_fields - set(field_type.names)
+            if missing_fields:
+                raise ValueError(
+                    f"Column '{column}' is missing required metadata fields: "
+                    f"{sorted(missing_fields)}."
+                )
+
+    if start_date is not None and not isinstance(start_date, datetime):
+        raise TypeError("start_date must be a datetime when provided.")
+    if end_date is not None and not isinstance(end_date, datetime):
+        raise TypeError("end_date must be a datetime when provided.")
+
+    resolved_source = data_source or infer_data_source_from_dataset(dataset)
+
+    collection = Collection(
+        dataset=dataset,
+        name=name,
+        description=description,
+        data_source=resolved_source,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return collection
 
 
 def build_from_table(
@@ -627,12 +797,16 @@ def build_from_table(
     force: bool = False,
     backend: "StorageBackend | None" = None,
 ) -> "Collection":
-    """Build a Collection from a Parquet/GeoParquet record table.
+    """Build a Collection from an external Parquet/GeoParquet record table.
 
     A record table is a Parquet dataset where each row is a raster item
     (satellite scene, drone image, derived product, etc.) with at minimum
     ``id``, ``datetime``, ``geometry``, ``assets``, or columns that can
     be normalised into them via ``column_map`` and ``href_column``.
+
+    This is the heavy ingest path: it can normalize schema and optionally
+    enrich COG headers. For in-memory tables that are already read-ready,
+    use :func:`as_collection`.
 
     When ``enrich_cog=True``, COG headers are parsed from the asset URLs
     and cached as ``{band}_metadata`` struct columns in the Parquet index,
@@ -887,6 +1061,7 @@ __all__ = [
     "DatasetDescriptor",
     "DatasetRegistry",
     "__version__",
+    "as_collection",
     "build",
     "build_from_stac",
     "build_from_table",

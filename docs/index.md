@@ -17,13 +17,11 @@
 !!! success "What Rasteret does"
 
     Parse headers **once**, cache in Parquet, read pixels concurrently
-    with no GDAL in the path. Because the index is Parquet, it's also
-    the table you work with - filter, join, enrich, and query with
-    standard tools before you ever fetch a pixel.
+    with no GDAL in the path.
 
     ```text
-    STAC API / GeoParquet  -->  Collection (Parquet)  -->  Tile-level byte reads
-           (once)              (queryable, enrichable)       (no GDAL, no headers)
+    STAC API / GeoParquet  -->  Parquet Index  -->  Tile-level byte reads
+           (once)                 (queryable)          (no GDAL, no headers)
     ```
 
 ---
@@ -58,21 +56,6 @@
     Same Parquet index = same records = same results.
     Share a few MB file and collaborators skip re-indexing.
 
--   :material-table-edit:{ .lg .middle } **Your dataset is a table**
-
-    ---
-
-    Filter, join, enrich with DuckDB or PyArrow. Add splits,
-    labels, and quality flags as columns. The index is the dataset.
-
--   :material-swap-horizontal:{ .lg .middle } **Any Parquet with COG URLs**
-
-    ---
-
-    `build_from_table()` turns existing GeoParquet into a
-    Collection. Source Cooperative exports, STAC GeoParquet,
-    custom catalogs - if it has URLs, Rasteret can read it.
-
 </div>
 
 ---
@@ -99,7 +82,8 @@ One PR adds a dataset and every user gets access on the next release. No proprie
 [Design Decisions](explanation/design-decisions.md) for the thinking behind it.
 
 Pick any ID and pass it to `build()`. For datasets not in the catalog, use
-`build_from_stac()` or `build_from_table()`.
+`build_from_stac()` or `build_from_table()`. Reopen persisted collections with
+`load()`, or re-wrap read-ready Arrow tables with `as_collection()`.
 
 ---
 

@@ -16,10 +16,13 @@ Recommended sequence (matches sidebar order and notebook “Next” links):
 | [Configuring Custom Collections](04_custom_cloud_and_bands.ipynb) | Cloud configs, band mappings, and storage backends for non-built-in datasets |
 | [TorchGeo Benchmark](05_torchgeo_comparison.ipynb) | Side-by-side performance comparison with native TorchGeo |
 
-!!! tip "Which build function?"
+!!! tip "Which entry point?"
     **Quickstart** and **TorchGeo Integration** use `build()`, which looks up
     STAC API details from the [dataset catalog](../how-to/dataset-catalog.md).
     **Building from Parquet** uses `build_from_table()` for existing Parquet files.
+    For in-memory Arrow tables that are already read-ready, use
+    `as_collection()`.
+    For previously exported collections, use `load()`.
     For custom STAC APIs not in the catalog, use `build_from_stac()`; see
     [Collection Management](../how-to/collection-management.md).
 

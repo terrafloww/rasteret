@@ -21,14 +21,13 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 import shapely
 from shapely.geometry import Polygon
 
 import rasteret
 
 # Build collection from STAC
-collection = rasteret.build_from_stac(
+base = rasteret.build_from_stac(
     name="bangalore",
     stac_api="https://earth-search.aws.element84.com/v1",
     collection="sentinel-2-l2a",
@@ -38,7 +37,7 @@ collection = rasteret.build_from_stac(
 )
 
 # Get the Arrow table
-enriched = collection.dataset.to_table()
+enriched = base.dataset.to_table()
 n = enriched.num_rows
 ```
 
@@ -75,8 +74,15 @@ enriched = enriched.append_column("label", pa.array(labels, type=pa.int32()))
 ### Save
 
 ```python
-pq.write_table(enriched, "./experiment_v1.parquet")
-collection = rasteret.load("./experiment_v1.parquet")
+# Re-wrap in-memory (no rebuild), then persist if needed
+collection = rasteret.as_collection(
+    enriched,
+    name="experiment-v1",
+    data_source=base.data_source,
+)
+collection.export("./experiment_v1")
+# Reload from disk so later sections use the persisted, lazy dataset path.
+collection = rasteret.load("./experiment_v1")
 ```
 
 The enriched Parquet now contains scene metadata, COG tile cache, AOI
@@ -94,7 +100,7 @@ import duckdb
 
 import rasteret
 
-collection = rasteret.load("./experiment_v1.parquet")
+collection = rasteret.load("./experiment_v1")
 enriched = collection.dataset.to_table()
 
 con = duckdb.connect()
@@ -150,7 +156,7 @@ import pyarrow.compute as pc
 
 import rasteret
 
-collection = rasteret.load("./experiment_v1.parquet")
+collection = rasteret.load("./experiment_v1")
 enriched = collection.dataset.to_table()
 
 # Filter: train split, low cloud
@@ -180,7 +186,7 @@ import geopandas as gpd
 
 import rasteret
 
-collection = rasteret.load("./experiment_v1.parquet")
+collection = rasteret.load("./experiment_v1")
 enriched = collection.dataset.to_table()
 
 gdf = gpd.GeoDataFrame(

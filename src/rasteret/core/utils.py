@@ -51,11 +51,26 @@ def infer_data_source(collection: "Collection") -> str:
     if collection.data_source:
         return str(collection.data_source)
 
-    dataset = collection.dataset
+    return infer_data_source_from_dataset(collection.dataset)
+
+
+def infer_data_source_from_dataset(dataset: Any) -> str:
+    """Infer data source from a PyArrow dataset's metadata/columns.
+
+    Parameters
+    ----------
+    dataset : pyarrow.dataset.Dataset or None
+        Dataset backing a Collection.
+
+    Returns
+    -------
+    str
+        Inferred data source, or empty string when unknown.
+    """
     if dataset is None:
         return ""
 
-    metadata = dataset.schema.metadata or {}
+    metadata = getattr(dataset.schema, "metadata", {}) or {}
     raw = metadata.get(b"data_source")
     if raw:
         try:

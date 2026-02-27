@@ -9,6 +9,10 @@ Rasteret validates the schema, derives per-record bounding boxes from the
 GeoParquet `geometry` column, and produces a standard Collection backed by
 Arrow.
 
+Use this path for **first-time ingest** of external Parquet. If your table
+already came from a Rasteret Collection and you only appended columns, use
+`rasteret.as_collection(...)` to re-wrap it without rebuilding.
+
 ---
 
 ## Supported sources

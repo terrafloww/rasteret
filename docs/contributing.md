@@ -28,17 +28,18 @@ export ASYNC_TIFF_FIXTURES=/path/to/async-tiff/fixtures/image-tiff
 
 ## Architecture overview
 
-Rasteret has three layers. Every user interaction flows through them
+Rasteret has four layers. Every user interaction flows through them
 top-to-bottom:
 
 ```text
-BUILD                          QUERY                       READ
-─────                          ─────                       ────
-build_from_stac()         Collection.subset()         COGReader
-build_from_table()        Collection.where()          RasterAccessor
-rasteret collections build Collection.select_split()   header_parser
+BUILD                       QUERY                     READ                     RE-ENTRY
+─────                       ─────                     ────                     ────────
+build()                     Collection.subset()       COGReader                load()
+build_from_stac()           Collection.where()        RasterAccessor           as_collection()
+build_from_table()          Collection.select_split() header_parser
+rasteret collections build
 
-ingest/                   core/collection.py          fetch/cog.py
+ingest/                     core/collection.py        fetch/cog.py             __init__.py
   stac_indexer.py                                     fetch/header_parser.py
   parquet_record_table.py                             core/raster_accessor.py
   normalize.py                                        core/execution.py
@@ -54,6 +55,10 @@ No network access, no pixel reads.
 
 **READ** uses cached COG metadata from the Parquet index to fetch only the
 exact tiles needed. This is where the up to 20x speedup comes from.
+
+**RE-ENTRY** reuses already-ingested data. `load()` reopens persisted
+artifacts; `as_collection()` wraps read-ready Arrow tables/datasets without
+rebuilding.
 
 ## Correctness contract
 
@@ -232,7 +237,7 @@ these catalogs with client-side bbox/date filtering.
 ## Public API discipline
 
 - Keep the top-level `rasteret` surface small and intentional
-  (`build`, `build_from_stac`, `build_from_table`, `load`, `register`,
+  (`build`, `build_from_stac`, `build_from_table`, `load`, `as_collection`, `register`,
   `register_local`, `create_backend`, `version`, `Collection`,
   `CloudConfig`, `BandRegistry`, `DatasetDescriptor`, `DatasetRegistry`).
 - New user-facing APIs need a docstring and a smoke test.
