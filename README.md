@@ -32,12 +32,12 @@ Rasteret calls this pattern **index-first geospatial retrieval**:
 
 This keeps metadata and experiment logic in tables while leaving imagery bytes in source COGs.
 
-Key Features - 
+Key Features -
 - **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
-- **20x faster, saves cloud LISTs and GETs** - Our custom IO gets chunks of images fast, and costs no overhead a Collection is built  
+- **20x faster, saves cloud LISTs and GETs** - Our custom IO gets chunks of images fast, and costs no overhead a Collection is built
 - **Zero data downloads** - work with terabytes of imagery while storing only megabytes of metadata.
 - **No STAC at training time** - query once at setup; zero API calls during training with Collection you can extend.
-- **Reproducible** - same Parquet index = same records = same results 
+- **Reproducible** - same Parquet index = same records = same results
 - **Native dtypes** - In our IO image chunks of uint16 stays uint16 in tensors; only xarray conversion promotes to float32 to fill NaNs
 - **Shareable cache** - enrich our Collection with your ML splits, patch geometries, custom data points for ML, and share it, don't write folders of image chips!
 
@@ -82,8 +82,11 @@ See [Getting Started](https://terrafloww.github.io/rasteret/getting-started/) fo
 
 ## Built-in datasets
 
-Rasteret ships with a growing catalog of datasets. Pick an ID and go:
+Rasteret ships with a growing catalog of datasets.
+Each entry includes license metadata and a `commercial_use` flag for quick
+filtering.
 
+Pick an ID, pass it to `build()` and go:
 ```
 $ rasteret datasets list
 ID                          Name                                       Coverage       License              Auth
@@ -101,17 +104,19 @@ pc/esa-worldcover           ESA WorldCover                             global   
 pc/usda-cdl                 USDA Cropland Data Layer                   conus          proprietary(free)    required
 ```
 
-Each entry includes license metadata and a `commercial_use` flag for quick
-filtering.
 
-The catalog is open and community-driven. Each entry is ~20 lines of
-Python pointing to a STAC API or a GeoParquet file. One PR adds a dataset,
-every user gets access on the next release.
 
-Pick any ID and pass it to `build()`. Don't see your dataset? Use
-`build_from_stac()` for any STAC API, `build_from_table()` for existing
-Parquet, or [add it to the catalog](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#add-your-own-catalog-entries-advanced)
-so everyone benefits.
+## Use your own datasets
+- Use `build_from_stac()` for any STAC API
+- Use `build_from_table()` for Parquets that have TIFF URLs in them (eg., SourceCoop AlphaEarth index parquet)
+
+You can also build collections using CLI `rasteret collections build` read more details [here](https://terrafloww.github.io/rasteret/how-to/collection-management/)
+
+[Here's a guide to add a dataset to rasteret's catalog](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#add-your-own-catalog-entries-advanced)
+so everyone benefits. The catalog is open to edit by anyone and will be community-driven.
+
+Each new dataset entry is around ~20 lines of Python pointing to a STAC API or a GeoParquet file.
+One PR adds a dataset, every rasteret user sees it in `rasteret datasets list` on the next release of rasteret.
 
 ---
 
@@ -209,6 +214,16 @@ arr = collection.get_numpy(
 Processing pipeline: Filter 450,000 scenes -> 22 matches -> Read 44 COG files
 
 ![Single request performance](./assets/single_timeseries_request.png)
+
+#### Single Farm NDVI Time Series (1 Year, Landsat 9)
+
+Run on AWS t3.xlarge (4 CPU) —
+
+| Library | First Run | Subsequent Runs |
+|---------|-----------|-----------------|
+| **Rasterio** (Multiprocessing) | 32 s | 24 s |
+| **Rasteret** | 3 s | 3 s |
+| **Google Earth Engine** | 10–30 s | 3–5 s |
 
 ### Cold-start comparison with TorchGeo
 
