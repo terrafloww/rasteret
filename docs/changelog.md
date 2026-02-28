@@ -38,9 +38,10 @@
   Cooperative exports, STAC GeoParquet, custom catalogs). No STAC API
   required for the table path. Optional `enrich_cog=True` parses COG
   headers for accelerated reads.
-- **Multi-cloud obstore backend**: S3, Azure Blob, and GCS routing via URL
-  auto-detection, with automatic fallback to anonymous access.
-- **`create_backend()`** for authenticated reads with obstore credential
+- **Multi-cloud support**: S3, Azure Blob, and GCS routing via URL
+  auto-detection, with automatic fallback to anonymous access. obstore replaces
+  direct aiohttp as the HTTP transport, adding unified multi-cloud routing.
+- **`create_backend()`** for authenticated reads with credential
   providers (e.g., Planetary Computer SAS tokens).
 - **TorchGeo adapter**: `collection.to_torchgeo_dataset()` returns a
   `GeoDataset` backed by Rasteret's async COG reader. Supports
@@ -101,7 +102,7 @@
 ### Other changes
 
 - Arrow-native geometry internals (GeoArrow replaces Shapely in hot paths).
-- obstore as base dependency (Rust-native async HTTP).
+- obstore as base dependency (multi-cloud support).
 - CLI: `rasteret collections build|list|info|delete|import`,
   `rasteret datasets list|info|build|register-local|export-local|unregister-local`.
 - TorchGeo `time_series=True` uses spatial-only intersection, matching

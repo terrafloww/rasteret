@@ -543,9 +543,9 @@ class CogReadResult:
 class COGReader:
     """Manages connection pooling and COG reading operations.
 
-    Uses obstore (Rust-native HTTP via ``reqwest``) for all remote byte-range
-    reads.  Optionally accepts a custom :class:`~rasteret.cloud.StorageBackend`
-    for specialized I/O (e.g. a pre-configured ``S3Store``).
+    Manages Rasteret's custom async byte-range IO. Uses obstore as the HTTP
+    transport layer for multi-cloud URL routing.  Optionally accepts a custom
+    :class:`~rasteret.cloud.StorageBackend` (e.g. a pre-configured ``S3Store``).
 
     Parameters
     ----------

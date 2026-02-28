@@ -3,9 +3,8 @@
 ## Do you need this page?
 
 Most datasets work **without any authentication or configuration**. Rasteret's
-obstore backend routes URLs to native cloud stores (S3, Azure Blob, GCS)
-automatically, and public data like Sentinel-2 on Earth Search is read
-anonymously.
+IO layer automatically routes URLs to native cloud stores (S3, Azure Blob, GCS),
+and public data like Sentinel-2 on Earth Search is read anonymously.
 
 | Data source | Auth needed | What to do |
 |---|---|---|
@@ -82,7 +81,7 @@ ds = collection.get_xarray(
 )
 ```
 
-Rasteret auto-creates an obstore backend from the config at read time.
+Rasteret auto-creates a backend from the config at read time.
 For requester-pays buckets, AWS credentials are resolved automatically
 from environment variables or `~/.aws/credentials` via boto3.
 
@@ -107,10 +106,10 @@ For catalog datasets, the `data_source` is the catalog ID (e.g.
 should use with `CloudConfig.get_config(...)` if you want to inspect or
 override built-in behavior.
 
-## Multi-cloud obstore backend
+## Multi-cloud URL routing (via obstore)
 
-Rasteret uses obstore for all remote reads and natively routes URLs to the
-correct cloud store:
+Rasteret's IO layer uses obstore as the HTTP transport and natively routes
+URLs to the correct cloud store:
 
 | URL pattern | Store type |
 |---|---|
@@ -128,7 +127,7 @@ This happens automatically -- no configuration needed for public data.
 
 Use `create_backend()` when your data source provides its own credential
 mechanism (Planetary Computer SAS tokens, Earthdata-style temporary S3 credentials).
-This passes the credential provider directly to the obstore native store
+This passes the credential provider to the underlying cloud store
 (S3Store, AzureStore, GCSStore):
 
 ### Planetary Computer

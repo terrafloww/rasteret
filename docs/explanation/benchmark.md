@@ -45,7 +45,7 @@ before pixel reads begin.
 | Backend | Transport | Install |
 |---------|-----------|---------|
 | **TorchGeo** | GDAL `/vsicurl/` (sequential) | `uv pip install torchgeo` |
-| **Rasteret** | Rust-native HTTP via obstore (concurrent) | `uv pip install rasteret` |
+| **Rasteret** | Custom async IO engine (concurrent byte-range reads, obstore transport) | `uv pip install rasteret` |
 
 ## Cold start (first run)
 

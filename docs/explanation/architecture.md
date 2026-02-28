@@ -2,6 +2,45 @@
 
 This page explains how Rasteret's components work together.
 
+## Category framing
+
+Rasteret uses an **index-first geospatial retrieval** architecture:
+
+- **Control plane (tables/Parquet)**: dataset discovery, filtering, train/val/test splits, patch metadata, and cached COG metadata.
+- **Data plane (COG object storage)**: on-demand TIFF byte reads from source GeoTIFF/COG assets.
+
+This split keeps metadata workflows table-native while avoiding payload-in-Parquet duplication.
+
+### Architecture
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Rasteret control plane (Collection lifecycle + index schema)                 │
+│ build* / load / as_collection / export / subset / where                      │
+│ outputs: Parquet-backed collection rows (scene metadata + COG header cache)  │
+└───────────────────────────────┬──────────────────────────────────────────────┘
+                                │ Parquet rows + geometry + user columns
+                                v
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Arrow ecosystem (optional compute + enrichment)                              │
+│ DuckDB / Polars / GeoPandas / pandas / PyArrow                               │
+│ operations: add split/label/patch/AOI columns, filter, joins, aggregations   │
+└───────────────────────────────┬──────────────────────────────────────────────┘
+                                │ filtered rows + geometry column
+                                v
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Rasteret IO engine (custom byte range fetches)                               │
+│ get_numpy() / get_xarray() / to_torchgeo_dataset()                           │
+│ consumes filtered rows + geometry + cached tile metadata                     │
+└───────────────────────────────┬──────────────────────────────────────────────┘
+                                │ async byte-range tile requests
+                                v
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Data plane: object storage with GeoTIFF/COG files                            │
+│ S3 / GCS / Azure / *.tif                                                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Data flow
 
 ```text
@@ -33,7 +72,7 @@ Collection  (Arrow dataset wrapper)
     +--> iterate_rasters()      --> async RasterAccessor stream
     |
     v
-obstore (auto-routes to S3Store / AzureStore / GCSStore / HTTPStore)
+custom IO engine (async byte-range reads, tile decode, geometry mask) — obstore as HTTP transport (auto-routes to S3Store / AzureStore / GCSStore / HTTPStore)
 ```
 
 `DatasetRegistry` is the in-code dataset catalog. It powers `build()` and the
@@ -89,8 +128,9 @@ Rasteret's speedup over sequential approaches.
 tile-level byte-range reads. It:
 
 1. Merges nearby byte ranges to minimize HTTP round-trips.
-2. Delegates to `obstore` for all remote reads, with automatic URL routing
-   to native cloud stores (S3Store, AzureStore, GCSStore, or HTTPStore).
+2. Issues async byte-range requests via obstore (HTTP transport layer), with
+   automatic URL routing to native cloud stores (S3Store, AzureStore, GCSStore,
+   or HTTPStore).
 3. Decompresses tiles (deflate, LZW, zstd, LERC) in a thread pool.
    (TIFF JPEG is currently rejected with a hard error until implemented.)
 

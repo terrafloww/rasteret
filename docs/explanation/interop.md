@@ -46,7 +46,7 @@ full contract that samplers and dataset composition rely on:
 | Samplers | Works with `RandomGeoSampler`, `GridGeoSampler`, and any sampler that reads `bounds`, `index`, and `res` |
 | Dataset composition | Works with `IntersectionDataset` and `UnionDataset`; the index is designed so `reset_index()` does not conflict |
 
-Rasteret replaces the I/O backend (async obstore instead of rasterio/GDAL)
+Rasteret replaces the I/O backend (custom IO instead of rasterio/GDAL)
 but speaks the same interface. Nothing downstream of the dataset object
 needs to change.
 
@@ -93,7 +93,7 @@ See [TorchGeo Integration](../tutorials/02_torchgeo_09_accelerator.ipynb) and
 
 ### xarray / GeoPandas / NumPy
 
-Rasteret handles the I/O (async byte-range reads via obstore), then hands
+Rasteret handles the I/O (async byte-range reads), then hands
 off to standard xarray, GeoPandas, or NumPy outputs:
 
 - [`Collection.get_xarray(...)`](../reference/core/collection.md) returns an `xr.Dataset`
@@ -137,7 +137,7 @@ Rasteret uses rasterio for geometry masking (`rasterio.features.geometry_mask`),
 multi-CRS reprojection (`rasterio.warp.reproject`), and TorchGeo query-grid
 placement (`rasterio.merge.merge` via `rio_semantics.py`). CRS transforms and
 coordinate operations use pyproj directly. Tile reads go through Rasteret's
-own async pipeline backed by obstore. No GDAL in the tile-read path.
+own async IO. No GDAL in the tile-read path.
 
 CRS encoding in xarray output uses pyproj's CF conventions (`CRS.to_cf()`,
 `CRS.to_wkt()`, `CRS.to_json()`), not rioxarray.

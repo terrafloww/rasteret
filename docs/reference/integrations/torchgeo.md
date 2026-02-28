@@ -3,7 +3,7 @@
 TorchGeo `GeoDataset` adapter for Rasteret collections.
 
 `RasteretGeoDataset` is a standard TorchGeo `GeoDataset` subclass. It
-replaces the I/O backend (async obstore instead of rasterio/GDAL) while
+replaces the I/O backend (instead of rasterio/GDAL) while
 honoring the full GeoDataset contract: `index`, `crs`, `res`,
 `__getitem__(GeoSlice) -> Sample`. Compatible with all TorchGeo samplers,
 collation helpers (`stack_samples`, `concat_samples`), transforms, and

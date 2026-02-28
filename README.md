@@ -25,19 +25,21 @@ Rasteret parses those headers **once**, caches them in Parquet, and its
 own reader fetches pixels concurrently with no GDAL in the path.
 **Up to 20x faster** on cold starts.
 
-We call this pattern **index-first geospatial image retrieval**:
+Rasteret calls this pattern **index-first geospatial retrieval**:
 
 - **Control plane**: a queryable Parquet index (scene metadata, COG header metadata, user columns like splits/labels)
 - **Data plane**: on-demand tile reads from the original GeoTIFF/COG objects
 
 This keeps metadata and experiment logic in tables while leaving imagery bytes in source COGs.
 
+Key Features - 
 - **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
-- **Zero downloads** - work with terabytes of imagery while storing only megabytes of metadata
-- **No STAC at training time** - query once at setup; zero API calls during training
-- **Reproducible** - same Parquet index = same records = same results
-- **Native dtypes** - uint16 stays uint16 in tensors; xarray promotes only when NaN fill requires it
-- **Shareable cache** - a few MB index can capture scene selection, band metadata, and split assignments
+- **20x faster, saves cloud LISTs and GETs** - Our custom IO gets chunks of images fast, and costs no overhead a Collection is built  
+- **Zero data downloads** - work with terabytes of imagery while storing only megabytes of metadata.
+- **No STAC at training time** - query once at setup; zero API calls during training with Collection you can extend.
+- **Reproducible** - same Parquet index = same records = same results 
+- **Native dtypes** - In our IO image chunks of uint16 stays uint16 in tensors; only xarray conversion promotes to float32 to fill NaNs
+- **Shareable cache** - enrich our Collection with your ML splits, patch geometries, custom data points for ML, and share it, don't write folders of image chips!
 
 Rasteret is an **opt-in accelerator** that integrates with TorchGeo by
 returning a standard `GeoDataset`. Your samplers, DataLoader, xarray
@@ -85,6 +87,7 @@ Rasteret ships with a growing catalog of datasets. Pick an ID and go:
 ```
 $ rasteret datasets list
 ID                          Name                                       Coverage       License              Auth
+aef/v1-annual               AlphaEarth Foundation Embeddings (Annual)  global         CC-BY-4.0            none
 earthsearch/sentinel-2-l2a  Sentinel-2 Level-2A                        global         proprietary(free)    none
 earthsearch/landsat-c2-l2   Landsat Collection 2 Level-2               global         proprietary(free)    required
 earthsearch/naip            NAIP                                       north-america  proprietary(free)    required
@@ -96,7 +99,6 @@ pc/alos-dem                 ALOS World 3D 30m DEM                      global   
 pc/nasadem                  NASADEM                                    global         proprietary(free)    required
 pc/esa-worldcover           ESA WorldCover                             global         CC-BY-4.0            required
 pc/usda-cdl                 USDA Cropland Data Layer                   conus          proprietary(free)    required
-aef/v1-annual               AlphaEarth Foundation Embeddings (Annual)  global         CC-BY-4.0            none
 ```
 
 Each entry includes license metadata and a `commercial_use` flag for quick
@@ -326,7 +328,7 @@ the full GeoDataset contract:
 - Works with `RandomGeoSampler`, `GridGeoSampler`, and any custom sampler
 - Works with `IntersectionDataset` and `UnionDataset` for dataset composition
 
-Rasteret replaces the I/O backend (async obstore instead of rasterio/GDAL) but
+Rasteret replaces the I/O backend (custom IO instead of rasterio/GDAL) but
 speaks the same interface. Your samplers, DataLoader, transforms, and training
 loop do not change.
 

@@ -12,7 +12,7 @@ Notebooks are designed to:
 
 Prerequisites:
 - Install notebook and optional ML tooling: `uv sync --extra dev --extra torchgeo`
-- `obstore` is part of Rasteret core dependencies (no separate extra needed)
+- `obstore` is Rasteret's HTTP transport dependency for multi-cloud URL routing (S3/GCS/Azure); no separate extra needed
 - Notebooks that call live STAC/cloud endpoints require network access; requester-pays
   examples also require cloud credentials.
 

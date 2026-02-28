@@ -86,7 +86,7 @@ src/rasteret/
 │   └── utils.py             Sync/async bridging (run_sync), CRS transforms, data source inference
 │
 ├── fetch/
-│   ├── cog.py               [COGReader](reference/fetch/cog.md): HTTP range reads, tile decompression, obstore backend
+│   ├── cog.py               [COGReader](reference/fetch/cog.md): HTTP range reads, tile decompression, aioHTTP via Obstore
 │   └── header_parser.py     TIFF/COG header parsing: IFD extraction, tile offset discovery
 │
 ├── ingest/

@@ -84,17 +84,16 @@ When does promotion happen?
 In both cases, the promotion is explicit at the call site (not an implicit
 side effect of masking).
 
-## obstore as the HTTP backend
+## obstore as the URL routing backend
 
-Rasteret uses [obstore](https://github.com/developmentseed/obstore) for all
-remote byte-range reads. obstore wraps the
-[`object_store`](https://docs.rs/object_store/) Rust crate. It is Rust-native,
-multi-cloud, and does not depend on GDAL.
+Rasteret uses [obstore](https://github.com/developmentseed/obstore) as the
+HTTP transport layer for multi-cloud URL routing. Rasteret's byte-range read
+logic, tile decode, and concurrency are custom; obstore replaced direct aiohttp
+to gain unified S3/GCS/Azure routing without adding per-cloud clients.
 
 Why obstore as a hard dependency rather than optional?
 
-- **Multi-cloud + auth**: Rasteret previously used a Python HTTP client
-  (aiohttp) for range reads. obstore gives a single, well-tested interface for
+- **Multi-cloud + auth**: Rasteret has custom IO for byte range reads. obstore gives a single, well-tested interface for
   S3/GCS/Azure/HTTPS plus credential providers (requester-pays, SAS signing,
   Earthdata, etc.).
 - **Single code path**: one backend means fewer branches to test and maintain.
@@ -103,13 +102,12 @@ Why obstore as a hard dependency rather than optional?
   `storage.googleapis.com`, AzureStore for `*.blob.core.windows.net`, and
   HTTPStore for everything else. Authenticated reads use obstore credential
   providers via `create_backend()`.
-- **Well-maintained lineage**: obstore is from Development Seed and it wraps
-  the same Rust crate [`object_store`](https://docs.rs/object_store/) that Databricks, InfluxDB, and many in Arrow
-  ecosystem depend on.
+- **Well-maintained lineage**: obstore wraps the same Rust crate [`object_store`](https://docs.rs/object_store/)
+  that Databricks, InfluxDB, and many in Arrow ecosystem depend on.
 
 ## Decoupled index and read layers
 
-The Parquet index is the stable contract. The read layer ([COGReader](../reference/fetch/cog.md), obstore)
+The Parquet index is the stable contract. The read layer ([COGReader](../reference/fetch/cog.md))
 is swappable via the [`StorageBackend`](../reference/cloud.md) protocol. Concretely:
 
 - Custom backends (e.g. a pre-configured `S3Store`) can be plugged in without
