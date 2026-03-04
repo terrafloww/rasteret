@@ -403,8 +403,12 @@ class StacCollectionBuilder(CollectionBuilder):
                 child = catalog.get_child(self.data_source)
                 if child is not None:
                     catalog = child
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Could not narrow static STAC catalog to child '%s': %s",
+                    self.data_source,
+                    exc,
+                )
 
         items: list[dict] = []
         for item in catalog.get_all_items():

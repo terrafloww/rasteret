@@ -105,15 +105,21 @@ def _try_boto3_credential_provider() -> object | None:
     """
     try:
         from obstore.auth.boto3 import Boto3CredentialProvider
-
-        provider = Boto3CredentialProvider()
-        # Validate that credentials actually exist - Boto3CredentialProvider
-        # defers the lookup, but the underlying session check is cheap.
-        if provider.credentials is None or provider.credentials.access_key is None:
-            return None
-        return provider
-    except Exception:
+    except ModuleNotFoundError:
+        # obstore was installed without its boto3 integration.
         return None
+
+    try:
+        provider = Boto3CredentialProvider()
+    except Exception as exc:
+        logger.warning("Failed to create Boto3CredentialProvider: %s", exc)
+        return None
+
+    # Validate that credentials actually exist - Boto3CredentialProvider
+    # defers the lookup, but the underlying session check is cheap.
+    if provider.credentials is None or provider.credentials.access_key is None:
+        return None
+    return provider
 
 
 def _create_obstore_backend(

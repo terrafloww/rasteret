@@ -360,6 +360,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             self._pool_pid: int | None = None
             self._warned_ts_temporal_skip = False
             self._warned_image_dtype_casts: set[tuple[str, str]] = set()
+            self._warned_cog_read_failures = False
 
             columns = [
                 "id",
@@ -790,8 +791,13 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 ]
                 raw = await asyncio.gather(*tasks, return_exceptions=True)
                 out: list[tuple[Any, CogMetadata]] = []
+                first_error: BaseException | None = None
+                n_failed = 0
                 for result, (url, meta, _band_index) in zip(raw, requests):
                     if isinstance(result, BaseException):
+                        n_failed += 1
+                        if first_error is None:
+                            first_error = result
                         logger.warning(
                             "COG read failed for %s (band_index=%s): %s",
                             url,
@@ -800,6 +806,24 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                         )
                         continue
                     out.append((result, meta))
+                if (
+                    n_failed
+                    and out
+                    and first_error is not None
+                    and not self._warned_cog_read_failures
+                ):
+                    self._warned_cog_read_failures = True
+                    warnings.warn(
+                        "RasteretGeoDataset skipped failed COG reads "
+                        f"({n_failed}/{len(requests)} failure(s)) while building a chip; "
+                        f"first failure: {first_error}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                if not out and first_error is not None:
+                    raise ValueError(
+                        f"All {len(requests)} COG read request(s) failed for the requested chip."
+                    ) from first_error
                 return out
 
             return pool.run(_gather())
