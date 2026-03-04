@@ -139,6 +139,309 @@ class TestXarrayMerge:
         assert excinfo.value.__cause__ is first
 
 
+class TestGdfCrs:
+    def test_gdf_merge_preserves_crs(self):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        g1 = gpd.GeoDataFrame(
+            {"band": ["B04"], "data": [np.ones((1, 1), dtype=np.uint8)]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:3857",
+        )
+        g2 = gpd.GeoDataFrame(
+            {"band": ["B04"], "data": [np.ones((1, 1), dtype=np.uint8)]},
+            geometry=[box(1, 1, 2, 2)],
+            crs="EPSG:3857",
+        )
+
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([g1, g2], [])),
+            ),
+        ):
+            from rasteret.core.execution import get_collection_gdf
+
+            out = get_collection_gdf(
+                collection=None,  # unused due to patched _load_collection_data
+                geometries=[],
+                bands=["B04"],
+                data_source="sentinel-2-l2a",
+            )
+        assert str(out.crs) == "EPSG:3857"
+
+
+class TestGeometryErrors:
+    @pytest.mark.asyncio
+    async def test_unsupported_geometry_error_is_not_silently_swallowed(self):
+        """Geometry type errors should fail loudly, not become 'No valid data found'."""
+        from rasteret.core.geometry import UnsupportedGeometryError
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        class _DummyReader:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        info = RasterInfo(
+            id="r1",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch.object(
+                accessor,
+                "_load_single_band",
+                new=AsyncMock(
+                    side_effect=UnsupportedGeometryError("Point geometry not supported")
+                ),
+            ),
+        ):
+            # If RasterAccessor swallows the exception, callers end up with a
+            # misleading "No valid data found" error later.
+            with pytest.raises(UnsupportedGeometryError, match="Unsupported geometry"):
+                await accessor.load_bands(
+                    geometries=pa.array([None]),
+                    band_codes=["B04"],
+                    max_concurrent=5,
+                    for_xarray=False,
+                )
+
+    @pytest.mark.asyncio
+    async def test_all_band_failures_raise_with_cause(self):
+        """If every requested band fails for a geometry, surface the first error."""
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        class _DummyReader:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        info = RasterInfo(
+            id="r2",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        boom = ValueError("boom")
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch.object(
+                accessor, "_load_single_band", new=AsyncMock(side_effect=boom)
+            ),
+        ):
+            with pytest.raises(
+                RuntimeError, match="All geometry reads failed"
+            ) as excinfo:
+                await accessor.load_bands(
+                    geometries=pa.array([None]),
+                    band_codes=["B04"],
+                    max_concurrent=5,
+                    for_xarray=False,
+                )
+        assert excinfo.value.__cause__ is not None
+        assert excinfo.value.__cause__.__cause__ is boom
+
+    @pytest.mark.asyncio
+    async def test_partial_band_failures_warn(self):
+        """If some bands fail but others succeed, warn instead of silently dropping."""
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        class _DummyReader:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        info = RasterInfo(
+            id="r3",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={
+                "B04": {"href": "https://example.com/x.tif"},
+                "B08": {"href": "https://example.com/x.tif"},
+            },
+            band_metadata={"B04_metadata": {}, "B08_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        async def _side_effect(_geom_array, _geom_idx, band_code, *_args, **_kwargs):
+            if band_code == "B04":
+                return {
+                    "data": np.ones((1, 1), dtype=np.uint8),
+                    "transform": None,
+                    "band": "B04",
+                }
+            raise ValueError("boom")
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch.object(
+                accessor, "_load_single_band", new=AsyncMock(side_effect=_side_effect)
+            ),
+            patch.object(
+                accessor, "_merge_geodataframe_results", return_value=pd.DataFrame()
+            ),
+        ):
+            with pytest.warns(
+                RuntimeWarning, match="Partial read failures for record_id='r3'"
+            ):
+                await accessor.load_bands(
+                    geometries=pa.array([None]),
+                    band_codes=["B04", "B08"],
+                    max_concurrent=5,
+                    for_xarray=False,
+                )
+
+    @pytest.mark.asyncio
+    async def test_partial_geometry_failures_warn(self):
+        """If some geometries fail but others succeed, warn instead of silently dropping."""
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        class _DummyReader:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        info = RasterInfo(
+            id="r4",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        async def _side_effect(_geom_array, geom_idx, band_code, *_args, **_kwargs):
+            if geom_idx == 0:
+                return {
+                    "data": np.ones((1, 1), dtype=np.uint8),
+                    "transform": None,
+                    "band": band_code,
+                }
+            raise ValueError("boom")
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch.object(
+                accessor, "_load_single_band", new=AsyncMock(side_effect=_side_effect)
+            ),
+            patch.object(
+                accessor, "_merge_geodataframe_results", return_value=pd.DataFrame()
+            ),
+        ):
+            with pytest.warns(
+                RuntimeWarning, match="Partial read failures for record_id='r4'"
+            ):
+                await accessor.load_bands(
+                    geometries=pa.array([None, None]),
+                    band_codes=["B04"],
+                    max_concurrent=5,
+                    for_xarray=False,
+                )
+
+
+class TestRasterAccessorGdfCrs:
+    @pytest.mark.asyncio
+    async def test_load_bands_gdf_sets_crs_and_reprojects_geometry(self):
+        """GeoDataFrame output should always have a CRS and match target_crs when given."""
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        class _DummyReader:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        info = RasterInfo(
+            id="r-crs",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=3857,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        geom = box(0.0, 0.0, 1.0, 1.0)
+        geometries = coerce_to_geoarrow(geom)
+
+        async def _ok(*_args, **_kwargs):
+            return {
+                "data": np.ones((1, 1), dtype=np.uint8),
+                "transform": None,
+                "band": "B04",
+            }
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch.object(accessor, "_load_single_band", new=AsyncMock(side_effect=_ok)),
+        ):
+            out = await accessor.load_bands(
+                geometries=geometries,
+                band_codes=["B04"],
+                max_concurrent=5,
+                for_xarray=False,
+                target_crs=3857,
+                geometry_crs=4326,
+            )
+
+        assert isinstance(out, gpd.GeoDataFrame)
+        assert str(out.crs) == "EPSG:3857"
+        bounds = out.geometry.iloc[0].bounds
+        # Rough sanity: degrees->meters for 1 degree at equator (~111km).
+        assert bounds[2] > 100_000
+
+
 class TestNumpyOutput:
     def test_numpy_stack_multiband(self):
         frame = pd.DataFrame(

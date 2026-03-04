@@ -23,6 +23,16 @@ import pyarrow as pa
 Bbox = tuple[float, float, float, float]
 
 
+class UnsupportedGeometryError(TypeError):
+    """Raised when a geometry type is unsupported by Rasteret's mask path.
+
+    Rasteret's raster masking relies on ``rasterio.features.geometry_mask``,
+    which is driven by Polygon/MultiPolygon AOIs. Point sampling is a different
+    operation (more like ``rasterio.sample``) and is intentionally handled as a
+    separate feature.
+    """
+
+
 # ------------------------------------------------------------------
 # Coercion: any geometry format -> GeoArrow native pa.Array
 # ------------------------------------------------------------------
@@ -182,6 +192,19 @@ def transform_coords(
     if not coords_py:
         raise ValueError("Empty geometry")
 
+    if isinstance(coords_py, dict):
+        raise UnsupportedGeometryError(
+            "Unsupported geometry type for Rasteret masking: Point. "
+            "Rasteret currently supports Polygon and MultiPolygon geometries for "
+            "masking-based sampling."
+        )
+    if not isinstance(coords_py, (list, tuple)):
+        raise UnsupportedGeometryError(
+            f"Unsupported geometry type for Rasteret masking: {type(coords_py)!r}. "
+            "Rasteret currently supports Polygon and MultiPolygon geometries for "
+            "masking-based sampling."
+        )
+
     # GeoArrow stores polygons as: rings -> points
     # and multipolygons as: polygons -> rings -> points.
     if isinstance(coords_py[0][0], dict):
@@ -207,8 +230,9 @@ def transform_coords(
             transformed_polys.append(transformed_rings)
         return {"type": "MultiPolygon", "coordinates": transformed_polys}
 
-    raise TypeError(
-        f"Unsupported GeoArrow geometry storage structure: {type(coords_py)}"
+    raise UnsupportedGeometryError(
+        "Unsupported geometry type for Rasteret masking. Rasteret currently "
+        "supports Polygon and MultiPolygon geometries for masking-based sampling."
     )
 
 
@@ -227,6 +251,19 @@ def to_rasterio_geojson(geom_col: pa.Array, idx: int) -> dict:
     if not coords_py:
         raise ValueError("Empty geometry")
 
+    if isinstance(coords_py, dict):
+        raise UnsupportedGeometryError(
+            "Unsupported geometry type for Rasteret masking: Point. "
+            "Rasteret currently supports Polygon and MultiPolygon geometries for "
+            "masking-based sampling."
+        )
+    if not isinstance(coords_py, (list, tuple)):
+        raise UnsupportedGeometryError(
+            f"Unsupported geometry type for Rasteret masking: {type(coords_py)!r}. "
+            "Rasteret currently supports Polygon and MultiPolygon geometries for "
+            "masking-based sampling."
+        )
+
     if isinstance(coords_py[0][0], dict):
         rings = [[(pt["x"], pt["y"]) for pt in ring] for ring in coords_py]
         return {"type": "Polygon", "coordinates": rings}
@@ -238,8 +275,9 @@ def to_rasterio_geojson(geom_col: pa.Array, idx: int) -> dict:
             polys.append(rings)
         return {"type": "MultiPolygon", "coordinates": polys}
 
-    raise TypeError(
-        f"Unsupported GeoArrow geometry storage structure: {type(coords_py)}"
+    raise UnsupportedGeometryError(
+        "Unsupported geometry type for Rasteret masking. Rasteret currently "
+        "supports Polygon and MultiPolygon geometries for masking-based sampling."
     )
 
 

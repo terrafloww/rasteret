@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -158,6 +159,14 @@ def _load_and_merge(
             target_crs=target_crs,
             **filters,
         )
+        if errors and results:
+            record_id, first = errors[0]
+            warnings.warn(
+                "Some records failed to load "
+                f"({len(errors)} failure(s)); first failure in record '{record_id}': {first}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         if not results:
             if errors:
                 record_id, first = errors[0]
@@ -335,12 +344,23 @@ def get_collection_gdf(
         Band arrays in native COG dtype. Each row is a geometry-record
         pair with pixel data as columns.
     """
+
+    def _merge_gdfs(dfs: list[gpd.GeoDataFrame]) -> gpd.GeoDataFrame:
+        merged = pd.concat(dfs, ignore_index=True)
+        gdf = gpd.GeoDataFrame(merged, geometry="geometry")
+        crs = next(
+            (getattr(df, "crs", None) for df in dfs if getattr(df, "crs", None)), None
+        )
+        if crs is not None:
+            gdf = gdf.set_crs(crs, allow_override=True)
+        return gdf
+
     return _load_and_merge(
         collection=collection,
         geometries=geometries,
         bands=bands,
         for_xarray=False,
-        merge_fn=lambda dfs: gpd.GeoDataFrame(pd.concat(dfs, ignore_index=True)),
+        merge_fn=_merge_gdfs,
         data_source=data_source,
         max_concurrent=max_concurrent,
         backend=backend,

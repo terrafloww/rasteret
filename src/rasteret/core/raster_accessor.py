@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 
 import geopandas as gpd
 import numpy as np
@@ -201,6 +202,7 @@ class RasterAccessor:
         band_code: str,
         max_concurrent: int = 50,
         reader: object | None = None,
+        geometry_crs: int | None = 4326,
     ) -> dict | None:
         """Load single band data for a geometry identified by index."""
         cog_meta, url, band_index = self.try_get_band_cog_metadata(band_code)
@@ -216,6 +218,7 @@ class RasterAccessor:
             band_index=band_index,
             geom_array=geom_array,
             geom_idx=geom_idx,
+            geometry_crs=geometry_crs,
             max_concurrent=max_concurrent,
             reader=reader,
         )
@@ -289,6 +292,7 @@ class RasterAccessor:
         for_xarray: bool = True,
         backend: object | None = None,
         target_crs: int | None = None,
+        geometry_crs: int | None = 4326,
     ):
         """Load bands for all geometries with parallel processing.
 
@@ -306,6 +310,8 @@ class RasterAccessor:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject results to this CRS.
+        geometry_crs : int, optional
+            CRS of the *geometries* input (default EPSG:4326).
 
         Returns
         -------
@@ -337,14 +343,37 @@ class RasterAccessor:
                         band_code,
                         max_concurrent,
                         reader=reader,
+                        geometry_crs=geometry_crs,
                     )
                     band_tasks.append(task)
 
                 raw_results = await asyncio.gather(*band_tasks, return_exceptions=True)
                 results = []
-                for r in raw_results:
+                first_error: BaseException | None = None
+                failed_band_codes: list[str] = []
+                for band_code, r in zip(band_codes, raw_results):
                     if isinstance(r, Exception):
-                        logger.error("Band load failed: %s", r)
+                        from rasteret.core.geometry import UnsupportedGeometryError
+
+                        if isinstance(r, UnsupportedGeometryError):
+                            # Deterministic user input issue: fail fast.
+                            raise UnsupportedGeometryError(
+                                "Unsupported geometry type for Rasteret sampling "
+                                f"(record_id='{self.id}', geometry_index={geom_id}). "
+                                "Rasteret currently supports Polygon and MultiPolygon geometries "
+                                "for masking-based sampling via get_xarray/get_numpy/get_gdf. "
+                                "Point sampling is not supported yet."
+                            ) from r
+                        failed_band_codes.append(band_code)
+                        if first_error is None:
+                            first_error = r
+                        logger.error(
+                            "Band load failed (record_id=%s, geometry_index=%s, band=%s): %s",
+                            self.id,
+                            geom_id,
+                            band_code,
+                            r,
+                        )
                     else:
                         results.append(r)
                 band_progress.update(len(band_codes))
@@ -352,9 +381,25 @@ class RasterAccessor:
                 geom_progress.update(1)
 
                 valid = [r for r in results if r is not None]
+                if not valid and first_error is not None:
+                    from rasteret.core.geometry import UnsupportedGeometryError
+
+                    if isinstance(first_error, UnsupportedGeometryError):
+                        raise UnsupportedGeometryError(
+                            f"Unsupported geometry type for Rasteret sampling "
+                            f"(record_id='{self.id}', geometry_index={geom_id}). "
+                            "Rasteret currently supports Polygon and MultiPolygon geometries "
+                            "for masking-based sampling via get_xarray/get_numpy/get_gdf. "
+                            "Point sampling is not supported yet."
+                        ) from first_error
+                    raise RuntimeError(
+                        "All band reads failed for the requested geometry "
+                        f"(record_id='{self.id}', geometry_index={geom_id}). "
+                        "See the chained exception for the first failure."
+                    ) from first_error
                 if target_crs is not None and target_crs != self.crs and valid:
                     valid = self._reproject_band_results(valid, target_crs)
-                return valid, geom_id
+                return valid, geom_id, failed_band_codes, first_error
 
             # Process geometries concurrently with semaphore
             sem = asyncio.Semaphore(max_concurrent)
@@ -366,20 +411,81 @@ class RasterAccessor:
             tasks = [bounded_process(idx, idx + 1) for idx in range(n_geoms)]
             raw_geom_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        results = []
+        results: list[tuple[list[dict], int]] = []
+        first_error: BaseException | None = None
+        geom_failures = 0
+        partial_band_failures: list[tuple[int, list[str], BaseException | None]] = []
         for r in raw_geom_results:
             if isinstance(r, Exception):
+                from rasteret.core.geometry import UnsupportedGeometryError
+
+                if isinstance(r, UnsupportedGeometryError):
+                    # Geometry-type errors are deterministic user input issues.
+                    # Fail fast so they do not become a misleading
+                    # "No valid data found" downstream.
+                    raise r
+                geom_failures += 1
+                if first_error is None:
+                    first_error = r
                 logger.error("Geometry processing failed: %s", r)
             else:
-                results.append(r)
+                band_results, geom_id, failed_band_codes, band_first_error = r
+                results.append((band_results, geom_id))
+                if failed_band_codes:
+                    partial_band_failures.append(
+                        (geom_id, failed_band_codes, band_first_error)
+                    )
 
         geom_progress.close()
+
+        if not results and first_error is not None:
+            raise RuntimeError(
+                f"All geometry reads failed for record_id='{self.id}'. "
+                "See the chained exception for the first failure."
+            ) from first_error
+        if results and (geom_failures or partial_band_failures):
+            parts = []
+            if geom_failures:
+                parts.append(f"{geom_failures}/{n_geoms} geometry task(s) failed")
+            if partial_band_failures:
+                n_failed_bands = sum(
+                    len(bands) for _gid, bands, _err in partial_band_failures
+                )
+                parts.append(
+                    f"{n_failed_bands} band read(s) failed across {len(partial_band_failures)} geometries"
+                )
+
+            first_detail = None
+            if geom_failures and first_error is not None:
+                first_detail = f"first geometry failure: {first_error}"
+            elif partial_band_failures:
+                gid, bands, err = partial_band_failures[0]
+                band = bands[0] if bands else "<unknown>"
+                if err is not None:
+                    first_detail = f"first band failure: geometry_index={gid}, band='{band}': {err}"
+                else:
+                    first_detail = (
+                        f"first band failure: geometry_index={gid}, band='{band}'"
+                    )
+
+            msg = (
+                f"Partial read failures for record_id='{self.id}': "
+                + "; ".join(parts)
+                + (f"; {first_detail}" if first_detail else "")
+                + "."
+            )
+            warnings.warn(msg, RuntimeWarning, stacklevel=2)
 
         # Process results
         if for_xarray:
             return self._merge_xarray_results(results, target_crs=target_crs)
         else:
-            return self._merge_geodataframe_results(results, geometries)
+            return self._merge_geodataframe_results(
+                results,
+                geometries,
+                geometry_crs=geometry_crs,
+                target_crs=target_crs,
+            )
 
     @staticmethod
     def _write_crs_cf(ds_or_da, epsg_code, transform=None):
@@ -476,19 +582,36 @@ class RasterAccessor:
         return xr.merge(data_arrays, compat="override")
 
     def _merge_geodataframe_results(
-        self, results: list[tuple[list[dict], int]], geometries: pa.Array
+        self,
+        results: list[tuple[list[dict], int]],
+        geometries: pa.Array,
+        *,
+        geometry_crs: int | None,
+        target_crs: int | None,
     ) -> gpd.GeoDataFrame:
         """Merge results into GeoDataFrame."""
-        from rasteret.core.geometry import to_rasterio_geojson
+        import shapely
 
-        rows = []
+        from rasteret.core.geometry import to_rasterio_geojson, transform_coords
+
+        out_crs = target_crs if target_crs is not None else geometry_crs
+        if out_crs is None:
+            out_crs = 4326
+
+        rows: list[dict] = []
 
         for band_results, geom_id in results:
             if not band_results:
                 continue
 
             # Convert GeoArrow geometry to GeoJSON dict at output boundary
-            geojson = to_rasterio_geojson(geometries, geom_id - 1)
+            if geometry_crs is not None and out_crs != geometry_crs:
+                geojson = transform_coords(
+                    geometries, geom_id - 1, geometry_crs, out_crs
+                )
+            else:
+                geojson = to_rasterio_geojson(geometries, geom_id - 1)
+            geom_obj = shapely.geometry.shape(geojson)
 
             for band_result in band_results:
                 rows.append(
@@ -497,21 +620,16 @@ class RasterAccessor:
                         "datetime": self.datetime,
                         "cloud_cover": self.cloud_cover,
                         "collection": self.collection,
-                        "geometry": geojson,
+                        "geometry": geom_obj,
                         "band": band_result["band"],
                         "data": band_result["data"],
                     }
                 )
 
         if not rows:
-            return gpd.GeoDataFrame()
+            return gpd.GeoDataFrame(crs=f"EPSG:{out_crs}")
 
-        # Let GeoPandas create Shapely geometries from GeoJSON at output
-        import shapely
-
-        gdf = gpd.GeoDataFrame(rows)
-        gdf["geometry"] = gdf["geometry"].apply(shapely.geometry.shape)
-        return gdf
+        return gpd.GeoDataFrame(rows, geometry="geometry", crs=f"EPSG:{out_crs}")
 
     def __dir__(self) -> list[str]:
         names = super().__dir__()
