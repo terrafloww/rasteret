@@ -138,8 +138,9 @@ For full methodology and numbers, see [Benchmarks](explanation/benchmark.md).
 
 ### HF `datasets` baseline (Major TOM keyed patches)
 
-Baseline method: Hugging Face `datasets.load_dataset(...)` with Parquet
-filters (PyArrow-backed), compared against Rasteret prebuilt index reads.
+Baseline method: Hugging Face `datasets.load_dataset(..., streaming=True, filters=...)`
+(PyArrow-backed predicate pushdown) with local GeoTIFF decode, compared against
+Rasteret prebuilt index reads.
 
 | Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
 |---:|---:|---:|---:|
@@ -149,8 +150,8 @@ filters (PyArrow-backed), compared against Rasteret prebuilt index reads.
 ![HF vs Rasteret processing time](assets/benchmark_hf_results.png)
 ![HF vs Rasteret speedup](assets/benchmark_hf_speedup.png)
 
-Major TOM exploration notebooks commonly use HF streaming generators; this
-table uses the stronger parquet-filter baseline.
+Major TOM exploration notebooks commonly use HF streaming iterators without
+keyed filters; this table uses `filters=...` for keyed retrieval.
 See [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md#major-tom-style-enrichment) for the full Major TOM workflow.
 
 !!! tip "Share your speed-ups"

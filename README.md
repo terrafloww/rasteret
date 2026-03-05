@@ -248,8 +248,8 @@ for full methodology.
 
 ### HF `datasets` baseline (Major TOM keyed patches)
 
-Baseline method: `datasets.load_dataset(..., streaming=True)` with per-patch
-filters and local GeoTIFF decode, compared against Rasteret prebuilt index reads.
+Baseline method: `datasets.load_dataset(..., streaming=True, filters=...)` with
+local GeoTIFF decode, compared against Rasteret prebuilt index reads.
 Reproduce with `examples/major_tom_benchmark/03_hf_vs_rasteret_benchmark.py`.
 
 | Patches | HF `datasets` (streaming) | Rasteret index+COG | Speedup |
@@ -267,8 +267,9 @@ source COGs using an index-first cache.
 Notebook: [`05_torchgeo_comparison.ipynb`](docs/tutorials/05_torchgeo_comparison.ipynb)
 
 > [!NOTE]
-> Measured on 12-30 Sentinel-2 scenes on an EC2 instance in the same
-> region as the data (us-west-2). Results vary with network conditions.
+> Measured on an EC2 instance in the same region as the data (us-west-2).
+> TorchGeo timings above use 12-30 scenes; HF timings above use 120/1000 patches.
+> Results vary with network conditions.
 > If you run Rasteret on your own workloads, share your numbers on
 > [GitHub Discussions](https://github.com/terrafloww/rasteret/discussions/categories/show-and-tell)
 > or [Discord](https://discord.gg/V5vvuEBc).

@@ -73,7 +73,7 @@ before pixel reads begin.
 ## HF `datasets` baseline (Major TOM keyed patches)
 
 Separate benchmark against Hugging Face payload-Parquet workflows using
-`datasets.load_dataset(...)` with Parquet filters (PyArrow-backed):
+`datasets.load_dataset(..., streaming=True, filters=...)` (PyArrow-backed predicate pushdown):
 
 | Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
 |---:|---:|---:|---:|
@@ -84,10 +84,7 @@ Separate benchmark against Hugging Face payload-Parquet workflows using
 ![HF vs Rasteret speedup](../assets/benchmark_hf_speedup.png)
 
 Major TOM notebooks often use HF streaming generators for exploration; the
-table above uses the stronger parquet-filter baseline for fairness.
-
-Diagnostic note: fsspec-style payload reads can be much slower on small
-samples (we observed >100x) and are not used as the primary baseline.
+table above uses `filters=...` keyed retrieval for fairness.
 
 ## Where the difference comes from
 

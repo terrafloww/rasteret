@@ -311,6 +311,10 @@ Measured on **February 26, 2026** with matched Major TOM keys:
 | 120 | 46.83 s | 12.09 s | 3.88x |
 | 1000 | 771.59 s | 118.69 s | 6.50x |
 
-Baseline method: Hugging Face `datasets.load_dataset(...)` with Parquet filters
-(PyArrow-backed) for keyed retrieval. This is a stronger baseline than the
-streaming-generator style commonly used in Major TOM exploration notebooks.
+Baseline method: Hugging Face `datasets.load_dataset(..., streaming=True, filters=...)`
+(PyArrow-backed predicate pushdown) for keyed retrieval. This is stronger than
+the streaming-iterator style commonly used in Major TOM exploration notebooks
+without keyed filters.
+
+For a larger, benchmark-focused scene cache, see
+`examples/major_tom_benchmark/01_build_collection_sharded.py`.

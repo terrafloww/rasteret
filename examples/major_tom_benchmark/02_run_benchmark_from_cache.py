@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         "--samples",
         nargs="+",
         type=int,
-        default=[100, 1000],
+        default=[120, 1000],
         help="Sample counts to run",
     )
     parser.add_argument(
