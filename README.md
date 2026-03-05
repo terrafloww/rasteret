@@ -34,11 +34,11 @@ This keeps metadata and experiment logic in tables while leaving imagery bytes i
 
 Key Features -
 - **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
-- **20x faster, saves cloud LISTs and GETs** - Our custom IO gets chunks of images fast, and costs no overhead a Collection is built
+- **20x faster, saves cloud LISTs and GETs** - Our custom I/O reads tiles fast with zero STAC/header overhead once a Collection is built
 - **Zero data downloads** - work with terabytes of imagery while storing only megabytes of metadata.
 - **No STAC at training time** - query once at setup; zero API calls during training with Collection you can extend.
 - **Reproducible** - same Parquet index = same records = same results
-- **Native dtypes** - In our IO image chunks of uint16 stays uint16 in tensors; only xarray conversion promotes to float32 to fill NaNs
+- **Native dtypes** - integer imagery stays integer; missing/edge coverage is represented via fill values (nodata or 0) instead of NaNs
 - **Shareable cache** - enrich our Collection with your ML splits, patch geometries, custom data points for ML, and share it, don't write folders of image chips!
 
 Rasteret is an **opt-in accelerator** that integrates with TorchGeo by
@@ -248,10 +248,11 @@ for full methodology.
 
 ### HF `datasets` baseline (Major TOM keyed patches)
 
-Baseline method: `datasets.load_dataset(...)` with Parquet filters
-(PyArrow-backed), compared against Rasteret prebuilt index reads.
+Baseline method: `datasets.load_dataset(..., streaming=True)` with per-patch
+filters and local GeoTIFF decode, compared against Rasteret prebuilt index reads.
+Reproduce with `examples/major_tom_benchmark/03_hf_vs_rasteret_benchmark.py`.
 
-| Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
+| Patches | HF `datasets` (streaming) | Rasteret index+COG | Speedup |
 |---:|---:|---:|---:|
 | 120 | 46.83 s | 12.09 s | **3.88x** |
 | 1000 | 771.59 s | 118.69 s | **6.50x** |
@@ -260,7 +261,8 @@ Baseline method: `datasets.load_dataset(...)` with Parquet filters
 ![HF vs Rasteret speedup](./assets/benchmark_hf_speedup.png)
 
 For exploration workflows, Major TOM notebooks often use HF streaming
-generators; the table above uses the stronger HF parquet-filter path.
+generators; Rasteret is optimized for reading the same patches directly from
+source COGs using an index-first cache.
 
 Notebook: [`05_torchgeo_comparison.ipynb`](docs/tutorials/05_torchgeo_comparison.ipynb)
 

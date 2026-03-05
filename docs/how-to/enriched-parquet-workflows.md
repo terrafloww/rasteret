@@ -273,25 +273,22 @@ Install the helper once:
 pip install git+https://github.com/ESA-PhiLab/Major-TOM
 ```
 
-Run the example script:
+Build a scene-level cache (with Major TOM-style columns) using the benchmark workflow:
 
 ```bash
-python examples/major_tom_on_the_fly_collection.py \
-  --name major-tom-on-the-fly \
+uv run python examples/major_tom_benchmark/01_build_collection.py \
+  --name major-tom-benchmark-scenes \
   --bbox -122.55 37.65 -122.30 37.90 \
-  --date-range 2024-01-01 2024-02-01 \
-  --samples 24 \
-  --bands B02 B08
+  --date-range 2024-01-01 2024-12-31
 ```
 
 What it does:
 
-1. Builds a Sentinel-2 Collection from the catalog
+1. Builds (or reuses) a Sentinel-2 Collection from the catalog
 2. Uses `majortom.grid.Grid` on scene centroids to derive `major_tom_grid_cell`
 3. Uses STAC `s2:product_uri` (without `.SAFE`) as `major_tom_product_id`
 4. Adds deterministic split labels from `grid_cell`
-5. Constructs per-scene patch geometries from scene centers, chip size, and resolution
-6. Fetches chips with `Collection.get_numpy()` scene-batched via Arrow WKB geometry
+5. Exports a shareable scene-level Collection that downstream tools can query
 
 ### Retrieve pixels from Arrow geometry
 

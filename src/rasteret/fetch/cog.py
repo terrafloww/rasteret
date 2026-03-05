@@ -1188,10 +1188,13 @@ def _geometry_window_pixels(
     left, bottom, right, top = rio_bounds(geom_geojson, transform=~transform)
     cols = [left, right, right, left]
     rows = [top, top, bottom, bottom]
-    row_start = int(math.floor(min(rows)))
-    row_stop = int(math.ceil(max(rows)))
-    col_start = int(math.floor(min(cols)))
-    col_stop = int(math.ceil(max(cols)))
+    # Guard against floating-point drift at exact pixel edges (e.g. 1068.0
+    # becoming 1068.0000000002 and expanding the window by 1 pixel).
+    eps = 1e-9
+    row_start = int(math.floor(min(rows) + eps))
+    row_stop = int(math.ceil(max(rows) - eps))
+    col_start = int(math.floor(min(cols) + eps))
+    col_stop = int(math.ceil(max(cols) - eps))
 
     if raster_width is not None and raster_height is not None:
         row_start = max(row_start, 0)

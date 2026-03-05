@@ -44,8 +44,6 @@ For step-by-step learning, see the [tutorial notebooks](../notebooks/).
 
 ## Major TOM-style workflows
 
-- `major_tom_on_the_fly_collection.py`: Builds a Sentinel-2 collection,
-  enriches it with Major TOM-style columns (`major_tom_product_id`,
-  `major_tom_grid_cell`, `split`), constructs per-scene patch geometries
-  from scene centers + chip size, and fetches NumPy chips scene-batched
-  via Arrow WKB geometry. Requires `pip install git+https://github.com/ESA-PhiLab/Major-TOM`.
+- `major_tom_benchmark/`: A three-script workflow to build a scene-level
+  collection cache with Major TOM-style columns and run HF vs Rasteret
+  throughput benchmarks. Requires `pip install git+https://github.com/ESA-PhiLab/Major-TOM`.

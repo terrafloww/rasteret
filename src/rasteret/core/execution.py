@@ -57,8 +57,10 @@ async def _load_collection_data(
     max_concurrent: int,
     for_xarray: bool,
     batch_size: int = 10,
+    progress: bool = False,
     backend: object | None = None,
     target_crs: int | None = None,
+    geometry_crs: int | None = 4326,
     **filters: Any,
 ) -> tuple[list[gpd.GeoDataFrame] | list, list[tuple[str, Exception]]]:
     """Core loading loop: iterate records, fetch tiles."""
@@ -79,15 +81,20 @@ async def _load_collection_data(
     if current_batch:
         raster_batches.append(current_batch)
 
-    for batch in tqdm(raster_batches, desc="Loading rasters"):
+    iterable = (
+        tqdm(raster_batches, desc="Loading rasters") if progress else raster_batches
+    )
+    for batch in iterable:
         tasks = [
             raster.load_bands(
                 geometries=geometries,
                 band_codes=bands,
                 max_concurrent=max_concurrent,
                 for_xarray=for_xarray,
+                progress=progress,
                 backend=backend,
                 target_crs=target_crs,
+                geometry_crs=geometry_crs,
             )
             for raster in batch
         ]
@@ -127,6 +134,8 @@ def _load_and_merge(
     max_concurrent: int = 50,
     backend: object | None = None,
     target_crs: int | None = None,
+    progress: bool = False,
+    geometry_crs: int | None = 4326,
     **filters: Any,
 ):
     """Load collection data and merge via *merge_fn*.
@@ -157,6 +166,8 @@ def _load_and_merge(
             backend=backend,
             for_xarray=for_xarray,
             target_crs=target_crs,
+            progress=bool(progress),
+            geometry_crs=geometry_crs,
             **filters,
         )
         if errors and results:
@@ -234,6 +245,8 @@ def get_collection_xarray(
     max_concurrent: int = 50,
     backend: object | None = None,
     target_crs: int | None = None,
+    geometry_crs: int | None = 4326,
+    progress: bool = False,
     **filters: Any,
 ) -> xr.Dataset:
     """Load selected bands as an ``xarray.Dataset``.
@@ -301,6 +314,8 @@ def get_collection_xarray(
         max_concurrent=max_concurrent,
         backend=backend,
         target_crs=target_crs,
+        geometry_crs=geometry_crs,
+        progress=bool(progress),
         **filters,
     )
 
@@ -314,6 +329,8 @@ def get_collection_gdf(
     max_concurrent: int = 50,
     backend: object | None = None,
     target_crs: int | None = None,
+    geometry_crs: int | None = 4326,
+    progress: bool = False,
     **filters: Any,
 ) -> gpd.GeoDataFrame:
     """Load selected bands as a ``geopandas.GeoDataFrame``.
@@ -365,6 +382,8 @@ def get_collection_gdf(
         max_concurrent=max_concurrent,
         backend=backend,
         target_crs=target_crs,
+        geometry_crs=geometry_crs,
+        progress=bool(progress),
         **filters,
     )
 
@@ -376,8 +395,10 @@ def get_collection_numpy(
     bands: list[str],
     data_source: str | None = None,
     max_concurrent: int = 50,
+    progress: bool = False,
     backend: object | None = None,
     target_crs: int | None = None,
+    geometry_crs: int | None = 4326,
     **filters: Any,
 ):
     """Load selected bands as NumPy arrays without xarray merge overhead.
@@ -484,7 +505,9 @@ def get_collection_numpy(
         merge_fn=_merge_numpy,
         data_source=data_source,
         max_concurrent=max_concurrent,
+        progress=bool(progress),
         backend=backend,
         target_crs=target_crs,
+        geometry_crs=geometry_crs,
         **filters,
     )

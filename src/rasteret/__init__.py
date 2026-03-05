@@ -37,6 +37,9 @@ def version() -> str:
 
 __version__ = version()
 
+# Public options helpers (simple runtime configuration)
+from rasteret.options import get_options, options, set_options  # noqa: E402
+
 
 def _validate_bbox(bbox: tuple[float, float, float, float] | None) -> None:
     """Raise ``ValueError`` if *bbox* coordinates are inverted."""
@@ -1061,6 +1064,8 @@ __all__ = [
     "DatasetDescriptor",
     "DatasetRegistry",
     "__version__",
+    "get_options",
+    "options",
     "as_collection",
     "build",
     "build_from_stac",
@@ -1069,5 +1074,6 @@ __all__ = [
     "load",
     "register",
     "register_local",
+    "set_options",
     "version",
 ]

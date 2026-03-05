@@ -290,6 +290,7 @@ class RasterAccessor:
         band_codes: list[str],
         max_concurrent: int = 50,
         for_xarray: bool = True,
+        progress: bool = False,
         backend: object | None = None,
         target_crs: int | None = None,
         geometry_crs: int | None = 4326,
@@ -326,14 +327,18 @@ class RasterAccessor:
         n_geoms = len(geometries)
         logger.debug(f"Loading {len(band_codes)} bands for {n_geoms} geometries")
 
-        geom_progress = tqdm(total=n_geoms, desc=f"Record {self.id}")
+        geom_progress = None
+        if progress:
+            geom_progress = tqdm(total=n_geoms, desc=f"Record {self.id}")
 
         async with COGReader(max_concurrent=max_concurrent, backend=backend) as reader:
 
             async def process_geometry(geom_idx: int, geom_id: int):
-                band_progress = tqdm(
-                    total=len(band_codes), desc=f"Geom {geom_id}", leave=False
-                )
+                band_progress = None
+                if progress:
+                    band_progress = tqdm(
+                        total=len(band_codes), desc=f"Geom {geom_id}", leave=False
+                    )
 
                 band_tasks = []
                 for band_code in band_codes:
@@ -376,9 +381,11 @@ class RasterAccessor:
                         )
                     else:
                         results.append(r)
-                band_progress.update(len(band_codes))
-                band_progress.close()
-                geom_progress.update(1)
+                if band_progress is not None:
+                    band_progress.update(len(band_codes))
+                    band_progress.close()
+                if geom_progress is not None:
+                    geom_progress.update(1)
 
                 valid = [r for r in results if r is not None]
                 if not valid and first_error is not None:
@@ -436,7 +443,8 @@ class RasterAccessor:
                         (geom_id, failed_band_codes, band_first_error)
                     )
 
-        geom_progress.close()
+        if geom_progress is not None:
+            geom_progress.close()
 
         if not results and first_error is not None:
             raise RuntimeError(

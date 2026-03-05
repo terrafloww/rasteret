@@ -563,9 +563,6 @@ class StacCollectionBuilder(CollectionBuilder):
                     {
                         "record_id": item_data["id"],
                         "band": band_code,
-                        "geometry": item_data["geometry"],
-                        "datetime": item_data["datetime"],
-                        "cloud_cover": item_data["cloud_cover"],
                         **band_metadata,
                     }
                 )

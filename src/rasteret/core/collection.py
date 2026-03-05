@@ -1101,10 +1101,12 @@ class Collection:
         bands: list[str],
         *,
         max_concurrent: int = 50,
+        progress: bool | None = None,
         cloud_config: Any = None,
         data_source: str | None = None,
         backend: Any = None,
         target_crs: int | None = None,
+        geometry_crs: int | None = 4326,
         **filters: Any,
     ) -> xr.Dataset:
         """Load selected bands into an xarray Dataset.
@@ -1127,6 +1129,9 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before merging.
+        progress : bool, optional
+            If ``True``, show progress bars during remote reads. If ``None``,
+            uses the global default set by :func:`rasteret.set_options`.
         filters : kwargs
             Additional keyword arguments passed to :meth:`subset`.
 
@@ -1141,14 +1146,20 @@ class Collection:
         self._validate_bands(bands)
         if backend is None:
             backend = self._auto_backend(cloud_config, data_source)
+        if progress is None:
+            from rasteret.options import get_options
+
+            progress = get_options().progress
         return get_collection_xarray(
             collection=self,
             geometries=geometries,
             bands=bands,
             data_source=data_source,
             max_concurrent=max_concurrent,
+            progress=bool(progress),
             backend=backend,
             target_crs=target_crs,
+            geometry_crs=geometry_crs,
             **filters,
         )
 
@@ -1158,10 +1169,12 @@ class Collection:
         bands: list[str],
         *,
         max_concurrent: int = 50,
+        progress: bool | None = None,
         cloud_config: Any = None,
         data_source: str | None = None,
         backend: Any = None,
         target_crs: int | None = None,
+        geometry_crs: int | None = 4326,
         **filters: Any,
     ) -> gpd.GeoDataFrame:
         """Load selected bands into a GeoDataFrame.
@@ -1184,6 +1197,9 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before building the GeoDataFrame.
+        progress : bool, optional
+            If ``True``, show progress bars during remote reads. If ``None``,
+            uses the global default set by :func:`rasteret.set_options`.
         filters : kwargs
             Additional keyword arguments passed to :meth:`subset`.
 
@@ -1196,14 +1212,20 @@ class Collection:
         self._validate_bands(bands)
         if backend is None:
             backend = self._auto_backend(cloud_config, data_source)
+        if progress is None:
+            from rasteret.options import get_options
+
+            progress = get_options().progress
         return get_collection_gdf(
             collection=self,
             geometries=geometries,
             bands=bands,
             data_source=data_source,
             max_concurrent=max_concurrent,
+            progress=bool(progress),
             backend=backend,
             target_crs=target_crs,
+            geometry_crs=geometry_crs,
             **filters,
         )
 
@@ -1213,10 +1235,12 @@ class Collection:
         bands: list[str],
         *,
         max_concurrent: int = 50,
+        progress: bool | None = None,
         cloud_config: Any = None,
         data_source: str | None = None,
         backend: Any = None,
         target_crs: int | None = None,
+        geometry_crs: int | None = 4326,
         **filters: Any,
     ):
         """Load selected bands into NumPy arrays.
@@ -1237,6 +1261,9 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before assembly.
+        progress : bool, optional
+            If ``True``, show progress bars during remote reads. If ``None``,
+            uses the global default set by :func:`rasteret.set_options`.
         filters : kwargs
             Additional keyword arguments passed to :meth:`subset`.
 
@@ -1249,14 +1276,20 @@ class Collection:
         self._validate_bands(bands)
         if backend is None:
             backend = self._auto_backend(cloud_config, data_source)
+        if progress is None:
+            from rasteret.options import get_options
+
+            progress = get_options().progress
         return get_collection_numpy(
             collection=self,
             geometries=geometries,
             bands=bands,
             data_source=data_source,
             max_concurrent=max_concurrent,
+            progress=bool(progress),
             backend=backend,
             target_crs=target_crs,
+            geometry_crs=geometry_crs,
             **filters,
         )
 
