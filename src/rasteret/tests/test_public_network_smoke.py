@@ -235,3 +235,55 @@ def test_aef_build_enrich_and_read_matches_rasterio(tmp_path: Path) -> None:
     # Sanity: the public URL constant stays reachable (helps catch provider moves).
     with rasterio.open(_AEF_URL) as src:
         assert src.count >= 64
+
+
+@pytest.mark.network
+def test_sample_points_matches_rasterio_sample(tmp_path: Path) -> None:
+    import pyarrow.dataset as pads
+    import rasterio
+    from shapely.geometry import Point
+
+    with _timeout(180):
+        collection = rasteret.build(
+            "earthsearch/sentinel-2-l2a",
+            name="public-network-point-sample",
+            bbox=(-122.45, 37.74, -122.35, 37.84),
+            date_range=("2024-06-01", "2024-06-30"),
+            query={"max_items": 1},
+            workspace_dir=tmp_path / "public-network-point-sample",
+            force=True,
+            max_concurrent=8,
+        )
+
+    assert collection.dataset is not None
+    row = collection.dataset.to_table(
+        columns=["id", "scene_bbox", "proj:epsg", "assets"]
+    ).to_pylist()[0]
+    record_id = row["id"]
+    asset = row["assets"]["B02"]
+    href = asset["href"]
+    band_number = int(asset.get("band_index", 0)) + 1
+
+    with rasterio.Env(
+        GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
+        AWS_NO_SIGN_REQUEST="YES",
+        AWS_REQUEST_PAYER="requester",
+    ):
+        with rasterio.open(href) as src:
+            minx, miny, maxx, maxy = src.bounds
+            x = float((minx + maxx) / 2.0)
+            y = float((miny + maxy) / 2.0)
+            point_crs = int(src.crs.to_epsg()) if src.crs else int(row["proj:epsg"])
+            rasterio_value = float(next(src.sample([(x, y)], indexes=band_number))[0])
+
+    scene = collection.where(pads.field("id") == record_id)
+    samples = scene.sample_points(
+        points=[Point(x, y)],
+        bands=["B02"],
+        geometry_crs=point_crs,
+        match="latest",
+    )
+    assert samples.num_rows == 1
+    rasteret_value = float(samples.column("value")[0].as_py())
+
+    assert rasteret_value == rasterio_value

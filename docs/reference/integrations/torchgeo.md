@@ -44,8 +44,8 @@ Rasteret honors all of these:
 
 - `label`: scalar or tensor label from a metadata column, when `label_field` is set. TorchGeo's collate functions handle arbitrary keys, so this passes through `stack_samples` and `concat_samples` without issue.
 
-Rasteret's low-level read APIs return a `valid_mask` for ML-safe workflows, but it
-is intentionally **not** included in TorchGeo samples by default to preserve
+Rasteret computes a `valid_mask` during reads for ML-safe workflows, but it is
+intentionally **not** included in TorchGeo samples by default to preserve
 TorchGeo dataset composition behavior (`dataset1 & dataset2`, `dataset1 | dataset2`).
 
 ## Notes / limitations

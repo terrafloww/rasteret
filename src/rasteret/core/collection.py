@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 from rasteret.core.execution import (
     get_collection_gdf,
     get_collection_numpy,
+    get_collection_point_samples,
     get_collection_xarray,
 )
 from rasteret.core.raster_accessor import RasterAccessor
@@ -662,20 +663,83 @@ class Collection:
             raise ValueError(f"Missing required fields: {missing}")
 
         resolved_source = data_source or self.data_source or ""
+        schema_names = set(self.dataset.schema.names)
+        band_metadata_cols = [
+            name for name in self.dataset.schema.names if name.endswith("_metadata")
+        ]
+        optional_cols = [
+            name
+            for name in ("proj:epsg", "eo:cloud_cover", "collection")
+            if name in schema_names
+        ]
+        scan_cols = [
+            "id",
+            "datetime",
+            "geometry",
+            "assets",
+            "scene_bbox",
+            *optional_cols,
+            *band_metadata_cols,
+        ]
 
-        for batch in self.dataset.to_batches():
-            for row in batch.to_pylist():
+        scanner = self.dataset.scanner(columns=scan_cols)
+        for batch in scanner.to_batches():
+            ids = batch.column(batch.schema.get_field_index("id"))
+            datetimes = batch.column(batch.schema.get_field_index("datetime"))
+            geometries = batch.column(batch.schema.get_field_index("geometry"))
+            assets = batch.column(batch.schema.get_field_index("assets"))
+            scene_bboxes = batch.column(batch.schema.get_field_index("scene_bbox"))
+
+            crs_col = (
+                batch.column(batch.schema.get_field_index("proj:epsg"))
+                if "proj:epsg" in batch.schema.names
+                else None
+            )
+            cloud_col = (
+                batch.column(batch.schema.get_field_index("eo:cloud_cover"))
+                if "eo:cloud_cover" in batch.schema.names
+                else None
+            )
+            collection_col = (
+                batch.column(batch.schema.get_field_index("collection"))
+                if "collection" in batch.schema.names
+                else None
+            )
+            band_cols = {
+                name: batch.column(batch.schema.get_field_index(name))
+                for name in band_metadata_cols
+                if name in batch.schema.names
+            }
+
+            for idx in range(batch.num_rows):
                 try:
+                    band_metadata: dict[str, Any] = {}
+                    for key, col in band_cols.items():
+                        val = col[idx]
+                        if val.is_valid:
+                            py_val = val.as_py()
+                            if py_val is not None:
+                                band_metadata[key] = py_val
+
                     info = RasterInfo(
-                        id=row["id"],
-                        datetime=row["datetime"],
-                        footprint=row["geometry"],
-                        bbox=row["scene_bbox"],
-                        crs=row.get("proj:epsg"),
-                        cloud_cover=row.get("eo:cloud_cover", 0),
-                        assets=row["assets"],
-                        band_metadata=self._extract_band_metadata(row),
-                        collection=row.get("collection", resolved_source),
+                        id=ids[idx].as_py(),
+                        datetime=datetimes[idx].as_py(),
+                        footprint=geometries[idx].as_py(),
+                        bbox=scene_bboxes[idx].as_py(),
+                        crs=crs_col[idx].as_py() if crs_col is not None else None,
+                        cloud_cover=(
+                            cloud_col[idx].as_py()
+                            if cloud_col is not None and cloud_col[idx].is_valid
+                            else 0
+                        ),
+                        assets=assets[idx].as_py(),
+                        band_metadata=band_metadata,
+                        collection=(
+                            collection_col[idx].as_py()
+                            if collection_col is not None
+                            and collection_col[idx].is_valid
+                            else resolved_source
+                        ),
                     )
                     yield RasterAccessor(info, resolved_source)
                 except (KeyError, TypeError, ValueError):
@@ -721,13 +785,41 @@ class Collection:
         cols = ("bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy")
         if not all(c in names for c in cols):
             return None
-        t = self.dataset.to_table(columns=list(cols))
-        return (
-            pc.min(t["bbox_minx"]).as_py(),
-            pc.min(t["bbox_miny"]).as_py(),
-            pc.max(t["bbox_maxx"]).as_py(),
-            pc.max(t["bbox_maxy"]).as_py(),
-        )
+        scanner = self.dataset.scanner(columns=list(cols))
+        minx: float | None = None
+        miny: float | None = None
+        maxx: float | None = None
+        maxy: float | None = None
+
+        for batch in scanner.to_batches():
+            if batch.num_rows == 0:
+                continue
+
+            bminx = pc.min(
+                batch.column(batch.schema.get_field_index("bbox_minx"))
+            ).as_py()
+            bminy = pc.min(
+                batch.column(batch.schema.get_field_index("bbox_miny"))
+            ).as_py()
+            bmaxx = pc.max(
+                batch.column(batch.schema.get_field_index("bbox_maxx"))
+            ).as_py()
+            bmaxy = pc.max(
+                batch.column(batch.schema.get_field_index("bbox_maxy"))
+            ).as_py()
+
+            if bminx is not None:
+                minx = bminx if minx is None else min(minx, bminx)
+            if bminy is not None:
+                miny = bminy if miny is None else min(miny, bminy)
+            if bmaxx is not None:
+                maxx = bmaxx if maxx is None else max(maxx, bmaxx)
+            if bmaxy is not None:
+                maxy = bmaxy if maxy is None else max(maxy, bmaxy)
+
+        if None in (minx, miny, maxx, maxy):
+            return None
+        return (float(minx), float(miny), float(maxx), float(maxy))
 
     @property
     def epsg(self) -> list[int]:
@@ -736,8 +828,15 @@ class Collection:
             return []
         if "proj:epsg" not in self.dataset.schema.names:
             return []
-        col = self.dataset.to_table(columns=["proj:epsg"]).column("proj:epsg")
-        return sorted(v.as_py() for v in pc.unique(col) if v.is_valid)
+        scanner = self.dataset.scanner(columns=["proj:epsg"])
+        codes: set[int] = set()
+        for batch in scanner.to_batches():
+            col = batch.column(batch.schema.get_field_index("proj:epsg"))
+            unique = pc.unique(pc.drop_null(col))
+            for value in unique:
+                if value.is_valid:
+                    codes.add(int(value.as_py()))
+        return sorted(codes)
 
     def __repr__(self) -> str:
         n_bands = len(self.bands)
@@ -1107,6 +1206,7 @@ class Collection:
         backend: Any = None,
         target_crs: int | None = None,
         geometry_crs: int | None = 4326,
+        all_touched: bool = False,
         **filters: Any,
     ) -> xr.Dataset:
         """Load selected bands into an xarray Dataset.
@@ -1129,6 +1229,9 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before merging.
+        all_touched : bool
+            Passed through to polygon masking behavior. ``False`` matches
+            rasterio default semantics.
         progress : bool, optional
             If ``True``, show progress bars during remote reads. If ``None``,
             uses the global default set by :func:`rasteret.set_options`.
@@ -1160,6 +1263,7 @@ class Collection:
             backend=backend,
             target_crs=target_crs,
             geometry_crs=geometry_crs,
+            all_touched=all_touched,
             **filters,
         )
 
@@ -1175,6 +1279,7 @@ class Collection:
         backend: Any = None,
         target_crs: int | None = None,
         geometry_crs: int | None = 4326,
+        all_touched: bool = False,
         **filters: Any,
     ) -> gpd.GeoDataFrame:
         """Load selected bands into a GeoDataFrame.
@@ -1197,6 +1302,9 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before building the GeoDataFrame.
+        all_touched : bool
+            Passed through to polygon masking behavior. ``False`` matches
+            rasterio default semantics.
         progress : bool, optional
             If ``True``, show progress bars during remote reads. If ``None``,
             uses the global default set by :func:`rasteret.set_options`.
@@ -1226,6 +1334,7 @@ class Collection:
             backend=backend,
             target_crs=target_crs,
             geometry_crs=geometry_crs,
+            all_touched=all_touched,
             **filters,
         )
 
@@ -1241,6 +1350,7 @@ class Collection:
         backend: Any = None,
         target_crs: int | None = None,
         geometry_crs: int | None = 4326,
+        all_touched: bool = False,
         **filters: Any,
     ):
         """Load selected bands into NumPy arrays.
@@ -1261,6 +1371,9 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before assembly.
+        all_touched : bool
+            Passed through to polygon masking behavior. ``False`` matches
+            rasterio default semantics.
         progress : bool, optional
             If ``True``, show progress bars during remote reads. If ``None``,
             uses the global default set by :func:`rasteret.set_options`.
@@ -1290,6 +1403,85 @@ class Collection:
             backend=backend,
             target_crs=target_crs,
             geometry_crs=geometry_crs,
+            all_touched=all_touched,
+            **filters,
+        )
+
+    def sample_points(
+        self,
+        points: Any,
+        bands: list[str],
+        *,
+        geometry_column: str | None = None,
+        x_column: str | None = None,
+        y_column: str | None = None,
+        max_concurrent: int = 50,
+        progress: bool | None = None,
+        cloud_config: Any = None,
+        data_source: str | None = None,
+        backend: Any = None,
+        geometry_crs: int | None = 4326,
+        match: str = "all",
+        **filters: Any,
+    ) -> pa.Table:
+        """Sample point values into an Arrow table.
+
+        Parameters
+        ----------
+        points : Any
+            Point input as Arrow/GeoArrow/WKB/Shapely/GeoJSON, or tabular input
+            (Arrow table, pandas/GeoPandas, Polars, DuckDB/SedonaDB relation).
+        bands : list of str
+            Band codes to sample.
+        geometry_column : str, optional
+            Geometry column name when *points* is tabular. Column may contain WKB,
+            GeoArrow points, or Shapely Point objects.
+        x_column, y_column : str, optional
+            Coordinate column names when *points* is tabular.
+        max_concurrent : int
+            Maximum concurrent HTTP requests.
+        progress : bool, optional
+            If ``True``, show progress bars during remote reads. If ``None``,
+            uses the global default set by :func:`rasteret.set_options`.
+        cloud_config : CloudConfig, optional
+            Cloud configuration for URL rewriting.
+        data_source : str, optional
+            Override the inferred data source.
+        backend : StorageBackend, optional
+            Pluggable I/O backend.
+        geometry_crs : int, optional
+            CRS EPSG code of input points. Defaults to EPSG:4326.
+        match : {"all", "latest"}
+            ``"all"`` returns every matching record for each point.
+            ``"latest"`` returns one row per ``(point_index, band)``.
+        filters : kwargs
+            Additional keyword arguments passed to :meth:`subset`.
+
+        Returns
+        -------
+        pyarrow.Table
+            Table with sampled values and metadata columns.
+        """
+        self._validate_bands(bands)
+        if backend is None:
+            backend = self._auto_backend(cloud_config, data_source)
+        if progress is None:
+            from rasteret.options import get_options
+
+            progress = get_options().progress
+        return get_collection_point_samples(
+            collection=self,
+            points=points,
+            bands=bands,
+            geometry_column=geometry_column,
+            x_column=x_column,
+            y_column=y_column,
+            data_source=data_source,
+            max_concurrent=max_concurrent,
+            progress=bool(progress),
+            backend=backend,
+            geometry_crs=geometry_crs,
+            match=match,
             **filters,
         )
 

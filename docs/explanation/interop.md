@@ -72,9 +72,10 @@ whereas TorchGeo converts to `float32` by default (via its `dtype` property).
 Multi-CRS scenes are auto-reprojected to a common CRS using GDAL's
 `calculate_default_transform` for correct resolution handling.
 
-Rasteret's read pipeline can produce a `valid_mask` (boolean) so ML workflows
-can distinguish filled pixels from real source data. The TorchGeo adapter keeps
-samples TorchGeo-standard by default and does not include `valid_mask`.
+Rasteret computes a `valid_mask` (boolean) during COG reads to identify valid
+pixels. Point sampling uses this mask to skip filled pixels. The TorchGeo
+adapter keeps samples TorchGeo-standard by default and does not include
+`valid_mask`.
 
 For mask-style datasets, pass `is_image=False` to return `sample["mask"]`
 instead of `sample["image"]` (single-band data squeezes the channel
@@ -99,6 +100,7 @@ off to standard xarray, GeoPandas, or NumPy outputs:
 - [`Collection.get_xarray(...)`](../reference/core/collection.md) returns an `xr.Dataset`
 - [`Collection.get_gdf(...)`](../reference/core/collection.md) returns a `gpd.GeoDataFrame`
 - [`Collection.get_numpy(...)`](../reference/core/collection.md) returns NumPy arrays (`[N, H, W]` or `[N, C, H, W]`)
+- [`Collection.sample_points(...)`](../reference/core/collection.md) returns an Arrow table for point features (`pyarrow.Table`)
 
 See [Quickstart](../tutorials/01_quickstart.ipynb).
 
@@ -120,9 +122,7 @@ with rioxarray if installed.
 Band arrays return in the native COG dtype. For Sentinel-2 L2A, that is
 `uint16` (surface reflectance values 0-10000). Geometry masking fills
 outside-AOI / outside-coverage pixels with the COG `nodata` value when
-present, otherwise `0`, preserving native dtype. For ML workloads that
-should avoid learning from filled pixels, use the `valid_mask` returned
-by Rasteret reads.
+present, otherwise `0`, preserving native dtype.
 
 #### Multi-CRS
 

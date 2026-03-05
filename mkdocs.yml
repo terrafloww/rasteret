@@ -141,6 +141,7 @@ nav:
   - How-To Guides:
     - how-to/index.md
     - Build from Parquet: how-to/build-from-parquet.md
+    - Point Sampling and Masking: how-to/point-sampling-and-masking.md
     - AEF Embeddings: how-to/aef-embeddings.md
     - Enriched Parquet Workflows: how-to/enriched-parquet-workflows.md
     - ML Training with Splits: how-to/ml-training-splits.md

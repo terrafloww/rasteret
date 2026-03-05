@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.dataset as ds
 from pyproj import Transformer
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -81,15 +82,15 @@ def infer_data_source_from_dataset(dataset: Any) -> str:
             return decoded
 
     if "collection" in dataset.schema.names:
-        # Avoid materializing the entire table (can be expensive for large datasets).
+        # Avoid materializing the entire column.
         try:
-            scanner = dataset.scanner(columns=["collection"])
-            for batch in scanner.to_batches():
-                col = batch.column(0)
-                for value in col:
-                    source = value.as_py() if hasattr(value, "as_py") else value
-                    if isinstance(source, str) and source:
-                        return source
+            expr = ds.field("collection").is_valid() & (ds.field("collection") != "")
+            scanner = dataset.scanner(columns=["collection"], filter=expr)
+            head = scanner.head(1)
+            if head.num_rows:
+                source = head.column("collection")[0].as_py()
+                if isinstance(source, str) and source:
+                    return source
         except (pa.ArrowInvalid, pa.ArrowKeyError, OSError) as exc:
             # Best-effort fallback; failure here should not break reads.
             logger.debug("Failed to read 'collection' column: %s", exc)

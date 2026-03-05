@@ -35,23 +35,30 @@ Rasteret's defaults are rasterio-aligned:
   - the COG `nodata` value when present, otherwise
   - `0` (preserving native dtype).
 
-## `valid_mask` (ML-safe outputs)
+`all_touched` can be controlled at Collection API level on:
 
-All primary reads return a boolean `valid_mask` that is **True** only where a
-pixel is both:
+- `get_xarray(..., all_touched=...)`
+- `get_gdf(..., all_touched=...)`
+- `get_numpy(..., all_touched=...)`
+
+## `valid_mask` semantics
+
+Rasteret computes a boolean `valid_mask` during COG reads that is
+**True** only where a pixel is both:
 
 1) inside the requested AOI/window, **and**\
 2) inside actual raster coverage (not padded/fill pixels).
 
-This lets ML pipelines avoid training on filled pixels without changing the
-read dtype/values.
+Point sampling uses this mask to exclude invalid pixels. Public high-level
+outputs (`get_xarray`, `get_numpy`, `get_gdf`)
+currently return filled arrays/frames and do not expose `valid_mask` as a
+separate output.
 
 ## Data types
 
 - Rasteret preserves the **native COG dtype** by default (e.g., Sentinel-2
   `uint16`, AEF `int8`).
-- Masking/filling does not silently promote to a floating dtype;
-  use `valid_mask` to distinguish fill from real data.
+- Masking/filling does not silently promote to a floating dtype.
 
 ## TorchGeo interop
 
@@ -69,6 +76,13 @@ TorchGeo's `WarpedVRT` approach in `_load_warp_file()`.
 If requested bands have different resolutions, Rasteret fails fast by default.
 To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
 `allow_resample=True` to `Collection.to_torchgeo_dataset(...)`.
+
+## Point sampling semantics
+
+- `Collection.sample_points(...)` uses nearest-pixel semantics aligned with
+  `rasterio.sample(...)`.
+- Point outputs are tabular (`pyarrow.Table`) with explicit CRS columns
+  (`point_crs`, `raster_crs`) for downstream joins and multi-CRS workflows.
 
 ## What "fail loudly" means
 

@@ -99,7 +99,14 @@ def _ensure_native(arr: pa.Array) -> pa.Array:
         or pa.types.is_binary(arr.type)
         or pa.types.is_large_binary(arr.type)
     ):
-        return ga.as_geoarrow(arr)
+        try:
+            return ga.as_geoarrow(arr)
+        except Exception as exc:
+            raise TypeError(
+                "Binary geometry input must be OGC WKB. "
+                "If the column comes from DuckDB GEOMETRY, use "
+                "ST_AsWKB(geom) in SQL before passing it to Rasteret."
+            ) from exc
     return arr
 
 

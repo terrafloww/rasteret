@@ -11,10 +11,11 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+from affine import Affine
 from tqdm.asyncio import tqdm
 
 from rasteret.constants import BandRegistry
-from rasteret.fetch.cog import read_cog
+from rasteret.fetch.cog import normalize_transform, read_cog
 from rasteret.types import CogMetadata, RasterInfo
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,7 @@ class RasterAccessor:
         max_concurrent: int = 50,
         reader: object | None = None,
         geometry_crs: int | None = 4326,
+        all_touched: bool = False,
     ) -> dict | None:
         """Load single band data for a geometry identified by index."""
         cog_meta, url, band_index = self.try_get_band_cog_metadata(band_code)
@@ -221,6 +223,7 @@ class RasterAccessor:
             geometry_crs=geometry_crs,
             max_concurrent=max_concurrent,
             reader=reader,
+            all_touched=all_touched,
         )
         if result.data.size == 0:
             return None
@@ -231,6 +234,159 @@ class RasterAccessor:
         # nodata masking, and dtype promotion (uint16 -> float32).
 
         return {"data": result.data, "transform": result.transform, "band": band_code}
+
+    async def sample_points(
+        self,
+        *,
+        points: pa.Array,
+        band_codes: list[str],
+        max_concurrent: int = 50,
+        backend: object | None = None,
+        geometry_crs: int | None = 4326,
+        method: str = "nearest",
+    ) -> list[dict]:
+        """Sample point values for this record.
+
+        Parameters
+        ----------
+        points : pa.Array
+            GeoArrow-native point array.
+        band_codes : list of str
+            Band codes to sample.
+        max_concurrent : int
+            Maximum concurrent HTTP requests.
+        backend : object, optional
+            Pluggable I/O backend.
+        geometry_crs : int, optional
+            CRS EPSG code of input points. Defaults to EPSG:4326.
+        method : str
+            Sampling method. Only ``"nearest"`` is currently supported.
+
+        Returns
+        -------
+        list of dict
+            One row per ``(point, band)`` sample for this record.
+        """
+        if method != "nearest":
+            raise ValueError("Only nearest point sampling is supported currently.")
+
+        type_name = getattr(points.type, "extension_name", "") or ""
+        if "geoarrow.point" not in type_name:
+            from rasteret.core.geometry import UnsupportedGeometryError
+
+            raise UnsupportedGeometryError(
+                "Point sampling requires Point geometries. "
+                "Use get_xarray/get_numpy/get_gdf for Polygon/MultiPolygon AOIs."
+            )
+
+        import geoarrow.pyarrow as ga
+
+        from rasteret.fetch.cog import COGReader
+
+        transformer = None
+        if (
+            geometry_crs is not None
+            and self.crs is not None
+            and geometry_crs != self.crs
+        ):
+            from pyproj import Transformer
+
+            transformer = Transformer.from_crs(geometry_crs, self.crs, always_xy=True)
+
+        rows: list[dict] = []
+        point_xs_arr, point_ys_arr = ga.point_coords(points)
+        point_xs = point_xs_arr.to_numpy(zero_copy_only=False)
+        point_ys = point_ys_arr.to_numpy(zero_copy_only=False)
+        sample_xs, sample_ys = point_xs, point_ys
+        if transformer is not None:
+            sample_xs, sample_ys = transformer.transform(point_xs, point_ys)
+
+        async with COGReader(
+            max_concurrent=max_concurrent, backend=backend
+        ) as shared_reader:
+            for point_index in range(len(point_xs)):
+                point_x = float(point_xs[point_index])
+                point_y = float(point_ys[point_index])
+                sample_x = float(sample_xs[point_index])
+                sample_y = float(sample_ys[point_index])
+
+                for band_code in band_codes:
+                    cog_meta, url, band_index = self.try_get_band_cog_metadata(
+                        band_code
+                    )
+                    if cog_meta is None or url is None or cog_meta.transform is None:
+                        raise ValueError(
+                            f"Missing band metadata or href for band '{band_code}' "
+                            f"in record '{self.id}'"
+                        )
+
+                    scale_x, trans_x, scale_y, trans_y = normalize_transform(
+                        cog_meta.transform
+                    )
+                    src_transform = Affine(
+                        float(scale_x),
+                        0.0,
+                        float(trans_x),
+                        0.0,
+                        float(scale_y),
+                        float(trans_y),
+                    )
+                    col_f, row_f = (~src_transform) * (sample_x, sample_y)
+                    col = int(np.floor(col_f))
+                    row = int(np.floor(row_f))
+                    if (
+                        row < 0
+                        or col < 0
+                        or row >= int(cog_meta.height)
+                        or col >= int(cog_meta.width)
+                    ):
+                        continue
+
+                    x0 = src_transform.c + col * src_transform.a
+                    x1 = src_transform.c + (col + 1) * src_transform.a
+                    y0 = src_transform.f + row * src_transform.e
+                    y1 = src_transform.f + (row + 1) * src_transform.e
+                    bounds = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+                    result = await read_cog(
+                        url,
+                        cog_meta,
+                        band_index=band_index,
+                        bounds=bounds,
+                        out_shape=(1, 1),
+                        mode="window",
+                        max_concurrent=max_concurrent,
+                        reader=shared_reader,
+                    )
+                    if result.data.size == 0 or result.valid_mask.size == 0:
+                        continue
+                    if not bool(result.valid_mask[0, 0]):
+                        continue
+
+                    value = result.data[0, 0].item()
+                    rows.append(
+                        {
+                            "point_index": int(point_index),
+                            "point_x": point_x,
+                            "point_y": point_y,
+                            "point_crs": int(geometry_crs)
+                            if geometry_crs is not None
+                            else None,
+                            "record_id": self.id,
+                            "datetime": pd.Timestamp(self.datetime).to_datetime64(),
+                            "collection": self.collection,
+                            "cloud_cover": float(self.cloud_cover)
+                            if self.cloud_cover is not None
+                            else None,
+                            "band": band_code,
+                            "value": float(value),
+                            "raster_crs": int(self.crs)
+                            if self.crs is not None
+                            else None,
+                        }
+                    )
+
+        return rows
 
     def _reproject_band_results(
         self,
@@ -294,6 +450,7 @@ class RasterAccessor:
         backend: object | None = None,
         target_crs: int | None = None,
         geometry_crs: int | None = 4326,
+        all_touched: bool = False,
     ):
         """Load bands for all geometries with parallel processing.
 
@@ -313,6 +470,9 @@ class RasterAccessor:
             Reproject results to this CRS.
         geometry_crs : int, optional
             CRS of the *geometries* input (default EPSG:4326).
+        all_touched : bool
+            Passed through to polygon masking behavior. ``False`` matches
+            rasterio default semantics.
 
         Returns
         -------
@@ -349,6 +509,7 @@ class RasterAccessor:
                         max_concurrent,
                         reader=reader,
                         geometry_crs=geometry_crs,
+                        all_touched=all_touched,
                     )
                     band_tasks.append(task)
 

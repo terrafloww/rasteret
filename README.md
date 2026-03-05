@@ -38,6 +38,7 @@ Key Features -
 - **Zero data downloads** - work with terabytes of imagery while storing only megabytes of metadata.
 - **No STAC at training time** - query once at setup; zero API calls during training with Collection you can extend.
 - **Reproducible** - same Parquet index = same records = same results
+- **Point sampling built in** - `sample_points()` returns Arrow-native tables for feature pipelines and large point sets
 - **Native dtypes** - integer imagery stays integer; missing/edge coverage is represented via fill values (nodata or 0) instead of NaNs
 - **Shareable cache** - enrich our Collection with your ML splits, patch geometries, custom data points for ML, and share it, don't write folders of image chips!
 
@@ -187,9 +188,35 @@ ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
 arr = collection.get_numpy(
     geometries=(77.55, 13.01, 77.58, 13.08),
     bands=["B04", "B08"],
+    all_touched=False,  # rasterio default masking semantics
 )
 # shape: [N, C, H, W] for multi-band, [N, H, W] for single-band
 ```
+
+### Point values (Arrow-native)
+
+```python
+import duckdb
+
+# Keep your table in DuckDB and pass coordinate columns directly
+points = duckdb.sql("""
+    SELECT lon, lat
+    FROM read_parquet('points.parquet')
+""").arrow().read_all()
+
+samples = collection.sample_points(
+    points=points,     # query input table/array of point locations
+    x_column="lon",
+    y_column="lat",
+    bands=["B04", "B08"],
+    geometry_crs=4326,
+    match="latest",        # or "all" for full time series matches
+)
+# pyarrow.Table with point_index, record_id, datetime, band, value, point_crs, raster_crs
+```
+
+Collection-centric loop:
+`build/load/as_collection -> subset/where -> get_xarray/get_numpy/sample_points/to_torchgeo_dataset`.
 
 <details>
 <summary><strong>Going further</strong></summary>
@@ -202,6 +229,7 @@ arr = collection.get_numpy(
 | Authenticated sources (PC, requester-pays, Earthdata, etc.) | [Custom Cloud Provider](https://terrafloww.github.io/rasteret/how-to/custom-cloud-provider/) |
 | Share a Collection | `collection.export("path/")` then `rasteret.load("path/")` |
 | Filter by cloud cover, date, bbox | [`collection.subset()`](https://terrafloww.github.io/rasteret/how-to/collection-management/) |
+| Sample values for large point sets | [`collection.sample_points()`](https://terrafloww.github.io/rasteret/how-to/point-sampling-and-masking/) |
 
 </details>
 

@@ -72,6 +72,7 @@ docs = [
 ]
 examples = [
     "duckdb>=1.1.0",
+    "sedonadb>=0.2.0",
     "stac-geoparquet>=0.6.0",
     "datasets>=2.20.0",
     "huggingface_hub>=0.23.0",

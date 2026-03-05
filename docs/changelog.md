@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.3.2
+
+### Added
+
+- **`Collection.sample_points()`**: first-class point sampling API returning a
+  `pyarrow.Table` (`point_index`, `record_id`, `datetime`, `band`, `value`,
+  CRS columns, and metadata fields). Supports `match="all"` and
+  `match="latest"`.
+- New guide: **[Point Sampling and Masking](how-to/point-sampling-and-masking.md)**.
+
+### Changed
+
+- **Masking controls surfaced at Collection level**:
+  `get_xarray()`, `get_gdf()`, and `get_numpy()` now accept
+  `all_touched=...` directly.
+- **Table-native point sampling inputs**:
+  `Collection.sample_points(...)` now accepts Arrow tables and common
+  dataframe/relation inputs with `x_column`/`y_column` or
+  `geometry_column` (WKB/GeoArrow/shapely point column).
+- Point sampling aligns to **rasterio `sample()` semantics** (nearest-pixel
+  index math) for deterministic parity on real COGs.
+- Core read internals are more Arrow-native:
+  - `iterate_rasters()` now scans columnar batches (no `batch.to_pylist()` in
+    the core read iterator),
+  - `infer_data_source()` uses filtered `scanner.head(1)`,
+  - multi-CRS detection in xarray path streams `proj:epsg` counts per batch,
+  - `sample_points()` uses vectorized `geoarrow.point_coords`.
+- Error messaging for non-OGC binary geometry input now explicitly points
+  DuckDB users to `ST_AsWKB(geom)` when needed.
+
+### Tested
+
+- Public network smoke: `test_public_network_smoke.py` passes with `--network`,
+  including point sampling parity against `rasterio.sample()`.
+- Network smoke (`test_network_smoke.py`) passes for available providers
+  (expected skips remain for missing optional extras/credentials).
+
+### Packaging
+
+- `sedonadb>=0.2.0` added to the `examples` extra for Arrow-native point
+  workflow examples.
+
+---
+
 ## v0.3.1
 
 ### Added

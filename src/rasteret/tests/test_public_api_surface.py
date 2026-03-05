@@ -73,17 +73,40 @@ def test_collection_analysis_methods_delegate_to_execution_layer() -> None:
             "rasteret.core.collection.get_collection_numpy",
             return_value="numpy-result",
         ) as mocked_numpy,
+        patch(
+            "rasteret.core.collection.get_collection_point_samples",
+            return_value=pa.table({"value": pa.array([1.0])}),
+        ) as mocked_points,
     ):
         xarray_result = collection.get_xarray(geometries=[], bands=["B04"])
         gdf_result = collection.get_gdf(geometries=[], bands=["B04"])
         numpy_result = collection.get_numpy(geometries=[], bands=["B04"])
+        points_result = collection.sample_points(points=[], bands=["B04"])
 
     mocked_xarray.assert_called_once()
     mocked_gdf.assert_called_once()
     mocked_numpy.assert_called_once()
+    mocked_points.assert_called_once()
     assert xarray_result == "xarray-result"
     assert gdf_result == "gdf-result"
     assert numpy_result == "numpy-result"
+    assert points_result.num_rows == 1
+
+
+def test_get_numpy_forwards_all_touched_flag() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        dataset_path = Path(tmp_dir) / "example_stac"
+        _write_minimal_partitioned_collection(dataset_path)
+        collection = Collection._load_cached(dataset_path)
+
+    with patch(
+        "rasteret.core.collection.get_collection_numpy",
+        return_value="numpy-result",
+    ) as mocked_numpy:
+        _ = collection.get_numpy(geometries=[], bands=["B04"], all_touched=True)
+
+    assert mocked_numpy.call_count == 1
+    assert mocked_numpy.call_args.kwargs["all_touched"] is True
 
 
 def test_public_api_surface_is_collection_first() -> None:

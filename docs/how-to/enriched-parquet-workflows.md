@@ -5,14 +5,14 @@ train/val/test splits, labels, quality flags) and query them later with
 standard Arrow-compatible tools. Everything stays in one file, making
 experiments reproducible and shareable.
 
-The pattern:
+The pattern (collection-centric):
 
 1. **Rasteret builds** the index (scene metadata + COG header cache)
 2. **You enrich** it with experiment-specific columns
 3. **Arrow tools filter** the enriched Parquet (DuckDB, PyArrow, GeoPandas)
 4. **Rasteret fetches** COG pixels for the filtered subset
 
-All data flows through Arrow tables. No conversion to Python lists.
+Core data flow stays Arrow-native through Collection operations.
 
 ## 1. Build and enrich
 
@@ -270,7 +270,7 @@ This gives you:
 Install the helper once:
 
 ```bash
-pip install git+https://github.com/ESA-PhiLab/Major-TOM
+uv pip install git+https://github.com/ESA-PhiLab/Major-TOM
 ```
 
 Build a scene-level cache (with Major TOM-style columns) using the benchmark workflow:

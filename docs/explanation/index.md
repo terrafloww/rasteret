@@ -3,6 +3,9 @@
 Background material that helps you understand *why* Rasteret works the
 way it does.
 
+Practical workflow lens:
+`build/load/as_collection -> subset/where -> get_xarray/get_numpy/get_gdf/sample_points`.
+
 - [Architecture](architecture.md): component overview and data flow
 - [Design Decisions](design-decisions.md): why Parquet, why a custom reader, why COGs stay COGs, and why these choices enable an open community
 - [Correctness Contract](correctness.md): the user-visible guarantees Rasteret makes (and the contract contributors must preserve)

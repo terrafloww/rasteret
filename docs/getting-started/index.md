@@ -30,7 +30,7 @@ Combine extras: `uv pip install "rasteret[xarray,aws]"`
     | `dev` | pytest, ruff, pre-commit | Running tests and linting |
     | `docs` | mkdocs + plugins | Building documentation locally |
 
-`get_numpy()` and `get_gdf()` are available in the base install (no extra needed).
+`get_numpy()`, `get_gdf()`, and `sample_points()` are available in the base install (no extra needed).
 
 Verify the installation:
 
@@ -215,6 +215,30 @@ Pick whichever output fits your workflow:
     Use this when you want direct NumPy output for custom ML/data pipelines
     without xarray coordinates.
 
+=== "Point values (Arrow table)"
+
+    ```python
+    import pyarrow as pa
+
+    points = pa.table(
+        {"lon": [77.56, 77.57], "lat": [13.03, 13.04]}
+    )
+    samples = collection.sample_points(
+        points=points,
+        x_column="lon",
+        y_column="lat",
+        bands=["B04", "B08"],
+        geometry_crs=4326,
+        match="latest",
+    )
+    ```
+
+    Use this when you need tabular point features (e.g. millions of points,
+    joins with metadata tables, model feature stores).
+
+    `samples` is a `pyarrow.Table`, so you can process it directly with
+    Arrow-native tools. (Shapely points are also supported for quick scripts.)
+
 That's it for the basics. Two calls: `build()` to index, then read pixels.
 
 !!! info "Data types"
@@ -248,6 +272,7 @@ Once the quick start works, explore these as you need them:
 |---|---|
 | Follow a hands-on notebook | [Tutorials](../tutorials/index.md) |
 | Build from existing Parquet (Source Cooperative, STAC GeoParquet, custom) | [Build from Parquet](../how-to/build-from-parquet.md) |
+| Sample values at many points (Arrow-first) | [Point Sampling and Masking](../how-to/point-sampling-and-masking.md) |
 | Enrich a collection with AOIs and labels | [Enriched Parquet Workflows](../how-to/enriched-parquet-workflows.md) |
 | Use train/val/test splits and labels | [ML Training with Splits](../how-to/ml-training-splits.md) |
 | Manage cached collections (build/import/list/info/delete) | [Collection Management](../how-to/collection-management.md) |

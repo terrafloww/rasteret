@@ -30,7 +30,7 @@ This split keeps metadata workflows table-native while avoiding payload-in-Parqu
                                 v
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ Rasteret IO engine (custom byte range fetches)                               │
-│ get_numpy() / get_xarray() / to_torchgeo_dataset()                           │
+│ get_numpy() / get_xarray() / sample_points() / to_torchgeo_dataset()         │
 │ consumes filtered rows + geometry + cached tile metadata                     │
 └───────────────────────────────┬──────────────────────────────────────────────┘
                                 │ async byte-range tile requests
@@ -68,6 +68,8 @@ Collection  (Arrow dataset wrapper)
     +--> get_numpy()            --> np.ndarray
     |
     +--> get_gdf()              --> gpd.GeoDataFrame
+    |
+    +--> sample_points(points=...) --> pyarrow.Table
     |
     +--> iterate_rasters()      --> async RasterAccessor stream
     |
@@ -108,7 +110,7 @@ implementation details used to keep read-time code simple and fast.
 object. It wraps a `pyarrow.dataset.Dataset` and provides:
 
 - **Filtering**: [`subset()`](../reference/core/collection.md), [`where()`](../reference/core/collection.md), `select_split()`
-- **Output adapters**: [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md), [`get_numpy()`](../reference/core/collection.md), [`get_xarray()`](../reference/core/collection.md), [`get_gdf()`](../reference/core/collection.md)
+- **Output adapters**: [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md), [`get_numpy()`](../reference/core/collection.md), [`get_xarray()`](../reference/core/collection.md), [`get_gdf()`](../reference/core/collection.md), [`sample_points()`](../reference/core/collection.md)
 - **Export**: [`export()`](../reference/core/collection.md)
 - **Discovery**: [`list_collections()`](../reference/core/collection.md)
 
@@ -143,10 +145,10 @@ Tiles are decompressed and returned in their native COG dtype (uint16, int8,
 float32, etc.).
 
 By default, AOI reads fill outside-AOI / outside-coverage pixels with the
-COG `nodata` value when present, otherwise `0`, and a `valid_mask` is
-available for ML-safe workflows. The TorchGeo adapter keeps samples
-TorchGeo-standard by default and does not include `valid_mask` (see
-[Ecosystem Comparison](interop.md#torchgeo)).
+COG `nodata` value when present, otherwise `0`. Rasteret also computes a
+`valid_mask` during COG reads; point sampling uses it to skip filled pixels.
+TorchGeo samples remain TorchGeo-standard and do not include `valid_mask`
+(see [Ecosystem Comparison](interop.md#torchgeo)).
 
 ### Ingest drivers
 

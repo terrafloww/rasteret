@@ -103,6 +103,7 @@ Pick any ID and pass it to `build()`. For datasets not in the catalog, use
 
 ```python
 import rasteret
+import duckdb
 
 # 1. Build index (one-time, cached)
 collection = rasteret.build("earthsearch/sentinel-2-l2a", name="s2", bbox=(...), date_range=(...))
@@ -115,7 +116,24 @@ sub = collection.subset(cloud_cover_lt=20, date_range=("2024-03-01", "2024-06-01
 ds = sub.get_xarray(geometries=(-122.5, 37.7, -122.3, 37.9), bands=["B04", "B08"])
 arr = sub.get_numpy(geometries=(-122.5, 37.7, -122.3, 37.9), bands=["B04", "B08"])  # [N, C, H, W]
 dataset = sub.to_torchgeo_dataset(bands=["B04", "B03", "B02"])    # TorchGeo
+points = duckdb.sql("""
+    SELECT lon, lat
+    FROM (VALUES (-122.40, 37.79), (-122.39, 37.80)) AS t(lon, lat)
+""").arrow().read_all()
+samples = sub.sample_points(
+    points=points,
+    x_column="lon",
+    y_column="lat",
+    bands=["B04"],
+    geometry_crs=4326,
+    match="latest",
+)
 ```
+
+DuckDB is optional here; any Arrow-compatible table/column source works.
+
+The workflow stays collection-centric:
+`build/load/as_collection -> subset/where -> get_xarray/get_numpy/sample_points/to_torchgeo_dataset`.
 
 `build()` picks from a growing catalog of pre-registered datasets across
 Earth Search, Planetary Computer, and AlphaEarth Foundation. For existing Parquet

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
 from shapely.geometry import MultiPolygon, Polygon
 
 from rasteret.core.geometry import (
@@ -63,3 +64,13 @@ def test_coerce_to_geoarrow_accepts_geojson_multipolygon() -> None:
     }
     arr = coerce_to_geoarrow(mp_geojson)
     assert isinstance(arr, pa.Array)
+
+
+def test_coerce_to_geoarrow_invalid_binary_has_actionable_error() -> None:
+    # Representative non-WKB binary payload (e.g., raw DuckDB GEOMETRY export).
+    bad_binary = pa.array(
+        [b"\x00" * 16 + b"\x01\x00\x00\x00\x29\x5c\x8f\xc2"],
+        type=pa.binary(),
+    )
+    with pytest.raises(TypeError, match="ST_AsWKB"):
+        coerce_to_geoarrow(bad_binary)

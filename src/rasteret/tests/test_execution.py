@@ -21,7 +21,9 @@ import xarray as xr
 from rasteret.core.collection import Collection
 from rasteret.core.execution import (
     _detect_target_crs,
+    _ensure_point_geoarrow,
     get_collection_numpy,
+    get_collection_point_samples,
     get_collection_xarray,
 )
 from rasteret.core.utils import infer_data_source, run_sync
@@ -442,6 +444,80 @@ class TestRasterAccessorGdfCrs:
         assert bounds[2] > 100_000
 
 
+class TestRasterAccessorPointSampling:
+    @pytest.mark.asyncio
+    async def test_sample_points_reads_single_pixel(self):
+        from affine import Affine
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.fetch.cog import CogReadResult
+        from rasteret.types import CogMetadata, RasterInfo
+
+        class _DummyReader:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        info = RasterInfo(
+            id="r-point",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(0.5, 0.5))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("uint16"),
+            crs=4326,
+            transform=[0.1, 0.0, 0.0, 0.0, -0.1, 1.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+        )
+
+        async def _fake_read_cog(*_args, **_kwargs):
+            return CogReadResult(
+                data=np.array([[123]], dtype=np.uint16),
+                transform=Affine.identity(),
+                valid_mask=np.array([[True]], dtype=bool),
+                fill_value_used=0,
+                mode="window",
+            )
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+            patch("rasteret.core.raster_accessor.read_cog", side_effect=_fake_read_cog),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+            )
+
+        assert len(rows) == 1
+        assert rows[0]["record_id"] == "r-point"
+        assert rows[0]["band"] == "B04"
+        assert rows[0]["value"] == 123.0
+
+
 class TestNumpyOutput:
     def test_numpy_stack_multiband(self):
         frame = pd.DataFrame(
@@ -560,3 +636,111 @@ class TestDetectTargetCrs:
             c = Collection._load_cached(path)
             result = _detect_target_crs(c, {})
             assert result in (32632, 32633)
+
+
+class TestPointSampling:
+    class _DummyCollection:
+        def __init__(self, rasters):
+            self._rasters = rasters
+            self.data_source = ""
+            self.dataset = None
+
+        def subset(self, **_filters):
+            return self
+
+        async def iterate_rasters(self, _data_source=None):
+            for raster in self._rasters:
+                yield raster
+
+    class _DummyRaster:
+        def __init__(self, rows):
+            self.id = "r"
+            self._rows = rows
+
+        async def sample_points(self, **_kwargs):
+            return self._rows
+
+    def test_ensure_point_geoarrow_arrow_table_xy(self):
+        points = pa.table({"lon": [1.0, 2.0], "lat": [3.0, 4.0]})
+        arr = _ensure_point_geoarrow(points)
+        assert "geoarrow.point" in getattr(arr.type, "extension_name", "")
+
+    def test_ensure_point_geoarrow_arrow_table_wkb_column(self):
+        wkb_points = pa.array(
+            [
+                b"\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\xf0?"
+                b"\x00\x00\x00\x00\x00\x00\x00@",
+                b"\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00@"
+                b"\x00\x00\x00\x00\x00\x00\x08@",
+            ],
+            type=pa.binary(),
+        )
+        points = pa.table({"geom_wkb": wkb_points})
+        arr = _ensure_point_geoarrow(points, geometry_column="geom_wkb")
+        assert "geoarrow.point" in getattr(arr.type, "extension_name", "")
+
+    def test_ensure_point_geoarrow_dataframe_xy(self):
+        frame = pd.DataFrame({"x": [1.0, 2.0], "y": [3.0, 4.0]})
+        arr = _ensure_point_geoarrow(frame)
+        assert "geoarrow.point" in getattr(arr.type, "extension_name", "")
+
+    def test_get_collection_point_samples_latest(self):
+        rows_old = [
+            {
+                "point_index": 0,
+                "point_x": 1.0,
+                "point_y": 2.0,
+                "point_crs": 4326,
+                "record_id": "old",
+                "datetime": np.datetime64("2024-01-01T00:00:00"),
+                "collection": "c",
+                "cloud_cover": 1.0,
+                "band": "B04",
+                "value": 10.0,
+                "raster_crs": 32632,
+            }
+        ]
+        rows_new = [
+            {
+                "point_index": 0,
+                "point_x": 1.0,
+                "point_y": 2.0,
+                "point_crs": 4326,
+                "record_id": "new",
+                "datetime": np.datetime64("2024-01-02T00:00:00"),
+                "collection": "c",
+                "cloud_cover": 1.0,
+                "band": "B04",
+                "value": 11.0,
+                "raster_crs": 32632,
+            }
+        ]
+        collection = self._DummyCollection(
+            [self._DummyRaster(rows_old), self._DummyRaster(rows_new)]
+        )
+        with patch(
+            "rasteret.core.execution._ensure_geoarrow", return_value=pa.array([])
+        ):
+            table = get_collection_point_samples(
+                collection=collection,
+                points=[],
+                bands=["B04"],
+                match="latest",
+            )
+        assert table.num_rows == 1
+        assert table.column("record_id")[0].as_py() == "new"
+        assert table.column("value")[0].as_py() == 11.0
+
+    def test_get_collection_point_samples_empty_returns_schema(self):
+        collection = self._DummyCollection([self._DummyRaster([])])
+        with patch(
+            "rasteret.core.execution._ensure_geoarrow", return_value=pa.array([])
+        ):
+            table = get_collection_point_samples(
+                collection=collection,
+                points=[],
+                bands=["B04"],
+            )
+        assert table.num_rows == 0
+        assert "point_index" in table.schema.names
+        assert "value" in table.schema.names
