@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.3.3
+
+### Performance
+
+- **Arrow-batch native point sampling**: `sample_points()` internals now use
+  vectorized NumPy gathers and `Table.from_batches` instead of per-sample
+  Python append + `pa.concat_tables`. Eliminates row materialization in the
+  hot loop.
+- **COGReader session reuse**: `read_cog()` accepts a shared `reader=`
+  parameter. Point sampling across multiple rasters now reuses a single
+  `COGReader` (and its HTTP/2 connection pool) instead of creating one per
+  raster, reducing connection overhead for multi-scene workloads.
+
+### Refactored
+
+- **Dedicated `point_sampling` module**: point sampling ownership moved from
+  `execution.py` to `rasteret.core.point_sampling`. `execution.py` stays
+  focused on area/chip reads (`get_xarray`, `get_numpy`, `get_gdf`).
+- **`POINT_SAMPLES_SCHEMA`** defined in `types.py` as the single source of
+  truth for point sample output columns. Nullable fields explicitly modeled.
+- **Point input helpers consolidated**: `ensure_point_geoarrow`,
+  `candidate_point_indices_for_raster`, and related helpers moved into
+  `geometry.py`.
+- **Strict tile/source alignment guard** in `RasterAccessor.sample_points`:
+  validates that tile metadata matches the source raster before sampling.
+
+### Changed
+
+- Landing page (`docs/index.md`) code example simplified: single PyArrow
+  import, cleaner `sample_points` call, HF benchmark collapsed into
+  admonition.
+
+---
+
 ## v0.3.2
 
 ### Added
