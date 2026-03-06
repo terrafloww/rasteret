@@ -4,8 +4,7 @@ title: "Rasteret: Index-first GeoTIFF access layer for ML and analysis, powered 
 type: software
 authors:
   - name: "Terrafloww Labs, Inc."
-version: "0.3.0"
-date-released: "2026-02-23"
+date-released: "2025-01-01"
 license: Apache-2.0
 repository-code: "https://github.com/terrafloww/rasteret"
 keywords:
