@@ -1188,13 +1188,14 @@ def _geometry_window_pixels(
     left, bottom, right, top = rio_bounds(geom_geojson, transform=~transform)
     cols = [left, right, right, left]
     rows = [top, top, bottom, bottom]
-    # Guard against floating-point drift at exact pixel edges (e.g. 1068.0
-    # becoming 1068.0000000002 and expanding the window by 1 pixel).
-    eps = 1e-9
-    row_start = int(math.floor(min(rows) + eps))
-    row_stop = int(math.ceil(max(rows) - eps))
-    col_start = int(math.floor(min(cols) + eps))
-    col_stop = int(math.ceil(max(cols) - eps))
+    # Match rasterio.features.geometry_window() exactly: floor the offsets and
+    # ceil the stop coordinates with no extra tolerance adjustment. The
+    # network parity tests use rasterio as the oracle, so this helper must
+    # preserve the same edge semantics.
+    row_start = int(math.floor(min(rows)))
+    row_stop = int(math.ceil(max(rows)))
+    col_start = int(math.floor(min(cols)))
+    col_stop = int(math.ceil(max(cols)))
 
     if raster_width is not None and raster_height is not None:
         row_start = max(row_start, 0)

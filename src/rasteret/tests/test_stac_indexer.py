@@ -11,9 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pystac
 import pytest
+from pystac_client.exceptions import APIError
 
 from rasteret.cloud import CloudConfig
-from rasteret.ingest.stac_indexer import StacCollectionBuilder
+from rasteret.ingest.stac_indexer import (
+    StacCollectionBuilder,
+    _is_retryable_stac_api_error,
+)
 from rasteret.types import CogMetadata
 
 # ---------------------------------------------------------------------------
@@ -109,6 +113,43 @@ class TestStacCollectionBuilder:
         mock_client.search.assert_called_once()
         mock_search.items_as_dicts.assert_called_once()
 
+    @patch("rasteret.ingest.stac_indexer.asyncio.sleep", new_callable=AsyncMock)
+    @patch("rasteret.ingest.stac_indexer.pystac_client")
+    def test_stac_search_retries_transient_api_errors(
+        self,
+        mock_pystac,
+        mock_sleep,
+        mock_stac_items,
+    ):
+        mock_client = MagicMock()
+        mock_search = MagicMock()
+
+        mock_pystac.Client.open.return_value = mock_client
+        mock_client.search.return_value = mock_search
+        mock_search.items_as_dicts.side_effect = [
+            APIError(
+                "The request exceeded the maximum allowed time, please try again."
+            ),
+            [item.to_dict() for item in mock_stac_items],
+        ]
+
+        builder = StacCollectionBuilder(
+            data_source="test-source", stac_api="https://test-stac.com"
+        )
+
+        items = asyncio.run(
+            builder._search_stac(
+                bbox=[-180, -90, 180, 90],
+                date_range=["2023-01-01", "2023-12-31"],
+                query=None,
+            )
+        )
+
+        assert len(items) == 1
+        assert items[0]["id"] == "test_scene_1"
+        assert mock_client.search.call_count == 2
+        mock_sleep.assert_awaited_once_with(1.0)
+
     @patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser")
     @patch("rasteret.ingest.stac_indexer.pystac_client")
     def test_index_creation(
@@ -164,3 +205,11 @@ class TestStacCollectionBuilder:
 
         url = builder._get_asset_url({"href": "https://other.com/asset.tif"})
         assert url == "https://other.com/asset.tif"
+
+
+def test_retryable_stac_api_error_detection() -> None:
+    assert _is_retryable_stac_api_error(
+        APIError("The request exceeded the maximum allowed time, please try again.")
+    )
+    assert _is_retryable_stac_api_error(APIError("HTTP 503 Service Unavailable"))
+    assert not _is_retryable_stac_api_error(APIError("Unauthorized"))

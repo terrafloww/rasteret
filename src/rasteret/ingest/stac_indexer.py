@@ -15,12 +15,14 @@ client-side bbox and date filtering.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pystac_client
+from pystac_client.exceptions import APIError
 
 from rasteret.cloud import CloudConfig, StorageBackend, rewrite_url
 from rasteret.constants import BandRegistry
@@ -32,6 +34,25 @@ from rasteret.ingest.normalize import build_collection_from_table
 from rasteret.types import BoundingBox, DateRange
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable_stac_api_error(exc: Exception) -> bool:
+    """Return ``True`` for transient STAC API failures worth retrying."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in {408, 429, 500, 502, 503, 504}:
+        return True
+
+    message = str(exc).lower()
+    transient_markers = (
+        "maximum allowed time",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "try again",
+        "service unavailable",
+    )
+    return any(marker in message for marker in transient_markers)
 
 
 class StacCollectionBuilder(CollectionBuilder):
@@ -318,13 +339,31 @@ class StacCollectionBuilder(CollectionBuilder):
             **({"query": resolved_query} if resolved_query else {}),
         }
 
-        client = pystac_client.Client.open(self.stac_api)
-        search = client.search(**search_params)
         items: list[dict] = []
-        for item in search.items_as_dicts():
-            items.append(item)
-            if max_items is not None and len(items) >= max_items:
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                client = pystac_client.Client.open(self.stac_api)
+                search = client.search(**search_params)
+                items = []
+                for item in search.items_as_dicts():
+                    items.append(item)
+                    if max_items is not None and len(items) >= max_items:
+                        break
                 break
+            except APIError as exc:
+                if attempt >= max_attempts or not _is_retryable_stac_api_error(exc):
+                    raise
+                sleep_s = float(2 ** (attempt - 1))
+                logger.warning(
+                    "Transient STAC API error from %s (attempt %d/%d): %s. Retrying in %.1fs",
+                    self.stac_api,
+                    attempt,
+                    max_attempts,
+                    exc,
+                    sleep_s,
+                )
+                await asyncio.sleep(sleep_s)
 
         # Planetary Computer SAS signing
         from urllib.parse import urlparse

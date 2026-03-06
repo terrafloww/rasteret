@@ -42,13 +42,17 @@ pytestmark = pytest.mark.network
 # ---------------------------------------------------------------------------
 
 # Bbox overrides: some datasets need a specific bbox to work correctly.
-_BBOX_OVERRIDES: dict[str, tuple[float, float, float, float]] = {}
+_BBOX_OVERRIDES: dict[str, tuple[float, float, float, float]] = {
+    # Keep AEF within a single south-up tile / CRS zone so rasterio and
+    # Rasteret compare the same source window.
+    "aef/v1-annual": (11.35, -0.5, 11.45, -0.4),
+}
 
 # Datasets to skip entirely.
 _SKIP_DATASETS: set[str] = {
-    # AEF: south-up COGs require WarpedVRT for rasterio.merge.merge
-    # (TorchGeo oracle), which takes ~95s per query over HTTP.
-    # Verified 0/1232084 pixel mismatches vs vanilla TorchGeo.
+    # AEF parity is supported, but the TorchGeo oracle needs WarpedVRT and
+    # takes ~80s+ over HTTP. Keep it skipped in the default network run to
+    # keep local dev and CI cycles reasonable; enable explicitly when needed.
     "aef/v1-annual",
 }
 
@@ -211,11 +215,13 @@ def _rasterio_ground_truth_native_bbox(
     Matches what TorchGeo's ``_merge_or_stack`` calls:
     ``rasterio.merge.merge([src], bounds=..., res=..., indexes=...)``.
 
-    Only used for north-up datasets (south-up AEF is skipped via
-    ``_SKIP_DATASETS``).  South-up COGs would require ``WarpedVRT``
-    which is extremely slow over HTTP.
+    For south-up rasters (positive Y pixel scale, e.g. AEF), wrap the
+    source in ``WarpedVRT`` first. Raw ``rasterio.merge.merge([src], ...)``
+    returns all nodata for those sources even when Rasteret / TorchGeo read
+    valid pixels correctly.
     """
     from rasterio.merge import merge as rio_merge
+    from rasterio.vrt import WarpedVRT
 
     with rasterio.Env(**gdal_env):
         with rasterio.open(href) as src:
@@ -229,8 +235,11 @@ def _rasterio_ground_truth_native_bbox(
                 if np.issubdtype(dtype, np.floating)
                 else rasterio.enums.Resampling.nearest
             )
+            merge_source = src
+            if float(src.transform.e) > 0:
+                merge_source = WarpedVRT(src)
             data, _ = rio_merge(
-                [src],
+                [merge_source],
                 bounds=bbox_native,
                 res=res,
                 indexes=[band_number],

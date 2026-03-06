@@ -29,6 +29,12 @@
   - `sample_points()` uses vectorized `geoarrow.point_coords`.
 - Error messaging for non-OGC binary geometry input now explicitly points
   DuckDB users to `ST_AsWKB(geom)` when needed.
+- Network parity coverage is tighter:
+  - AOI windowing now matches rasterio `geometry_window()` edge semantics
+    exactly (fixes the WorldCover 1-pixel mismatch),
+  - transient STAC API timeouts are retried during live builds,
+  - the AEF south-up TorchGeo oracle path is corrected for manual/explicit
+    parity runs via `WarpedVRT`.
 
 ### Tested
 
