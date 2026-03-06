@@ -15,8 +15,14 @@ from affine import Affine
 from tqdm.asyncio import tqdm
 
 from rasteret.constants import BandRegistry
-from rasteret.fetch.cog import normalize_transform, read_cog
-from rasteret.types import CogMetadata, RasterInfo
+from rasteret.core.utils import normalize_transform
+from rasteret.fetch.cog import read_cog
+from rasteret.types import (
+    POINT_SAMPLES_SCHEMA,
+    CogMetadata,
+    RasterInfo,
+    empty_point_samples_table,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,11 +246,13 @@ class RasterAccessor:
         *,
         points: pa.Array,
         band_codes: list[str],
+        point_indices: list[int] | None = None,
         max_concurrent: int = 50,
         backend: object | None = None,
+        reader: object | None = None,
         geometry_crs: int | None = 4326,
         method: str = "nearest",
-    ) -> list[dict]:
+    ) -> pa.Table:
         """Sample point values for this record.
 
         Parameters
@@ -253,10 +261,16 @@ class RasterAccessor:
             GeoArrow-native point array.
         band_codes : list of str
             Band codes to sample.
+        point_indices : list of int, optional
+            Absolute point indices corresponding to *points*. When omitted,
+            emitted rows use the local point positions.
         max_concurrent : int
             Maximum concurrent HTTP requests.
         backend : object, optional
             Pluggable I/O backend.
+        reader : COGReader, optional
+            Active shared COG reader for connection/session reuse across
+            records. When omitted, this method creates and owns a reader.
         geometry_crs : int, optional
             CRS EPSG code of input points. Defaults to EPSG:4326.
         method : str
@@ -264,7 +278,7 @@ class RasterAccessor:
 
         Returns
         -------
-        list of dict
+        pyarrow.Table
             One row per ``(point, band)`` sample for this record.
         """
         if method != "nearest":
@@ -293,44 +307,128 @@ class RasterAccessor:
 
             transformer = Transformer.from_crs(geometry_crs, self.crs, always_xy=True)
 
-        rows: list[dict] = []
+        record_datetime_us: np.datetime64 | None = None
+        if self.datetime is not None:
+            try:
+                record_datetime_us = np.datetime64(
+                    pd.Timestamp(self.datetime).to_datetime64(), "us"
+                )
+            except (OverflowError, TypeError, ValueError):
+                logger.debug("Could not normalize record datetime for %s", self.id)
+
+        point_crs_value = int(geometry_crs) if geometry_crs is not None else None
+        raster_crs_value = int(self.crs) if self.crs is not None else None
+        cloud_cover_value = (
+            float(self.cloud_cover) if self.cloud_cover is not None else None
+        )
+        point_indices_arr: np.ndarray | None = None
         point_xs_arr, point_ys_arr = ga.point_coords(points)
         point_xs = point_xs_arr.to_numpy(zero_copy_only=False)
         point_ys = point_ys_arr.to_numpy(zero_copy_only=False)
+        if point_indices is not None:
+            point_indices_arr = np.asarray(point_indices, dtype=np.int64)
+            if len(point_indices_arr) != len(point_xs):
+                raise ValueError("point_indices length must match the number of points")
         sample_xs, sample_ys = point_xs, point_ys
         if transformer is not None:
             sample_xs, sample_ys = transformer.transform(point_xs, point_ys)
 
-        async with COGReader(
-            max_concurrent=max_concurrent, backend=backend
-        ) as shared_reader:
-            for point_index in range(len(point_xs)):
-                point_x = float(point_xs[point_index])
-                point_y = float(point_ys[point_index])
-                sample_x = float(sample_xs[point_index])
-                sample_y = float(sample_ys[point_index])
+        def _constant_int32_array(value: int | None, row_count: int) -> pa.Array:
+            if value is None:
+                return pa.nulls(row_count, type=pa.int32())
+            return pa.array(np.full(row_count, value, dtype=np.int32), type=pa.int32())
 
-                for band_code in band_codes:
-                    cog_meta, url, band_index = self.try_get_band_cog_metadata(
-                        band_code
-                    )
-                    if cog_meta is None or url is None or cog_meta.transform is None:
-                        raise ValueError(
-                            f"Missing band metadata or href for band '{band_code}' "
-                            f"in record '{self.id}'"
-                        )
+        def _constant_float64_array(value: float | None, row_count: int) -> pa.Array:
+            if value is None:
+                return pa.nulls(row_count, type=pa.float64())
+            return pa.array(
+                np.full(row_count, value, dtype=np.float64), type=pa.float64()
+            )
 
-                    scale_x, trans_x, scale_y, trans_y = normalize_transform(
-                        cog_meta.transform
-                    )
-                    src_transform = Affine(
-                        float(scale_x),
-                        0.0,
-                        float(trans_x),
-                        0.0,
-                        float(scale_y),
-                        float(trans_y),
-                    )
+        def _constant_timestamp_array(
+            value: np.datetime64 | None, row_count: int
+        ) -> pa.Array:
+            if value is None:
+                return pa.nulls(row_count, type=pa.timestamp("us"))
+            return pa.array(
+                np.full(row_count, value, dtype="datetime64[us]"),
+                type=pa.timestamp("us"),
+            )
+
+        def _constant_string_array(value: str, row_count: int) -> pa.Array:
+            return pa.array(np.full(row_count, value, dtype=object), type=pa.string())
+
+        band_sources: list[dict[str, object]] = []
+        for band_code in band_codes:
+            cog_meta, url, band_index = self.try_get_band_cog_metadata(band_code)
+            if cog_meta is None or url is None or cog_meta.transform is None:
+                raise ValueError(
+                    f"Missing band metadata or href for band '{band_code}' "
+                    f"in record '{self.id}'"
+                )
+
+            scale_x, trans_x, scale_y, trans_y = normalize_transform(cog_meta.transform)
+            src_transform = Affine(
+                float(scale_x),
+                0.0,
+                float(trans_x),
+                0.0,
+                float(scale_y),
+                float(trans_y),
+            )
+            band_sources.append(
+                {
+                    "band_code": band_code,
+                    "metadata": cog_meta,
+                    "url": url,
+                    "band_index": band_index,
+                    "transform": src_transform,
+                    "group_key": (
+                        url,
+                        tuple(float(value) for value in cog_meta.transform),
+                        int(cog_meta.width),
+                        int(cog_meta.height),
+                        int(cog_meta.tile_width),
+                        int(cog_meta.tile_height),
+                        str(np.dtype(cog_meta.dtype)),
+                        int(getattr(cog_meta, "samples_per_pixel", 1) or 1),
+                        int(getattr(cog_meta, "planar_configuration", 1) or 1),
+                    ),
+                }
+            )
+
+        def _tile_window(
+            metadata: CogMetadata,
+            *,
+            tile_row: int,
+            tile_col: int,
+        ) -> tuple[int, int, int, int]:
+            row_start = tile_row * int(metadata.tile_height)
+            col_start = tile_col * int(metadata.tile_width)
+            window_height = min(
+                int(metadata.tile_height), int(metadata.height) - row_start
+            )
+            window_width = min(
+                int(metadata.tile_width), int(metadata.width) - col_start
+            )
+            return row_start, col_start, window_height, window_width
+
+        async def _sample_with_reader(shared_reader: COGReader) -> pa.Table:
+            record_batches: list[pa.RecordBatch] = []
+            grouped_sources: dict[object, list[dict[str, object]]] = {}
+            for source in band_sources:
+                grouped_sources.setdefault(source["group_key"], []).append(source)
+
+            for source_group in grouped_sources.values():
+                first_source = source_group[0]
+                cog_meta = first_source["metadata"]
+                url = str(first_source["url"])
+                src_transform = first_source["transform"]
+
+                tile_groups: dict[tuple[int, int], list[tuple[int, int, int]]] = {}
+                for point_index in range(len(point_xs)):
+                    sample_x = float(sample_xs[point_index])
+                    sample_y = float(sample_ys[point_index])
                     col_f, row_f = (~src_transform) * (sample_x, sample_y)
                     col = int(np.floor(col_f))
                     row = int(np.floor(row_f))
@@ -342,51 +440,146 @@ class RasterAccessor:
                     ):
                         continue
 
-                    x0 = src_transform.c + col * src_transform.a
-                    x1 = src_transform.c + (col + 1) * src_transform.a
-                    y0 = src_transform.f + row * src_transform.e
-                    y1 = src_transform.f + (row + 1) * src_transform.e
-                    bounds = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
-
-                    result = await read_cog(
-                        url,
-                        cog_meta,
-                        band_index=band_index,
-                        bounds=bounds,
-                        out_shape=(1, 1),
-                        mode="window",
-                        max_concurrent=max_concurrent,
-                        reader=shared_reader,
-                    )
-                    if result.data.size == 0 or result.valid_mask.size == 0:
-                        continue
-                    if not bool(result.valid_mask[0, 0]):
-                        continue
-
-                    value = result.data[0, 0].item()
-                    rows.append(
-                        {
-                            "point_index": int(point_index),
-                            "point_x": point_x,
-                            "point_y": point_y,
-                            "point_crs": int(geometry_crs)
-                            if geometry_crs is not None
-                            else None,
-                            "record_id": self.id,
-                            "datetime": pd.Timestamp(self.datetime).to_datetime64(),
-                            "collection": self.collection,
-                            "cloud_cover": float(self.cloud_cover)
-                            if self.cloud_cover is not None
-                            else None,
-                            "band": band_code,
-                            "value": float(value),
-                            "raster_crs": int(self.crs)
-                            if self.crs is not None
-                            else None,
-                        }
+                    tile_row = row // int(cog_meta.tile_height)
+                    tile_col = col // int(cog_meta.tile_width)
+                    tile_groups.setdefault((tile_row, tile_col), []).append(
+                        (point_index, row, col)
                     )
 
-        return rows
+                band_indices = [source["band_index"] for source in source_group]
+                tiles = list(tile_groups.keys())
+
+                tile_batch_size = 128
+                for start in range(0, len(tiles), tile_batch_size):
+                    batch = tiles[start : start + tile_batch_size]
+                    tile_arrays_map = await shared_reader.read_merged_tile_samples(
+                        url=url,
+                        metadata=cog_meta,
+                        tiles=batch,
+                        band_indices=band_indices,
+                    )
+
+                    for tile_row, tile_col in batch:
+                        tile_arrays = tile_arrays_map.get((tile_row, tile_col))
+                        if not tile_arrays:
+                            continue
+
+                        samples = tile_groups.get((tile_row, tile_col), [])
+                        if not samples:
+                            continue
+
+                        row_start, col_start, window_height, window_width = (
+                            _tile_window(
+                                metadata=cog_meta,
+                                tile_row=tile_row,
+                                tile_col=tile_col,
+                            )
+                        )
+
+                        sample_matrix = np.asarray(samples, dtype=np.int64)
+                        if sample_matrix.size == 0:
+                            continue
+
+                        local_point_indices = sample_matrix[:, 0]
+                        local_rows = sample_matrix[:, 1] - row_start
+                        local_cols = sample_matrix[:, 2] - col_start
+                        in_window = (
+                            (local_rows >= 0)
+                            & (local_cols >= 0)
+                            & (local_rows < window_height)
+                            & (local_cols < window_width)
+                        )
+                        if not np.any(in_window):
+                            continue
+
+                        local_point_indices = local_point_indices[in_window]
+                        local_rows = local_rows[in_window]
+                        local_cols = local_cols[in_window]
+
+                        output_point_indices = (
+                            point_indices_arr[local_point_indices]
+                            if point_indices_arr is not None
+                            else local_point_indices
+                        )
+                        point_x_values = point_xs[local_point_indices]
+                        point_y_values = point_ys[local_point_indices]
+                        row_count = int(local_point_indices.size)
+                        point_index_arr = pa.array(
+                            output_point_indices, type=pa.int64()
+                        )
+                        point_x_arr = pa.array(
+                            np.asarray(point_x_values, dtype=np.float64),
+                            type=pa.float64(),
+                        )
+                        point_y_arr = pa.array(
+                            np.asarray(point_y_values, dtype=np.float64),
+                            type=pa.float64(),
+                        )
+                        point_crs_arr = _constant_int32_array(
+                            point_crs_value, row_count
+                        )
+                        record_id_arr = _constant_string_array(str(self.id), row_count)
+                        datetime_arr = _constant_timestamp_array(
+                            record_datetime_us, row_count
+                        )
+                        collection_arr = _constant_string_array(
+                            str(self.collection), row_count
+                        )
+                        cloud_cover_arr = _constant_float64_array(
+                            cloud_cover_value, row_count
+                        )
+                        raster_crs_arr = _constant_int32_array(
+                            raster_crs_value, row_count
+                        )
+
+                        if len(tile_arrays) != len(source_group):
+                            raise RuntimeError(
+                                "Internal point-sampling mismatch: tile arrays "
+                                f"({len(tile_arrays)}) do not match source bands "
+                                f"({len(source_group)}) for record '{self.id}'."
+                            )
+
+                        for source, tile_data in zip(
+                            source_group, tile_arrays, strict=True
+                        ):
+                            values = np.asarray(
+                                tile_data[local_rows, local_cols],
+                                dtype=np.float64,
+                            )
+                            batch_columns = {
+                                "point_index": point_index_arr,
+                                "point_x": point_x_arr,
+                                "point_y": point_y_arr,
+                                "point_crs": point_crs_arr,
+                                "record_id": record_id_arr,
+                                "datetime": datetime_arr,
+                                "collection": collection_arr,
+                                "cloud_cover": cloud_cover_arr,
+                                "band": _constant_string_array(
+                                    str(source["band_code"]), row_count
+                                ),
+                                "value": pa.array(values, type=pa.float64()),
+                                "raster_crs": raster_crs_arr,
+                            }
+                            record_batches.append(
+                                pa.record_batch(
+                                    [
+                                        batch_columns[field.name]
+                                        for field in POINT_SAMPLES_SCHEMA
+                                    ],
+                                    schema=POINT_SAMPLES_SCHEMA,
+                                )
+                            )
+
+            if not record_batches:
+                return empty_point_samples_table()
+            return pa.Table.from_batches(record_batches, schema=POINT_SAMPLES_SCHEMA)
+
+        if reader is not None:
+            return await _sample_with_reader(reader)
+
+        async with COGReader(max_concurrent=max_concurrent, backend=backend) as owned:
+            return await _sample_with_reader(owned)
 
     def _reproject_band_results(
         self,

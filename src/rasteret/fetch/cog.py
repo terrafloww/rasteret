@@ -637,6 +637,120 @@ class COGReader:
 
         return results
 
+    async def read_tile_samples(
+        self,
+        *,
+        url: str,
+        metadata: CogMetadata,
+        tile_row: int,
+        tile_col: int,
+        band_indices: list[int | None],
+    ) -> list[np.ndarray]:
+        """Read one tile once and materialize one array per requested band index."""
+        tiles = await self.read_merged_tile_samples(
+            url=url,
+            metadata=metadata,
+            tiles=[(tile_row, tile_col)],
+            band_indices=band_indices,
+        )
+        return tiles.get((tile_row, tile_col), [])
+
+    async def read_merged_tile_samples(
+        self,
+        *,
+        url: str,
+        metadata: CogMetadata,
+        tiles: list[tuple[int, int]],
+        band_indices: list[int | None],
+        debug: bool = False,
+    ) -> dict[tuple[int, int], list[np.ndarray]]:
+        """Read many tiles with range coalescing, materializing each band index once.
+
+        This reduces object-store overhead by coalescing adjacent tile byte
+        ranges (via ``merge_ranges``) while still avoiding redundant tile decode
+        for multiple band indices.
+        """
+        if not tiles or not band_indices:
+            return {}
+
+        tiles_x = (metadata.width + metadata.tile_width - 1) // metadata.tile_width
+        tiles_y = (metadata.height + metadata.tile_height - 1) // metadata.tile_height
+        if metadata.tile_offsets is None or metadata.tile_byte_counts is None:
+            raise ValueError("Missing tile metadata (tile offsets/byte counts)")
+
+        requests: list[COGTileRequest] = []
+        for tile_row, tile_col in tiles:
+            if (
+                tile_row < 0
+                or tile_col < 0
+                or tile_row >= tiles_y
+                or tile_col >= tiles_x
+            ):
+                continue
+            tile_idx = tile_row * tiles_x + tile_col
+            if tile_idx >= len(metadata.tile_offsets) or tile_idx >= len(
+                metadata.tile_byte_counts
+            ):
+                continue
+            requests.append(
+                COGTileRequest(
+                    url=url,
+                    offset=int(metadata.tile_offsets[tile_idx]),
+                    size=int(metadata.tile_byte_counts[tile_idx]),
+                    row=int(tile_row),
+                    col=int(tile_col),
+                    metadata=metadata,
+                    band_index=None,
+                )
+            )
+
+        if not requests:
+            return {}
+
+        ranges = self.merge_ranges(requests)
+        if debug:
+            logger.debug(
+                "read_merged_tile_samples(url=%s): %d tile(s), %d range(s)",
+                url,
+                len(requests),
+                len(ranges),
+            )
+
+        loop = asyncio.get_running_loop()
+        out: dict[tuple[int, int], list[np.ndarray]] = {}
+        for start, end in ranges:
+            data = await self._read_range(url, start, end)
+            in_range = [r for r in requests if start <= r.offset < end]
+            for req in in_range:
+                offset = req.offset - start
+                tile_data = data[offset : offset + req.size]
+                decompressed = await loop.run_in_executor(
+                    None, self._decompress_tile_sync, tile_data, metadata
+                )
+
+                tasks = []
+                should_copy_ndarray = (
+                    isinstance(decompressed, np.ndarray) and len(band_indices) > 1
+                )
+                for band_index in band_indices:
+                    process_input = (
+                        np.array(decompressed, copy=True)
+                        if should_copy_ndarray
+                        else decompressed
+                    )
+                    tasks.append(
+                        loop.run_in_executor(
+                            None,
+                            self._process_tile_sync,
+                            process_input,
+                            metadata,
+                            band_index,
+                        )
+                    )
+                out[(req.row, req.col)] = list(await asyncio.gather(*tasks))
+
+        return out
+
     async def _read_and_process_range(
         self,
         url: str,

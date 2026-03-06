@@ -22,9 +22,9 @@ import pyarrow.parquet as pq
 from rasteret.core.execution import (
     get_collection_gdf,
     get_collection_numpy,
-    get_collection_point_samples,
     get_collection_xarray,
 )
+from rasteret.core.point_sampling import get_collection_point_samples
 from rasteret.core.raster_accessor import RasterAccessor
 from rasteret.types import RasterInfo
 

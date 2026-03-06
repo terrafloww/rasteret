@@ -15,12 +15,14 @@ Conversion to GeoJSON dicts happens only at the rasterio
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import geoarrow.pyarrow as ga
 import pyarrow as pa
 
 Bbox = tuple[float, float, float, float]
+logger = logging.getLogger(__name__)
 
 
 class UnsupportedGeometryError(TypeError):
@@ -333,3 +335,270 @@ def bbox_from_geojson_coords(geojson: dict) -> Bbox:
     xs = [p[0] for p in all_pts]
     ys = [p[1] for p in all_pts]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+# ------------------------------------------------------------------
+# Point sampling helpers
+# ------------------------------------------------------------------
+
+
+def resolve_xy_columns(
+    names: list[str],
+    x_column: str | None,
+    y_column: str | None,
+) -> tuple[str, str] | None:
+    """Resolve x/y columns from explicit names or common defaults."""
+    if x_column and y_column:
+        if x_column in names and y_column in names:
+            return x_column, y_column
+        missing = [col for col in (x_column, y_column) if col not in names]
+        raise ValueError(f"Missing point coordinate columns: {missing}")
+
+    candidates = [
+        ("x", "y"),
+        ("lon", "lat"),
+        ("longitude", "latitude"),
+        ("lng", "lat"),
+    ]
+    for x_name, y_name in candidates:
+        if x_name in names and y_name in names:
+            return x_name, y_name
+    return None
+
+
+def _missing_geometry_column_error(
+    *,
+    geometry_column: str,
+    names: list[str],
+    container: str,
+) -> ValueError:
+    available = ", ".join(names) if names else "<none>"
+    return ValueError(
+        f"geometry_column='{geometry_column}' not found in {container}. "
+        f"Available columns: {available}"
+    )
+
+
+def ensure_point_geoarrow(
+    points: Any,
+    *,
+    geometry_column: str | None = None,
+    x_column: str | None = None,
+    y_column: str | None = None,
+) -> pa.Array:
+    """Normalize point inputs into a GeoArrow point array."""
+    if isinstance(points, pa.RecordBatchReader):
+        points = points.read_all()
+
+    if isinstance(points, pa.Table):
+        names = points.schema.names
+        if geometry_column is not None:
+            if geometry_column not in names:
+                raise _missing_geometry_column_error(
+                    geometry_column=geometry_column,
+                    names=names,
+                    container="table columns",
+                )
+            return coerce_to_geoarrow(points.column(geometry_column))
+        xy = resolve_xy_columns(names, x_column, y_column)
+        if xy is not None:
+            x_name, y_name = xy
+            return ga.make_point(points.column(x_name), points.column(y_name))
+        raise TypeError(
+            "Unsupported table input for point sampling. Provide geometry_column "
+            "(WKB/GeoArrow point column) or x_column/y_column."
+        )
+
+    to_arrow_table = getattr(points, "to_arrow_table", None)
+    if callable(to_arrow_table):
+        return ensure_point_geoarrow(
+            to_arrow_table(),
+            geometry_column=geometry_column,
+            x_column=x_column,
+            y_column=y_column,
+        )
+
+    arrow_export = getattr(points, "arrow", None)
+    if callable(arrow_export):
+        try:
+            return ensure_point_geoarrow(
+                arrow_export(),
+                geometry_column=geometry_column,
+                x_column=x_column,
+                y_column=y_column,
+            )
+        except Exception as exc:
+            logger.debug("Point input .arrow() export failed: %s", exc)
+
+    to_arrow = getattr(points, "to_arrow", None)
+    if callable(to_arrow):
+        try:
+            return ensure_point_geoarrow(
+                to_arrow(),
+                geometry_column=geometry_column,
+                x_column=x_column,
+                y_column=y_column,
+            )
+        except Exception as exc:
+            logger.debug("Point input .to_arrow() export failed: %s", exc)
+
+    try:
+        import polars as pl
+
+        if isinstance(points, pl.DataFrame):
+            names = points.columns
+            if geometry_column is not None:
+                if geometry_column not in names:
+                    raise _missing_geometry_column_error(
+                        geometry_column=geometry_column,
+                        names=names,
+                        container="DataFrame columns",
+                    )
+                return coerce_to_geoarrow(points[geometry_column].to_arrow())
+            xy = resolve_xy_columns(names, x_column, y_column)
+            if xy is not None:
+                x_name, y_name = xy
+                return ga.make_point(
+                    points[x_name].to_arrow(), points[y_name].to_arrow()
+                )
+            raise TypeError(
+                "Unsupported Polars DataFrame input for point sampling. Provide "
+                "geometry_column or x_column/y_column."
+            )
+    except ImportError:
+        pass
+
+    try:
+        import pandas as pd
+
+        if isinstance(points, pd.DataFrame):
+            names = list(points.columns)
+            if geometry_column is not None:
+                if geometry_column not in names:
+                    raise _missing_geometry_column_error(
+                        geometry_column=geometry_column,
+                        names=names,
+                        container="DataFrame columns",
+                    )
+                return coerce_to_geoarrow(points[geometry_column].tolist())
+
+            if (
+                hasattr(points, "geometry")
+                and getattr(points, "geometry", None) is not None
+            ):
+                try:
+                    geom_series = points.geometry
+                    if len(geom_series) > 0:
+                        return coerce_to_geoarrow(geom_series.tolist())
+                except Exception as exc:
+                    logger.debug("GeoDataFrame .geometry coercion failed: %s", exc)
+
+            xy = resolve_xy_columns(names, x_column, y_column)
+            if xy is not None:
+                x_name, y_name = xy
+                return ga.make_point(pa.array(points[x_name]), pa.array(points[y_name]))
+            raise TypeError(
+                "Unsupported pandas/GeoPandas DataFrame input for point sampling. "
+                "Provide geometry_column or x_column/y_column."
+            )
+    except ImportError:
+        pass
+
+    if isinstance(points, list) and len(points) == 0:
+        return ga.make_point(
+            pa.array([], type=pa.float64()),
+            pa.array([], type=pa.float64()),
+        )
+
+    return coerce_to_geoarrow(points)
+
+
+def transform_point_coords(
+    points: pa.Array,
+    *,
+    geometry_crs: int | None,
+    target_crs: int,
+):
+    """Return point coordinates in *target_crs* as numpy arrays."""
+    import numpy as np
+
+    point_xs_arr, point_ys_arr = ga.point_coords(points)
+    point_xs = point_xs_arr.to_numpy(zero_copy_only=False)
+    point_ys = point_ys_arr.to_numpy(zero_copy_only=False)
+
+    if geometry_crs is None or geometry_crs == target_crs:
+        return point_xs, point_ys
+
+    from pyproj import Transformer
+
+    transformer = Transformer.from_crs(geometry_crs, target_crs, always_xy=True)
+    x_coords, y_coords = transformer.transform(point_xs, point_ys)
+    return np.asarray(x_coords), np.asarray(y_coords)
+
+
+def intersect_bbox(
+    left: tuple[float, float, float, float] | None,
+    right: tuple[float, float, float, float] | None,
+) -> tuple[float, float, float, float] | None:
+    """Return the bbox intersection, or ``None`` when disjoint."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+
+    minx = max(left[0], right[0])
+    miny = max(left[1], right[1])
+    maxx = min(left[2], right[2])
+    maxy = min(left[3], right[3])
+    if minx > maxx or miny > maxy:
+        return None
+    return (minx, miny, maxx, maxy)
+
+
+def point_bounds_4326(
+    points: pa.Array,
+    *,
+    geometry_crs: int | None,
+):
+    """Return point lon/lat coordinates and overall bbox in EPSG:4326."""
+    import numpy as np
+
+    if len(points) == 0:
+        return None, None, None
+
+    point_xs, point_ys = transform_point_coords(
+        points,
+        geometry_crs=geometry_crs,
+        target_crs=4326,
+    )
+    bbox = (
+        float(np.min(point_xs)),
+        float(np.min(point_ys)),
+        float(np.max(point_xs)),
+        float(np.max(point_ys)),
+    )
+    return point_xs, point_ys, bbox
+
+
+def candidate_point_indices_for_raster(
+    *,
+    raster_bbox: Any,
+    point_xs,
+    point_ys,
+) -> list[int] | None:
+    """Return absolute point indices whose lon/lat falls in *raster_bbox*."""
+    import numpy as np
+
+    if point_xs is None or point_ys is None:
+        return None
+    if raster_bbox is None or len(raster_bbox) != 4:
+        return None
+
+    minx, miny, maxx, maxy = raster_bbox
+    mask = (
+        (point_xs >= float(minx))
+        & (point_xs <= float(maxx))
+        & (point_ys >= float(miny))
+        & (point_ys <= float(maxy))
+    )
+    return np.nonzero(mask)[0].astype(int).tolist()

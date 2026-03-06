@@ -14,6 +14,30 @@ import pyarrow as pa
 BoundingBox = tuple[float, float, float, float]  # minx, miny, maxx, maxy
 DateRange = tuple[str, str]  # ("YYYY-MM-DD", "YYYY-MM-DD")
 
+POINT_SAMPLES_SCHEMA = pa.schema(
+    [
+        pa.field("point_index", pa.int64(), nullable=False),
+        pa.field("point_x", pa.float64(), nullable=False),
+        pa.field("point_y", pa.float64(), nullable=False),
+        pa.field("point_crs", pa.int32(), nullable=True),
+        pa.field("record_id", pa.string(), nullable=False),
+        pa.field("datetime", pa.timestamp("us"), nullable=True),
+        pa.field("collection", pa.string(), nullable=False),
+        pa.field("cloud_cover", pa.float64(), nullable=True),
+        pa.field("band", pa.string(), nullable=False),
+        pa.field("value", pa.float64(), nullable=False),
+        pa.field("raster_crs", pa.int32(), nullable=True),
+    ]
+)
+
+
+def empty_point_samples_table() -> pa.Table:
+    """Return an empty point-sampling table with stable schema."""
+    return pa.table(
+        {field.name: pa.array([], type=field.type) for field in POINT_SAMPLES_SCHEMA}
+    )
+
+
 #: Accepted geometry inputs for read operations.
 #:
 #: - ``(minx, miny, maxx, maxy)`` bbox tuple

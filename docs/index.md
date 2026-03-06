@@ -102,35 +102,29 @@ Pick any ID and pass it to `build()`. For datasets not in the catalog, use
 ## How it works
 
 ```python
+import pyarrow as pa
 import rasteret
-import duckdb
 
-# 1. Build index (one-time, cached)
-collection = rasteret.build("earthsearch/sentinel-2-l2a", name="s2", bbox=(...), date_range=(...))
-collection.bands   # ['B01', 'B02', ..., 'B12', 'SCL']
-
-# 2. Filter metadata (in-memory, instant)
-sub = collection.subset(cloud_cover_lt=20, date_range=("2024-03-01", "2024-06-01"))
-
-# 3. Read pixels - pass a bbox, Arrow column, Shapely geometry, or WKB
-ds = sub.get_xarray(geometries=(-122.5, 37.7, -122.3, 37.9), bands=["B04", "B08"])
-arr = sub.get_numpy(geometries=(-122.5, 37.7, -122.3, 37.9), bands=["B04", "B08"])  # [N, C, H, W]
-dataset = sub.to_torchgeo_dataset(bands=["B04", "B03", "B02"])    # TorchGeo
-points = duckdb.sql("""
-    SELECT lon, lat
-    FROM (VALUES (-122.40, 37.79), (-122.39, 37.80)) AS t(lon, lat)
-""").arrow().read_all()
-samples = sub.sample_points(
-    points=points,
-    x_column="lon",
-    y_column="lat",
-    bands=["B04"],
-    geometry_crs=4326,
-    match="latest",
+# 1) Build an index (one-time, cached as GeoParquet)
+collection = rasteret.build(
+    "earthsearch/sentinel-2-l2a",
+    name="s2",
+    bbox=(-122.55, 37.65, -122.30, 37.90),
+    date_range=("2024-01-01", "2024-02-01"),
 )
+
+# 2) Filter metadata (in-memory, instant)
+sub = collection.subset(cloud_cover_lt=20)
+
+# 3) Read pixels on demand (bbox, Arrow column, Shapely geometry, or WKB)
+arr = sub.get_numpy(geometries=(-122.50, 37.70, -122.40, 37.80), bands=["B04", "B08"])
+
+# 4) Turn rasters into a point feature table (Arrow-native output)
+points = pa.table({"lon": [-122.40, -122.39], "lat": [37.79, 37.80]})
+samples = sub.sample_points(points=points, x_column="lon", y_column="lat", bands=["B04"], geometry_crs=4326)
 ```
 
-DuckDB is optional here; any Arrow-compatible table/column source works.
+Any Arrow-compatible table/column source works for `geometries=` and `points=`.
 
 The workflow stays collection-centric:
 `build/load/as_collection -> subset/where -> get_xarray/get_numpy/sample_points/to_torchgeo_dataset`.
@@ -154,23 +148,19 @@ real-world scenario, and where Rasteret's Parquet index matters most.
 
 For full methodology and numbers, see [Benchmarks](explanation/benchmark.md).
 
-### HF `datasets` baseline (Major TOM keyed patches)
+??? note "HF `datasets` baseline (Major TOM keyed patches)"
+    Separate benchmark against Hugging Face payload-Parquet workflows using
+    `datasets.load_dataset(..., streaming=True, filters=...)` (PyArrow-backed predicate pushdown):
 
-Baseline method: Hugging Face `datasets.load_dataset(..., streaming=True, filters=...)`
-(PyArrow-backed predicate pushdown) with local GeoTIFF decode, compared against
-Rasteret prebuilt index reads.
+    | Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
+    |---:|---:|---:|---:|
+    | 120 | 46.83 s | 12.09 s | **3.88x** |
+    | 1000 | 771.59 s | 118.69 s | **6.50x** |
 
-| Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
-|---:|---:|---:|---:|
-| 120 | 46.83 s | 12.09 s | **3.88x** |
-| 1000 | 771.59 s | 118.69 s | **6.50x** |
+    ![HF vs Rasteret processing time](assets/benchmark_hf_results.png)
+    ![HF vs Rasteret speedup](assets/benchmark_hf_speedup.png)
 
-![HF vs Rasteret processing time](assets/benchmark_hf_results.png)
-![HF vs Rasteret speedup](assets/benchmark_hf_speedup.png)
-
-Major TOM exploration notebooks commonly use HF streaming iterators without
-keyed filters; this table uses `filters=...` for keyed retrieval.
-See [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md#major-tom-style-enrichment) for the full Major TOM workflow.
+    Full details: [Benchmarks](explanation/benchmark.md).
 
 !!! tip "Share your speed-ups"
 

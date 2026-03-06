@@ -21,11 +21,11 @@ import xarray as xr
 from rasteret.core.collection import Collection
 from rasteret.core.execution import (
     _detect_target_crs,
-    _ensure_point_geoarrow,
     get_collection_numpy,
-    get_collection_point_samples,
     get_collection_xarray,
 )
+from rasteret.core.geometry import ensure_point_geoarrow as _ensure_point_geoarrow
+from rasteret.core.point_sampling import get_collection_point_samples
 from rasteret.core.utils import infer_data_source, run_sync
 
 
@@ -447,24 +447,30 @@ class TestRasterAccessorGdfCrs:
 class TestRasterAccessorPointSampling:
     @pytest.mark.asyncio
     async def test_sample_points_reads_single_pixel(self):
-        from affine import Affine
         from shapely.geometry import Point
 
         from rasteret.core.geometry import coerce_to_geoarrow
         from rasteret.core.raster_accessor import RasterAccessor
-        from rasteret.fetch.cog import CogReadResult
         from rasteret.types import CogMetadata, RasterInfo
 
         class _DummyReader:
+            def __init__(self):
+                self.calls = []
+
             async def __aenter__(self):
                 return self
 
             async def __aexit__(self, exc_type, exc, tb):
                 return None
 
+            async def read_merged_tile_samples(self, **kwargs):
+                self.calls.append(kwargs)
+                tile_key = kwargs["tiles"][0]
+                return {tile_key: [np.full((10, 10), 123, dtype=np.uint16)]}
+
         info = RasterInfo(
             id="r-point",
-            datetime=datetime(2024, 1, 1),
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
             bbox=[0.0, 0.0, 1.0, 1.0],
             footprint=None,
             crs=4326,
@@ -488,23 +494,89 @@ class TestRasterAccessorPointSampling:
             tile_byte_counts=[1],
         )
 
-        async def _fake_read_cog(*_args, **_kwargs):
-            return CogReadResult(
-                data=np.array([[123]], dtype=np.uint16),
-                transform=Affine.identity(),
-                valid_mask=np.array([[True]], dtype=bool),
-                fill_value_used=0,
-                mode="window",
-            )
+        reader = _DummyReader()
 
         with (
-            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
             patch.object(
                 accessor,
                 "try_get_band_cog_metadata",
                 return_value=(meta, "https://example.com/x.tif", 0),
             ),
-            patch("rasteret.core.raster_accessor.read_cog", side_effect=_fake_read_cog),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                point_indices=[7],
+                max_concurrent=5,
+            )
+
+        assert rows.num_rows == 1
+        assert len(reader.calls) == 1
+        assert rows.schema.field("datetime").type == pa.timestamp("us")
+        assert rows.column("point_index")[0].as_py() == 7
+        assert rows.column("record_id")[0].as_py() == "r-point"
+        assert rows.column("band")[0].as_py() == "B04"
+        assert rows.column("value")[0].as_py() == 123.0
+
+    @pytest.mark.asyncio
+    async def test_sample_points_batches_points_in_same_tile(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tile_samples(self, **kwargs):
+                self.calls += 1
+                tile_key = kwargs["tiles"][0]
+                tile = np.arange(100, dtype=np.uint16).reshape(10, 10)
+                return {tile_key: [tile]}
+
+        info = RasterInfo(
+            id="r-batch",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow([Point(1.5, 8.5), Point(2.5, 7.5)])
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("uint16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
         ):
             rows = await accessor.sample_points(
                 points=points,
@@ -512,10 +584,91 @@ class TestRasterAccessorPointSampling:
                 max_concurrent=5,
             )
 
-        assert len(rows) == 1
-        assert rows[0]["record_id"] == "r-point"
-        assert rows[0]["band"] == "B04"
-        assert rows[0]["value"] == 123.0
+        assert reader.calls == 1
+        assert rows.num_rows == 2
+        assert rows.column("value").to_pylist() == [11.0, 22.0]
+
+    @pytest.mark.asyncio
+    async def test_sample_points_groups_same_href_band_indices(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tile_samples(self, **kwargs):
+                self.calls.append(kwargs)
+                tile_key = kwargs["tiles"][0]
+                return {
+                    tile_key: [
+                        np.full((10, 10), 11, dtype=np.uint16),
+                        np.full((10, 10), 22, dtype=np.uint16),
+                    ]
+                }
+
+        info = RasterInfo(
+            id="r-multi",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={
+                "B04": {"href": "https://example.com/x.tif", "band_index": 0},
+                "B08": {"href": "https://example.com/x.tif", "band_index": 1},
+            },
+            band_metadata={"B04_metadata": {}, "B08_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(1.5, 8.5))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("uint16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            samples_per_pixel=2,
+            planar_configuration=1,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                side_effect=[
+                    (meta, "https://example.com/x.tif", 0),
+                    (meta, "https://example.com/x.tif", 1),
+                ],
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04", "B08"],
+                max_concurrent=5,
+            )
+
+        assert len(reader.calls) == 1
+        assert reader.calls[0]["band_indices"] == [0, 1]
+        assert rows.column("band").to_pylist() == ["B04", "B08"]
+        assert rows.column("value").to_pylist() == [11.0, 22.0]
 
 
 class TestNumpyOutput:
@@ -644,8 +797,10 @@ class TestPointSampling:
             self._rasters = rasters
             self.data_source = ""
             self.dataset = None
+            self.last_filters = None
 
         def subset(self, **_filters):
+            self.last_filters = _filters
             return self
 
         async def iterate_rasters(self, _data_source=None):
@@ -653,11 +808,15 @@ class TestPointSampling:
                 yield raster
 
     class _DummyRaster:
-        def __init__(self, rows):
-            self.id = "r"
+        def __init__(self, rows, *, raster_id="r", bbox=None):
+            self.id = raster_id
+            self.bbox = bbox
             self._rows = rows
+            self.calls = []
+            self.datetime = rows[0]["datetime"] if rows else None
 
         async def sample_points(self, **_kwargs):
+            self.calls.append(_kwargs)
             return self._rows
 
     def test_ensure_point_geoarrow_arrow_table_xy(self):
@@ -718,18 +877,136 @@ class TestPointSampling:
         collection = self._DummyCollection(
             [self._DummyRaster(rows_old), self._DummyRaster(rows_new)]
         )
-        with patch(
-            "rasteret.core.execution._ensure_geoarrow", return_value=pa.array([])
-        ):
-            table = get_collection_point_samples(
-                collection=collection,
-                points=[],
-                bands=["B04"],
-                match="latest",
-            )
+        table = get_collection_point_samples(
+            collection=collection,
+            points=pa.table({"lon": [1.0], "lat": [2.0]}),
+            bands=["B04"],
+            match="latest",
+        )
         assert table.num_rows == 1
         assert table.column("record_id")[0].as_py() == "new"
         assert table.column("value")[0].as_py() == 11.0
+        assert len(collection._rasters[0].calls) == 0
+        assert len(collection._rasters[1].calls) == 1
+
+    def test_get_collection_point_samples_groups_points_by_raster_bbox(self):
+        raster_left = self._DummyRaster(
+            [
+                {
+                    "point_index": 0,
+                    "point_x": 1.0,
+                    "point_y": 2.0,
+                    "point_crs": 4326,
+                    "record_id": "left",
+                    "datetime": np.datetime64("2024-01-01T00:00:00"),
+                    "collection": "c",
+                    "cloud_cover": 1.0,
+                    "band": "B04",
+                    "value": 10.0,
+                    "raster_crs": 32632,
+                }
+            ],
+            raster_id="left",
+            bbox=[0.0, 0.0, 2.0, 3.0],
+        )
+        raster_right = self._DummyRaster(
+            [
+                {
+                    "point_index": 1,
+                    "point_x": 10.0,
+                    "point_y": 20.0,
+                    "point_crs": 4326,
+                    "record_id": "right",
+                    "datetime": np.datetime64("2024-01-01T00:00:00"),
+                    "collection": "c",
+                    "cloud_cover": 1.0,
+                    "band": "B04",
+                    "value": 20.0,
+                    "raster_crs": 32633,
+                }
+            ],
+            raster_id="right",
+            bbox=[9.0, 19.0, 11.0, 21.0],
+        )
+        raster_empty = self._DummyRaster(
+            [],
+            raster_id="empty",
+            bbox=[100.0, 100.0, 101.0, 101.0],
+        )
+        collection = self._DummyCollection([raster_left, raster_right, raster_empty])
+
+        table = get_collection_point_samples(
+            collection=collection,
+            points=pa.table({"lon": [1.0, 10.0], "lat": [2.0, 20.0]}),
+            bands=["B04"],
+        )
+
+        assert table.num_rows == 2
+        assert collection.last_filters == {"bbox": (1.0, 2.0, 10.0, 20.0)}
+        assert raster_left.calls[0]["point_indices"] == [0]
+        assert raster_right.calls[0]["point_indices"] == [1]
+        assert raster_empty.calls == []
+
+    def test_get_collection_point_samples_reuses_single_reader(self):
+        class _StubReader:
+            def __init__(self, *_args, **_kwargs):
+                self.sem = None
+
+            async def __aenter__(self):
+                self.sem = object()
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        rows_a = [
+            {
+                "point_index": 0,
+                "point_x": 1.0,
+                "point_y": 2.0,
+                "point_crs": 4326,
+                "record_id": "a",
+                "datetime": np.datetime64("2024-01-01T00:00:00"),
+                "collection": "c",
+                "cloud_cover": 1.0,
+                "band": "B04",
+                "value": 10.0,
+                "raster_crs": 32632,
+            }
+        ]
+        rows_b = [
+            {
+                "point_index": 1,
+                "point_x": 10.0,
+                "point_y": 20.0,
+                "point_crs": 4326,
+                "record_id": "b",
+                "datetime": np.datetime64("2024-01-02T00:00:00"),
+                "collection": "c",
+                "cloud_cover": 2.0,
+                "band": "B04",
+                "value": 20.0,
+                "raster_crs": 32633,
+            }
+        ]
+        raster_a = self._DummyRaster(rows_a, raster_id="a", bbox=[0.0, 0.0, 2.0, 3.0])
+        raster_b = self._DummyRaster(
+            rows_b, raster_id="b", bbox=[9.0, 19.0, 11.0, 21.0]
+        )
+        collection = self._DummyCollection([raster_a, raster_b])
+
+        with patch("rasteret.core.point_sampling.COGReader", _StubReader):
+            table = get_collection_point_samples(
+                collection=collection,
+                points=pa.table({"lon": [1.0, 10.0], "lat": [2.0, 20.0]}),
+                bands=["B04"],
+            )
+
+        assert table.num_rows == 2
+        assert len(raster_a.calls) == 1
+        assert len(raster_b.calls) == 1
+        assert "reader" in raster_a.calls[0]
+        assert raster_a.calls[0]["reader"] is raster_b.calls[0]["reader"]
 
     def test_get_collection_point_samples_empty_returns_schema(self):
         collection = self._DummyCollection([self._DummyRaster([])])

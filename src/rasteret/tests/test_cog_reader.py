@@ -183,6 +183,57 @@ def test_cog_reader_reads_local_file_ranges(tmp_path: Path) -> None:
     assert out_uri == payload[2:6]
 
 
+@pytest.mark.asyncio
+async def test_read_tile_samples_reads_once_for_multiple_band_indices():
+    reader = COGReader.__new__(COGReader)
+    reader.sem = asyncio.Semaphore(1)
+
+    meta = CogMetadata(
+        width=4,
+        height=4,
+        tile_width=4,
+        tile_height=4,
+        dtype=np.dtype("uint16"),
+        crs=4326,
+        tile_offsets=[16],
+        tile_byte_counts=[8],
+        samples_per_pixel=2,
+        planar_configuration=1,
+    )
+
+    read_calls: list[tuple[str, int, int]] = []
+
+    async def _fake_read_range(url: str, start: int, end: int) -> bytes:
+        read_calls.append((url, start, end))
+        return b"x" * (end - start)
+
+    def _fake_process(
+        data: bytes,
+        metadata: CogMetadata,
+        band_index: int | None = None,
+    ) -> np.ndarray:
+        # No compression in this fixture: `_decompress_tile_sync` is the identity.
+        assert data == b"x" * 8
+        assert metadata is meta
+        return np.full((4, 4), int(band_index), dtype=np.int16)
+
+    reader._read_range = _fake_read_range  # type: ignore[method-assign]
+    reader._process_tile_sync = _fake_process  # type: ignore[method-assign]
+
+    tiles = await reader.read_tile_samples(
+        url="https://example.com/example.tif",
+        metadata=meta,
+        tile_row=0,
+        tile_col=0,
+        band_indices=[0, 1],
+    )
+
+    assert read_calls == [("https://example.com/example.tif", 16, 24)]
+    assert len(tiles) == 2
+    np.testing.assert_array_equal(tiles[0], np.zeros((4, 4), dtype=np.int16))
+    np.testing.assert_array_equal(tiles[1], np.ones((4, 4), dtype=np.int16))
+
+
 class TestMergeTiles:
     def test_single_tile(self):
         tile = np.ones((16, 16), dtype=np.float32)
