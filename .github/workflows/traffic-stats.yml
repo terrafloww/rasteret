@@ -5,24 +5,23 @@ on:
     - cron: "0 6 * * *"  # Daily at 06:00 UTC
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: data
+          repository: terrafloww/rasteret-traffic-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data-repo
 
       - name: Collect traffic data
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.DATA_REPO_PAT }}
         run: |
-          mkdir -p data/github
+          mkdir -p data-repo/data/github
 
-          REPO="${{ github.repository }}"
+          REPO="terrafloww/rasteret"
 
           # Clones (14-day rolling window from GitHub)
           gh api "repos/${REPO}/traffic/clones" --jq '.clones[] | [.timestamp,.count,.uniques] | @csv' | \
@@ -49,7 +48,7 @@ jobs:
             done > /tmp/paths_new.csv
 
           # Merge clones (deduplicate by timestamp)
-          CLONES=data/github/clones.csv
+          CLONES=data-repo/data/github/clones.csv
           if [ ! -f "$CLONES" ]; then
             echo "timestamp,count,uniques" > "$CLONES"
           fi
@@ -61,7 +60,7 @@ jobs:
           done < /tmp/clones_new.csv
 
           # Merge views (deduplicate by timestamp)
-          VIEWS=data/github/views.csv
+          VIEWS=data-repo/data/github/views.csv
           if [ ! -f "$VIEWS" ]; then
             echo "timestamp,count,uniques" > "$VIEWS"
           fi
@@ -73,20 +72,21 @@ jobs:
           done < /tmp/views_new.csv
 
           # Append referrers (always append, these are daily snapshots)
-          REFS=data/github/referrers.csv
+          REFS=data-repo/data/github/referrers.csv
           if [ ! -f "$REFS" ]; then
             echo "date,referrer,count,uniques" > "$REFS"
           fi
           cat /tmp/referrers_new.csv >> "$REFS"
 
           # Append paths (always append, these are daily snapshots)
-          PATHS=data/github/paths.csv
+          PATHS=data-repo/data/github/paths.csv
           if [ ! -f "$PATHS" ]; then
             echo "date,path,count,uniques" > "$PATHS"
           fi
           cat /tmp/paths_new.csv >> "$PATHS"
 
       - name: Commit if changed
+        working-directory: data-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

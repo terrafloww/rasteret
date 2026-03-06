@@ -5,16 +5,15 @@ on:
     - cron: "30 6 * * *"  # Daily at 06:30 UTC
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: data
+          repository: terrafloww/rasteret-traffic-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data-repo
 
       - uses: astral-sh/setup-uv@v5
 
@@ -25,14 +24,14 @@ jobs:
 
       - name: Collect daily stats
         run: |
-          mkdir -p data/pypi
+          mkdir -p data-repo/data/pypi
 
           # Overall daily downloads (last 180 days window)
           pypistats overall rasteret --json --mirrors | \
             python -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
-          f = 'data/pypi/overall.csv'
+          f = 'data-repo/data/pypi/overall.csv'
           exists = os.path.exists(f)
           seen = set()
           if exists:
@@ -52,7 +51,7 @@ jobs:
             python -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
-          f = 'data/pypi/by_python.csv'
+          f = 'data-repo/data/pypi/by_python.csv'
           exists = os.path.exists(f)
           seen = set()
           if exists:
@@ -72,7 +71,7 @@ jobs:
             python -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
-          f = 'data/pypi/by_system.csv'
+          f = 'data-repo/data/pypi/by_system.csv'
           exists = os.path.exists(f)
           seen = set()
           if exists:
@@ -88,6 +87,7 @@ jobs:
           "
 
       - name: Commit if changed
+        working-directory: data-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
