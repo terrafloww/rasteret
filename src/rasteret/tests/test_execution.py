@@ -670,6 +670,99 @@ class TestRasterAccessorPointSampling:
         assert rows.column("band").to_pylist() == ["B04", "B08"]
         assert rows.column("value").to_pylist() == [11.0, 22.0]
 
+    @pytest.mark.asyncio
+    async def test_sample_points_does_not_group_planar_band_indices(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tile_samples(self, **kwargs):
+                self.calls.append(kwargs)
+                tile_key = kwargs["tiles"][0]
+                band_index = kwargs["band_indices"][0]
+                value = 11 if band_index == 0 else 22
+                return {tile_key: [np.full((10, 10), value, dtype=np.uint16)]}
+
+        info = RasterInfo(
+            id="r-planar",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={
+                "B04": {"href": "https://example.com/x.tif", "band_index": 0},
+                "B08": {"href": "https://example.com/x.tif", "band_index": 1},
+            },
+            band_metadata={"B04_metadata": {}, "B08_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(1.5, 8.5))
+
+        meta0 = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("uint16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            samples_per_pixel=64,
+            planar_configuration=2,
+        )
+        meta1 = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("uint16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[100],
+            tile_byte_counts=[1],
+            samples_per_pixel=64,
+            planar_configuration=2,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                side_effect=[
+                    (meta0, "https://example.com/x.tif", 0),
+                    (meta1, "https://example.com/x.tif", 1),
+                ],
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04", "B08"],
+                max_concurrent=5,
+            )
+
+        assert len(reader.calls) == 2
+        assert reader.calls[0]["band_indices"] == [0]
+        assert reader.calls[1]["band_indices"] == [1]
+        assert rows.column("band").to_pylist() == ["B04", "B08"]
+        assert rows.column("value").to_pylist() == [11.0, 22.0]
+
 
 class TestNumpyOutput:
     def test_numpy_stack_multiband(self):
