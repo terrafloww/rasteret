@@ -805,6 +805,26 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                             result,
                         )
                         continue
+                    data = getattr(result, "data", None)
+                    if (
+                        not isinstance(data, np.ndarray)
+                        or data.ndim != 2
+                        or data.size == 0
+                    ):
+                        n_failed += 1
+                        empty_error = ValueError(
+                            "COG read returned empty/non-2D data "
+                            f"(shape={getattr(data, 'shape', None)})"
+                        )
+                        if first_error is None:
+                            first_error = empty_error
+                        logger.warning(
+                            "COG read returned empty data for %s (band_index=%s): %s",
+                            url,
+                            _band_index,
+                            empty_error,
+                        )
+                        continue
                     out.append((result, meta))
                 if (
                     n_failed
@@ -827,6 +847,31 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 return out
 
             return pool.run(_gather())
+
+        def _filter_positive_overlap(
+            self, df: gpd.GeoDataFrame, x: slice, y: slice
+        ) -> gpd.GeoDataFrame:
+            """Keep only records with positive-area overlap with query bounds."""
+            if df.empty:
+                return df
+            xmin = float(x.start)
+            ymin = float(y.start)
+            xmax = float(x.stop)
+            ymax = float(y.stop)
+            bounds = df.geometry.bounds
+            overlap_w = np.minimum(bounds["maxx"].to_numpy(), xmax) - np.maximum(
+                bounds["minx"].to_numpy(), xmin
+            )
+            overlap_h = np.minimum(bounds["maxy"].to_numpy(), ymax) - np.maximum(
+                bounds["miny"].to_numpy(), ymin
+            )
+            overlap_area = np.clip(overlap_w, 0.0, None) * np.clip(overlap_h, 0.0, None)
+            mask = overlap_area > 0.0
+            if not bool(np.any(mask)):
+                return df.iloc[0:0].copy()
+            filtered = df.iloc[np.flatnonzero(mask)].copy()
+            filtered["__rasteret_overlap_area__"] = overlap_area[mask]
+            return filtered
 
         def _payload_row(self, rid: int) -> Any:
             try:
@@ -932,6 +977,8 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 df = df.iloc[::t_step]
                 df = df.cx[x.start : x.stop, y.start : y.stop]
 
+            df = self._filter_positive_overlap(df, x, y)
+
             if df.empty:
                 raise IndexError(
                     f"index: {index} not found in dataset with bounds: {self.bounds}"
@@ -956,10 +1003,15 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             # Always let the reader return its natural grid-aligned crop with a
             # self-consistent (data, transform) pair.
             fetch_out_shape = None
+            label_rid: int | None = None
 
             if self.time_series:
                 # Sort chronologically so T dimension is time-ordered.
+                if "__rasteret_overlap_area__" in df.columns:
+                    df = df.drop(columns=["__rasteret_overlap_area__"])
                 df = df.sort_index()
+                if not df.empty:
+                    label_rid = int(df.iloc[0]["rid"])
 
                 # Build all TxC requests, fire concurrently via asyncio.gather.
                 all_requests: list[tuple[str, CogMetadata, int | None]] = []
@@ -1037,54 +1089,77 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 # spatiotemporal slice. (TorchGeo's RasterDataset mosaics multiple
                 # overlapping files, but Rasteret avoids reimplementing merge
                 # semantics here.)
+                if "__rasteret_overlap_area__" in df.columns:
+                    df = df.sort_values(
+                        "__rasteret_overlap_area__", ascending=False, kind="mergesort"
+                    )
                 if len(df) > 1:
                     logger.warning(
-                        "TorchGeo slice overlaps %d records; selecting the first record "
-                        "(set time_series=True to stack multiple timesteps).",
+                        "TorchGeo slice overlaps %d records; selecting the record with "
+                        "the largest spatial overlap (set time_series=True to stack "
+                        "multiple timesteps).",
                         len(df),
                     )
-
-                rid = int(df.iloc[0]["rid"])
-                row = self._payload_row(rid)
-                band_requests = self._build_band_requests(row)
-                fetch_results = self._fetch_arrays(
-                    band_requests,
-                    patch_array,
-                    pool,
-                    out_shape=fetch_out_shape,
-                )
-                if not fetch_results:
-                    raise ValueError("No bands were fetched for the requested chip")
-
-                if self._multi_crs:
-                    src_crs = int(row["proj:epsg"])
-                    arrays = [
-                        reproject_array(
-                            r.data,
-                            r.transform,
-                            src_crs,
-                            self.epsg,
-                            query_grid.transform,
-                            query_grid.shape,
+                last_error: BaseException | None = None
+                image: torch.Tensor | None = None
+                for _, candidate in df.iterrows():
+                    rid = int(candidate["rid"])
+                    row = self._payload_row(rid)
+                    band_requests = self._build_band_requests(row)
+                    try:
+                        fetch_results = self._fetch_arrays(
+                            band_requests,
+                            patch_array,
+                            pool,
+                            out_shape=fetch_out_shape,
                         )
-                        for r, _meta in fetch_results
-                    ]
-                else:
-                    arrays = []
-                    for r, meta in fetch_results:
-                        arrays.append(
-                            self._merge_resample_to_query_grid(
-                                r.data,
-                                r.transform,
-                                meta,
-                                query_grid,
-                                resampling=_auto_resampling_for_dtype(r.data.dtype),
-                            )
-                        )
+                    except ValueError as exc:
+                        last_error = exc
+                        continue
+                    if not fetch_results:
+                        continue
 
-                # np.stack -> [C, H, W] (1 alloc), then torch view/cast.
-                image_np = np.stack(arrays, axis=0)
-                image = self._image_tensor_from_numpy(image_np)  # [C, H, W]
+                    try:
+                        if self._multi_crs:
+                            src_crs = int(row["proj:epsg"])
+                            arrays = [
+                                reproject_array(
+                                    r.data,
+                                    r.transform,
+                                    src_crs,
+                                    self.epsg,
+                                    query_grid.transform,
+                                    query_grid.shape,
+                                )
+                                for r, _meta in fetch_results
+                            ]
+                        else:
+                            arrays = []
+                            for r, meta in fetch_results:
+                                arrays.append(
+                                    self._merge_resample_to_query_grid(
+                                        r.data,
+                                        r.transform,
+                                        meta,
+                                        query_grid,
+                                        resampling=_auto_resampling_for_dtype(
+                                            r.data.dtype
+                                        ),
+                                    )
+                                )
+
+                        # np.stack -> [C, H, W] (1 alloc), then torch view/cast.
+                        image_np = np.stack(arrays, axis=0)
+                        image = self._image_tensor_from_numpy(image_np)  # [C, H, W]
+                        label_rid = rid
+                        break
+                    except ValueError as exc:
+                        last_error = exc
+                        continue
+                if image is None:
+                    raise ValueError(
+                        "No readable records were available for the requested chip."
+                    ) from last_error
 
             transform = torch.tensor(
                 [x.step, 0.0, x.start, 0.0, -y.step, y.stop], dtype=torch.float32
@@ -1109,9 +1184,8 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 # this means the label is NOT per-timestep - it represents
                 # the scene-level label of the earliest observation.
                 label_value = None
-                if not df.empty:
-                    rid0 = int(df.iloc[0]["rid"])
-                    label_row = self._payload_row(rid0)
+                if label_rid is not None:
+                    label_row = self._payload_row(label_rid)
                     label_value = _coerce_label_value(label_row.get(self.label_field))
                 if label_value is not None:
                     sample["label"] = label_value

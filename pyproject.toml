@@ -76,6 +76,7 @@ examples = [
     "stac-geoparquet>=0.6.0",
     "datasets>=2.20.0",
     "huggingface_hub>=0.23.0",
+    "folium>=0.18.0",
 ]
 all = [
     "rasteret[xarray,aws,azure,earthdata,torchgeo,dev,docs,examples]",

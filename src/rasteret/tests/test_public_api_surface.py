@@ -78,12 +78,15 @@ def test_collection_analysis_methods_delegate_to_execution_layer() -> None:
             return_value=pa.table({"value": pa.array([1.0])}),
         ) as mocked_points,
     ):
-        xarray_result = collection.get_xarray(geometries=[], bands=["B04"])
+        xarray_result = collection.get_xarray(
+            geometries=[], bands=["B04"], xr_combine="merge_override"
+        )
         gdf_result = collection.get_gdf(geometries=[], bands=["B04"])
         numpy_result = collection.get_numpy(geometries=[], bands=["B04"])
         points_result = collection.sample_points(points=[], bands=["B04"])
 
     mocked_xarray.assert_called_once()
+    assert mocked_xarray.call_args.kwargs["xr_combine"] == "merge_override"
     mocked_gdf.assert_called_once()
     mocked_numpy.assert_called_once()
     mocked_points.assert_called_once()
@@ -149,6 +152,34 @@ def test_load_valid_file() -> None:
         collection = rasteret.load(path)
         assert isinstance(collection, Collection)
         assert collection.name == "test"
+
+
+def test_load_hf_uri_uses_hf_reader(monkeypatch) -> None:
+    import pyarrow.dataset as pads
+
+    table = pa.table(
+        {
+            "id": pa.array(["scene-1"]),
+            "datetime": pa.array([datetime(2024, 1, 1)], type=pa.timestamp("us")),
+            "geometry": pa.array([None], type=pa.null()),
+            "assets": pa.array([{"B04": {"href": "https://example.com/test.tif"}}]),
+            "scene_bbox": pa.array(
+                [[0.0, 0.0, 1.0, 1.0]], type=pa.list_(pa.float64(), 4)
+            ),
+        }
+    )
+    dataset = pads.dataset(table)
+
+    with patch(
+        "rasteret.core.collection.open_hf_parquet_dataset",
+        return_value=dataset,
+    ) as mocked:
+        collection = rasteret.load("hf://datasets/terrafloww/example/records.parquet")
+
+    mocked.assert_called_once_with("hf://datasets/terrafloww/example/records.parquet")
+    assert isinstance(collection, Collection)
+    assert collection.dataset is not None
+    assert collection.dataset.count_rows() == 1
 
 
 def test_load_rejects_missing_columns() -> None:

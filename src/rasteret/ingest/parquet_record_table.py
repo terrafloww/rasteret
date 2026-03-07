@@ -31,6 +31,7 @@ import pyarrow.dataset as ds
 from rasteret.cloud import StorageBackend
 from rasteret.ingest.base import CollectionBuilder
 from rasteret.ingest.normalize import build_collection_from_table, parse_epsg
+from rasteret.integrations.huggingface import is_hf_dataset_uri, load_hf_parquet_table
 
 if TYPE_CHECKING:  # pragma: no cover
     from rasteret.core.collection import Collection
@@ -254,8 +255,16 @@ class RecordTableBuilder(CollectionBuilder):
             dataset = ds.dataset(
                 self.path, format="parquet", filesystem=self._filesystem
             )
-        else:
-            dataset = ds.dataset(self.path, format="parquet")
+            return dataset.to_table(columns=self.columns, filter=self.filter_expr)
+
+        if is_hf_dataset_uri(self.path):
+            return load_hf_parquet_table(
+                self.path,
+                columns=self.columns,
+                filter_expr=self.filter_expr,
+            )
+
+        dataset = ds.dataset(self.path, format="parquet")
         return dataset.to_table(columns=self.columns, filter=self.filter_expr)
 
     def _prepare_table(self, table: pa.Table) -> pa.Table:

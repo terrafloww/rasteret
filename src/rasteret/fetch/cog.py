@@ -605,7 +605,7 @@ class COGReader:
         self,
         requests: list[COGTileRequest],
         debug: bool = False,
-    ) -> dict[tuple[int, int], np.ndarray]:
+    ) -> dict[tuple[int, int, int | None], np.ndarray]:
         """Parallel tile reading with HTTP/2 multiplexing"""
         if not requests:
             return {}
@@ -637,141 +637,48 @@ class COGReader:
 
         return results
 
-    async def read_tile_samples(
-        self,
-        *,
-        url: str,
-        metadata: CogMetadata,
-        tile_row: int,
-        tile_col: int,
-        band_indices: list[int | None],
-    ) -> list[np.ndarray]:
-        """Read one tile once and materialize one array per requested band index."""
-        tiles = await self.read_merged_tile_samples(
-            url=url,
-            metadata=metadata,
-            tiles=[(tile_row, tile_col)],
-            band_indices=band_indices,
-        )
-        return tiles.get((tile_row, tile_col), [])
-
-    async def read_merged_tile_samples(
-        self,
-        *,
-        url: str,
-        metadata: CogMetadata,
-        tiles: list[tuple[int, int]],
-        band_indices: list[int | None],
-        debug: bool = False,
-    ) -> dict[tuple[int, int], list[np.ndarray]]:
-        """Read many tiles with range coalescing, materializing each band index once.
-
-        This reduces object-store overhead by coalescing adjacent tile byte
-        ranges (via ``merge_ranges``) while still avoiding redundant tile decode
-        for multiple band indices.
-        """
-        if not tiles or not band_indices:
-            return {}
-
-        tiles_x = (metadata.width + metadata.tile_width - 1) // metadata.tile_width
-        tiles_y = (metadata.height + metadata.tile_height - 1) // metadata.tile_height
-        if metadata.tile_offsets is None or metadata.tile_byte_counts is None:
-            raise ValueError("Missing tile metadata (tile offsets/byte counts)")
-
-        requests: list[COGTileRequest] = []
-        for tile_row, tile_col in tiles:
-            if (
-                tile_row < 0
-                or tile_col < 0
-                or tile_row >= tiles_y
-                or tile_col >= tiles_x
-            ):
-                continue
-            tile_idx = tile_row * tiles_x + tile_col
-            if tile_idx >= len(metadata.tile_offsets) or tile_idx >= len(
-                metadata.tile_byte_counts
-            ):
-                continue
-            requests.append(
-                COGTileRequest(
-                    url=url,
-                    offset=int(metadata.tile_offsets[tile_idx]),
-                    size=int(metadata.tile_byte_counts[tile_idx]),
-                    row=int(tile_row),
-                    col=int(tile_col),
-                    metadata=metadata,
-                    band_index=None,
-                )
-            )
-
-        if not requests:
-            return {}
-
-        ranges = self.merge_ranges(requests)
-        if debug:
-            logger.debug(
-                "read_merged_tile_samples(url=%s): %d tile(s), %d range(s)",
-                url,
-                len(requests),
-                len(ranges),
-            )
-
-        loop = asyncio.get_running_loop()
-        out: dict[tuple[int, int], list[np.ndarray]] = {}
-        for start, end in ranges:
-            data = await self._read_range(url, start, end)
-            in_range = [r for r in requests if start <= r.offset < end]
-            for req in in_range:
-                offset = req.offset - start
-                tile_data = data[offset : offset + req.size]
-                decompressed = await loop.run_in_executor(
-                    None, self._decompress_tile_sync, tile_data, metadata
-                )
-
-                tasks = []
-                should_copy_ndarray = (
-                    isinstance(decompressed, np.ndarray) and len(band_indices) > 1
-                )
-                for band_index in band_indices:
-                    process_input = (
-                        np.array(decompressed, copy=True)
-                        if should_copy_ndarray
-                        else decompressed
-                    )
-                    tasks.append(
-                        loop.run_in_executor(
-                            None,
-                            self._process_tile_sync,
-                            process_input,
-                            metadata,
-                            band_index,
-                        )
-                    )
-                out[(req.row, req.col)] = list(await asyncio.gather(*tasks))
-
-        return out
-
     async def _read_and_process_range(
         self,
         url: str,
         start: int,
         end: int,
         requests: list[COGTileRequest],
-    ) -> dict[tuple[int, int], np.ndarray]:
+    ) -> dict[tuple[int, int, int | None], np.ndarray]:
         """Read and process a byte range with retries"""
         data = await self._read_range(url, start, end)
+        if not requests:
+            return {}
 
-        # Process tiles in parallel
-        tasks = []
+        loop = asyncio.get_running_loop()
+        grouped: dict[tuple[int, int, int], list[COGTileRequest]] = {}
         for req in requests:
-            offset = req.offset - start
-            tile_data = data[offset : offset + req.size]
-            tasks.append(
-                self._process_tile(tile_data, req.metadata, band_index=req.band_index)
-            )
+            grouped.setdefault((req.offset, req.size, id(req.metadata)), []).append(req)
 
-        tiles = await asyncio.gather(*tasks)
-        return {(req.row, req.col): tile for req, tile in zip(requests, tiles)}
+        out: dict[tuple[int, int, int | None], np.ndarray] = {}
+        for (offset, size, _meta_id), group in grouped.items():
+            tile_data = data[offset - start : offset - start + size]
+            metadata = group[0].metadata
+            decompressed = await loop.run_in_executor(
+                None, self._decompress_tile_sync, tile_data, metadata
+            )
+            materialized = await loop.run_in_executor(
+                None, self._materialize_tile_sync, decompressed, metadata
+            )
+            # Guard accidental mutation after predictor decode/materialization.
+            materialized.setflags(write=False)
+
+            for req in group:
+                key = (req.row, req.col, req.band_index)
+                if key in out:
+                    raise RuntimeError(
+                        "Duplicate tile request key in a single range batch: "
+                        f"{key}. Callers must not emit duplicate (row,col,band_index)."
+                    )
+                out[key] = self._extract_band_sync(
+                    materialized, req.metadata, req.band_index
+                )
+
+        return out
 
     async def _read_range(self, url: str, start: int, end: int) -> bytes:
         """Read a byte range via the storage backend."""
@@ -790,23 +697,6 @@ class COGReader:
 
         async with self.sem:
             return await self._backend.get_range(url, start, end - start)
-
-    async def _process_tile(
-        self,
-        data: bytes,
-        metadata: CogMetadata,
-        *,
-        band_index: int | None = None,
-    ) -> np.ndarray:
-        """Process tile data in thread pool"""
-        loop = asyncio.get_running_loop()
-
-        decompressed = await loop.run_in_executor(
-            None, self._decompress_tile_sync, data, metadata
-        )
-        return await loop.run_in_executor(
-            None, self._process_tile_sync, decompressed, metadata, band_index
-        )
 
     def _decompress_tile_sync(
         self, data: bytes, metadata: CogMetadata
@@ -838,13 +728,12 @@ class COGReader:
 
         raise NotImplementedError(f"Unsupported TIFF compression: {compression}")
 
-    def _process_tile_sync(  # noqa: PLR0912
+    def _materialize_tile_sync(  # noqa: PLR0912
         self,
         data: bytes | np.ndarray,
         metadata: CogMetadata,
-        band_index: int | None = None,
     ) -> np.ndarray:
-        """Synchronous tile processing (dtype + predictor)."""
+        """Decode+materialize a tile array (dtype + predictor), no band extraction."""
         dtype = (
             np.dtype(metadata.dtype)
             if not hasattr(metadata.dtype, "to_pandas_dtype")
@@ -896,6 +785,21 @@ class COGReader:
         elif predictor not in (1, 3):
             raise NotImplementedError(f"Unsupported TIFF predictor: {predictor}")
 
+        return tile
+
+    def _extract_band_sync(
+        self,
+        tile: np.ndarray,
+        metadata: CogMetadata,
+        band_index: int | None,
+    ) -> np.ndarray:
+        """Extract one band/sample from a materialized tile."""
+        samples_per_pixel = int(getattr(metadata, "samples_per_pixel", 1) or 1)
+        planar_configuration = int(getattr(metadata, "planar_configuration", 1) or 1)
+        if tile.ndim == 2:
+            return tile
+        if tile.ndim != 3:
+            raise ValueError(f"Unexpected tile ndim={tile.ndim}; expected 2 or 3.")
         if planar_configuration == 1 and samples_per_pixel > 1:
             if band_index is None:
                 raise NotImplementedError(
@@ -906,9 +810,18 @@ class COGReader:
                 raise ValueError(
                     f"band_index {band_index} out of range for {samples_per_pixel} samples"
                 )
-            tile = tile[:, :, band_index]
-
+            return tile[:, :, band_index]
         return tile
+
+    def _process_tile_sync(
+        self,
+        data: bytes | np.ndarray,
+        metadata: CogMetadata,
+        band_index: int | None = None,
+    ) -> np.ndarray:
+        """Compatibility wrapper for callers/tests expecting one-step processing."""
+        tile = self._materialize_tile_sync(data, metadata)
+        return self._extract_band_sync(tile, metadata, band_index)
 
 
 def compute_tile_indices(
@@ -1554,9 +1467,19 @@ async def read_cog(
     # Use COGReader for efficient tile reading
     if reader is None:
         async with COGReader(max_concurrent=max_concurrent) as local_reader:
-            tiles = await local_reader.read_merged_tiles(requests, debug=debug)
+            raw_tiles = await local_reader.read_merged_tiles(requests, debug=debug)
     else:
-        tiles = await reader.read_merged_tiles(requests, debug=debug)
+        raw_tiles = await reader.read_merged_tiles(requests, debug=debug)
+
+    tiles: dict[tuple[int, int], np.ndarray] = {}
+    for (row, col, _band_index), arr in raw_tiles.items():
+        key = (row, col)
+        if key in tiles:
+            raise RuntimeError(
+                f"Duplicate tile key produced for read_cog merge: {key}. "
+                "Expected one array per tile in single-band read path."
+            )
+        tiles[key] = arr
 
     if not tiles:
         empty = np.array([], dtype=np.dtype(metadata.dtype))

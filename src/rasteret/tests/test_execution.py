@@ -117,6 +117,69 @@ class TestXarrayMerge:
             )
         assert isinstance(merged, xr.Dataset)
 
+    def test_merge_normalizes_y_for_north_up_geotransform(self):
+        # Simulate a post-merge output where y has become ascending despite a
+        # north-up GeoTransform (negative pixel height). The merge wrapper
+        # should restore non-increasing y ordering.
+        da = xr.DataArray(
+            np.array([[1], [2]], dtype=np.uint8),
+            dims=["y", "x"],
+            coords={"y": np.array([0.5, 1.5]), "x": np.array([0.5])},
+            name="B04",
+        )
+        spatial_ref = xr.DataArray(0, attrs={"GeoTransform": "0 1 0 0 0 -1"})
+        ds = da.to_dataset().assign_coords(spatial_ref=spatial_ref)
+
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([ds], [])),
+            ),
+        ):
+            merged = get_collection_xarray(
+                collection=None,  # unused due to patched _load_collection_data
+                geometries=[],
+                bands=["B04"],
+                data_source="sentinel-2-l2a",
+            )
+
+        assert np.all(merged.y.values[:-1] >= merged.y.values[1:])
+        np.testing.assert_array_equal(merged["B04"].values.squeeze(), np.array([2, 1]))
+
+    def test_merge_preserves_y_for_south_up_geotransform(self):
+        da = xr.DataArray(
+            np.array([[1], [2]], dtype=np.uint8),
+            dims=["y", "x"],
+            coords={"y": np.array([0.5, 1.5]), "x": np.array([0.5])},
+            name="B04",
+        )
+        spatial_ref = xr.DataArray(0, attrs={"GeoTransform": "0 1 0 0 0 1"})
+        ds = da.to_dataset().assign_coords(spatial_ref=spatial_ref)
+
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([ds], [])),
+            ),
+        ):
+            merged = get_collection_xarray(
+                collection=None,  # unused due to patched _load_collection_data
+                geometries=[],
+                bands=["B04"],
+                data_source="sentinel-2-l2a",
+            )
+
+        assert np.all(merged.y.values[:-1] <= merged.y.values[1:])
+        np.testing.assert_array_equal(merged["B04"].values.squeeze(), np.array([1, 2]))
+
     def test_no_valid_data_surfaces_first_error(self):
         first = ValueError("Missing band metadata or href for band 'B04' in record 'x'")
         with (
@@ -139,6 +202,94 @@ class TestXarrayMerge:
                     data_source="sentinel-2-l2a",
                 )
         assert excinfo.value.__cause__ is first
+
+    def test_xr_combine_merge_strategy_merges_distinct_variables(self):
+        ds1 = xr.Dataset(
+            {"B04": (("y", "x"), np.array([[1]], dtype=np.uint8))},
+            coords={"y": np.array([0.5]), "x": np.array([0.5])},
+        )
+        ds2 = xr.Dataset(
+            {"B08": (("y", "x"), np.array([[2]], dtype=np.uint8))},
+            coords={"y": np.array([0.5]), "x": np.array([0.5])},
+        )
+
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([ds1, ds2], [])),
+            ),
+        ):
+            merged = get_collection_xarray(
+                collection=None,
+                geometries=[],
+                bands=["B04", "B08"],
+                data_source="sentinel-2-l2a",
+                xr_combine="merge",
+            )
+
+        assert set(merged.data_vars) == {"B04", "B08"}
+        np.testing.assert_array_equal(
+            merged["B04"].values, np.array([[1]], dtype=np.uint8)
+        )
+        np.testing.assert_array_equal(
+            merged["B08"].values, np.array([[2]], dtype=np.uint8)
+        )
+
+    def test_xr_combine_merge_override_prefers_first_dataset_values(self):
+        ds1 = xr.Dataset(
+            {"B04": (("y", "x"), np.array([[1]], dtype=np.uint8))},
+            coords={"y": np.array([0.5]), "x": np.array([0.5])},
+        )
+        ds2 = xr.Dataset(
+            {"B04": (("y", "x"), np.array([[9]], dtype=np.uint8))},
+            coords={"y": np.array([0.5]), "x": np.array([0.5])},
+        )
+
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([ds1, ds2], [])),
+            ),
+        ):
+            merged = get_collection_xarray(
+                collection=None,
+                geometries=[],
+                bands=["B04"],
+                data_source="sentinel-2-l2a",
+                xr_combine="merge_override",
+            )
+
+        np.testing.assert_array_equal(
+            merged["B04"].values, np.array([[1]], dtype=np.uint8)
+        )
+
+    def test_xr_combine_unknown_strategy_raises(self):
+        with (
+            patch(
+                "rasteret.core.execution._ensure_geoarrow",
+                return_value=pa.array([]),
+            ),
+            patch(
+                "rasteret.core.execution._load_collection_data",
+                new=AsyncMock(return_value=([xr.Dataset()], [])),
+            ),
+        ):
+            with pytest.raises(ValueError, match="Unknown xr_combine strategy"):
+                get_collection_xarray(
+                    collection=None,
+                    geometries=[],
+                    bands=["B04"],
+                    data_source="sentinel-2-l2a",
+                    xr_combine="not-a-strategy",
+                )
 
 
 class TestGdfCrs:
@@ -463,10 +614,14 @@ class TestRasterAccessorPointSampling:
             async def __aexit__(self, exc_type, exc, tb):
                 return None
 
-            async def read_merged_tile_samples(self, **kwargs):
-                self.calls.append(kwargs)
-                tile_key = kwargs["tiles"][0]
-                return {tile_key: [np.full((10, 10), 123, dtype=np.uint16)]}
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls.append(requests)
+                return {
+                    (req.row, req.col, req.band_index): np.full(
+                        (10, 10), 123, dtype=np.uint16
+                    )
+                    for req in requests
+                }
 
         info = RasterInfo(
             id="r-point",
@@ -537,11 +692,10 @@ class TestRasterAccessorPointSampling:
             async def __aexit__(self, exc_type, exc, tb):
                 return None
 
-            async def read_merged_tile_samples(self, **kwargs):
+            async def read_merged_tiles(self, requests, debug=False):
                 self.calls += 1
-                tile_key = kwargs["tiles"][0]
                 tile = np.arange(100, dtype=np.uint16).reshape(10, 10)
-                return {tile_key: [tile]}
+                return {(req.row, req.col, req.band_index): tile for req in requests}
 
         info = RasterInfo(
             id="r-batch",
@@ -606,14 +760,13 @@ class TestRasterAccessorPointSampling:
             async def __aexit__(self, exc_type, exc, tb):
                 return None
 
-            async def read_merged_tile_samples(self, **kwargs):
-                self.calls.append(kwargs)
-                tile_key = kwargs["tiles"][0]
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls.append(requests)
                 return {
-                    tile_key: [
-                        np.full((10, 10), 11, dtype=np.uint16),
-                        np.full((10, 10), 22, dtype=np.uint16),
-                    ]
+                    (req.row, req.col, req.band_index): np.full(
+                        (10, 10), 11 if req.band_index == 0 else 22, dtype=np.uint16
+                    )
+                    for req in requests
                 }
 
         info = RasterInfo(
@@ -666,7 +819,7 @@ class TestRasterAccessorPointSampling:
             )
 
         assert len(reader.calls) == 1
-        assert reader.calls[0]["band_indices"] == [0, 1]
+        assert sorted(req.band_index for req in reader.calls[0]) == [0, 1]
         assert rows.column("band").to_pylist() == ["B04", "B08"]
         assert rows.column("value").to_pylist() == [11.0, 22.0]
 
@@ -688,12 +841,16 @@ class TestRasterAccessorPointSampling:
             async def __aexit__(self, exc_type, exc, tb):
                 return None
 
-            async def read_merged_tile_samples(self, **kwargs):
-                self.calls.append(kwargs)
-                tile_key = kwargs["tiles"][0]
-                band_index = kwargs["band_indices"][0]
-                value = 11 if band_index == 0 else 22
-                return {tile_key: [np.full((10, 10), value, dtype=np.uint16)]}
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls.append(requests)
+                return {
+                    (req.row, req.col, req.band_index): np.full(
+                        (10, 10),
+                        11 if req.band_index == 0 else 22,
+                        dtype=np.uint16,
+                    )
+                    for req in requests
+                }
 
         info = RasterInfo(
             id="r-planar",
@@ -758,10 +915,35 @@ class TestRasterAccessorPointSampling:
             )
 
         assert len(reader.calls) == 2
-        assert reader.calls[0]["band_indices"] == [0]
-        assert reader.calls[1]["band_indices"] == [1]
+        assert [req.band_index for req in reader.calls[0]] == [0]
+        assert [req.band_index for req in reader.calls[1]] == [1]
         assert rows.column("band").to_pylist() == ["B04", "B08"]
         assert rows.column("value").to_pylist() == [11.0, 22.0]
+
+    @pytest.mark.asyncio
+    async def test_sample_points_rejects_non_point_geometry(self):
+        from shapely.geometry import box
+
+        from rasteret.core.geometry import UnsupportedGeometryError, coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        info = RasterInfo(
+            id="r-point-nonpoint",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        polygons = coerce_to_geoarrow(box(0.1, 0.1, 0.2, 0.2))
+
+        with pytest.raises(UnsupportedGeometryError, match="Point geometries"):
+            await accessor.sample_points(points=polygons, band_codes=["B04"])
 
 
 class TestNumpyOutput:

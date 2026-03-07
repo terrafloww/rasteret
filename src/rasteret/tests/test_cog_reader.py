@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -184,9 +185,10 @@ def test_cog_reader_reads_local_file_ranges(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_tile_samples_reads_once_for_multiple_band_indices():
+async def test_read_merged_tiles_deduplicates_multi_band_tile_reads():
     reader = COGReader.__new__(COGReader)
     reader.sem = asyncio.Semaphore(1)
+    reader.batch_size = 20
 
     meta = CogMetadata(
         width=4,
@@ -202,36 +204,60 @@ async def test_read_tile_samples_reads_once_for_multiple_band_indices():
     )
 
     read_calls: list[tuple[str, int, int]] = []
+    decompress_calls: list[int] = []
+    materialize_calls: list[int] = []
 
     async def _fake_read_range(url: str, start: int, end: int) -> bytes:
         read_calls.append((url, start, end))
         return b"x" * (end - start)
 
-    def _fake_process(
-        data: bytes,
-        metadata: CogMetadata,
-        band_index: int | None = None,
-    ) -> np.ndarray:
-        # No compression in this fixture: `_decompress_tile_sync` is the identity.
+    def _fake_decompress(data: bytes, metadata: CogMetadata) -> bytes:
         assert data == b"x" * 8
         assert metadata is meta
-        return np.full((4, 4), int(band_index), dtype=np.int16)
+        decompress_calls.append(1)
+        return data
+
+    def _fake_materialize(data: bytes, metadata: CogMetadata) -> np.ndarray:
+        assert data == b"x" * 8
+        assert metadata is meta
+        materialize_calls.append(1)
+        tile = np.zeros((4, 4, 2), dtype=np.int16)
+        tile[:, :, 0] = 10
+        tile[:, :, 1] = 20
+        return tile
 
     reader._read_range = _fake_read_range  # type: ignore[method-assign]
-    reader._process_tile_sync = _fake_process  # type: ignore[method-assign]
+    reader._decompress_tile_sync = _fake_decompress  # type: ignore[method-assign]
+    reader._materialize_tile_sync = _fake_materialize  # type: ignore[method-assign]
 
-    tiles = await reader.read_tile_samples(
-        url="https://example.com/example.tif",
-        metadata=meta,
-        tile_row=0,
-        tile_col=0,
-        band_indices=[0, 1],
-    )
+    requests = [
+        COGTileRequest(
+            url="https://example.com/example.tif",
+            offset=16,
+            size=8,
+            row=0,
+            col=0,
+            metadata=meta,
+            band_index=0,
+        ),
+        COGTileRequest(
+            url="https://example.com/example.tif",
+            offset=16,
+            size=8,
+            row=0,
+            col=0,
+            metadata=meta,
+            band_index=1,
+        ),
+    ]
+
+    tiles = await reader.read_merged_tiles(requests)
 
     assert read_calls == [("https://example.com/example.tif", 16, 24)]
-    assert len(tiles) == 2
-    np.testing.assert_array_equal(tiles[0], np.zeros((4, 4), dtype=np.int16))
-    np.testing.assert_array_equal(tiles[1], np.ones((4, 4), dtype=np.int16))
+    assert len(decompress_calls) == 1
+    assert len(materialize_calls) == 1
+    np.testing.assert_array_equal(tiles[(0, 0, 0)], np.full((4, 4), 10, dtype=np.int16))
+    np.testing.assert_array_equal(tiles[(0, 0, 1)], np.full((4, 4), 20, dtype=np.int16))
 
 
 class TestMergeTiles:
@@ -367,6 +393,48 @@ class TestReadCogTileDataPreflight:
 
         with pytest.raises(ValueError, match="tile offset table is shorter"):
             asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_read_cog_window_mode_partial_overlap_fills_outside_window():
+    meta = CogMetadata(
+        width=4,
+        height=4,
+        tile_width=4,
+        tile_height=4,
+        dtype=np.dtype("uint8"),
+        crs=4326,
+        transform=[1.0, 0.0, -1.0, 4.0],
+        tile_offsets=[0],
+        tile_byte_counts=[16],
+    )
+    tile = np.arange(16, dtype=np.uint8).reshape(4, 4)
+
+    async def _fake_read_merged_tiles(self, requests, debug=False):
+        return {(0, 0, None): tile}
+
+    with patch.object(COGReader, "read_merged_tiles", new=_fake_read_merged_tiles):
+        out = await read_cog(
+            "https://example.com/test.tif",
+            meta,
+            mode="window",
+            bounds=(-1.0, 0.0, 3.0, 4.0),
+            out_shape=(4, 4),
+            fill_value=0,
+        )
+
+    expected = np.array(
+        [[0, 0, 1, 2], [0, 4, 5, 6], [0, 8, 9, 10], [0, 12, 13, 14]],
+        dtype=np.uint8,
+    )
+    expected_mask = np.array(
+        [[False, True, True, True]] * 4,
+        dtype=bool,
+    )
+
+    np.testing.assert_array_equal(out.data, expected)
+    np.testing.assert_array_equal(out.valid_mask, expected_mask)
+    assert out.mode == "window"
 
 
 # ---------------------------------------------------------------------------

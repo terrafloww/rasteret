@@ -603,7 +603,9 @@ def load(path: str | Path, name: str = "") -> "Collection":
     Parameters
     ----------
     path : str or Path
-        Path to the Parquet file or dataset directory.
+        Path to the Parquet file or dataset directory. Supports local/cloud
+        Parquet paths and Hugging Face dataset URIs in the form
+        ``hf://datasets/<org>/<name>[/subpath]``.
     name : str
         Optional name override.
 
@@ -824,6 +826,8 @@ def build_from_table(
     path : str, Path, or pyarrow object
         Path/URI to a Parquet/GeoParquet file or dataset directory, **or**
         an in-memory Arrow object (``pyarrow.Table`` or ``pyarrow.dataset.Dataset``).
+        Hugging Face dataset URIs are supported via
+        ``hf://datasets/<org>/<name>[/subpath]``.
     name : str
         Optional collection name.  When given without *workspace_dir*,
         the collection is cached in the default workspace.

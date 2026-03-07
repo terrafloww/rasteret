@@ -26,6 +26,10 @@ from rasteret.core.execution import (
 )
 from rasteret.core.point_sampling import get_collection_point_samples
 from rasteret.core.raster_accessor import RasterAccessor
+from rasteret.integrations.huggingface import (
+    is_hf_dataset_uri,
+    open_hf_parquet_dataset,
+)
 from rasteret.types import RasterInfo
 
 if TYPE_CHECKING:
@@ -50,6 +54,9 @@ def _open_parquet_dataset(path_str: str, *, try_hive: bool = True) -> ds.Dataset
     (s3://, gs://) when the string is passed directly.  We try Hive-style
     partitioning first, then fall back to plain Parquet.
     """
+    if is_hf_dataset_uri(path_str):
+        return open_hf_parquet_dataset(path_str)
+
     kwargs: dict[str, Any] = {
         "format": "parquet",
         "exclude_invalid_files": True,
@@ -1207,6 +1214,7 @@ class Collection:
         target_crs: int | None = None,
         geometry_crs: int | None = 4326,
         all_touched: bool = False,
+        xr_combine: str = "combine_first",
         **filters: Any,
     ) -> xr.Dataset:
         """Load selected bands into an xarray Dataset.
@@ -1232,6 +1240,13 @@ class Collection:
         all_touched : bool
             Passed through to polygon masking behavior. ``False`` matches
             rasterio default semantics.
+        xr_combine : str
+            Strategy for merging per-record xarray Datasets.
+            ``"combine_first"`` (default) preserves all data and fills
+            NaN gaps from subsequent records. ``"merge"`` uses
+            ``xr.merge(join="outer")`` which raises on value conflicts.
+            ``"merge_override"`` uses ``xr.merge(compat="override")``
+            which silently picks one record's values in overlaps.
         progress : bool, optional
             If ``True``, show progress bars during remote reads. If ``None``,
             uses the global default set by :func:`rasteret.set_options`.
@@ -1264,6 +1279,7 @@ class Collection:
             target_crs=target_crs,
             geometry_crs=geometry_crs,
             all_touched=all_touched,
+            xr_combine=xr_combine,
             **filters,
         )
 

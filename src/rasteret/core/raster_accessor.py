@@ -295,7 +295,7 @@ class RasterAccessor:
 
         import geoarrow.pyarrow as ga
 
-        from rasteret.fetch.cog import COGReader
+        from rasteret.fetch.cog import COGReader, COGTileRequest
 
         transformer = None
         if (
@@ -452,22 +452,68 @@ class RasterAccessor:
                         (point_index, row, col)
                     )
 
-                band_indices = [source["band_index"] for source in source_group]
                 tiles = list(tile_groups.keys())
 
                 tile_batch_size = 128
                 for start in range(0, len(tiles), tile_batch_size):
                     batch = tiles[start : start + tile_batch_size]
-                    tile_arrays_map = await shared_reader.read_merged_tile_samples(
-                        url=url,
-                        metadata=cog_meta,
-                        tiles=batch,
-                        band_indices=band_indices,
+                    sample_requests: list[COGTileRequest] = []
+                    for tile_row, tile_col in batch:
+                        for source in source_group:
+                            source_meta = source["metadata"]
+                            source_band_index = source["band_index"]
+
+                            tiles_x = (
+                                int(source_meta.width) + int(source_meta.tile_width) - 1
+                            ) // int(source_meta.tile_width)
+                            tiles_y = (
+                                int(source_meta.height)
+                                + int(source_meta.tile_height)
+                                - 1
+                            ) // int(source_meta.tile_height)
+                            if (
+                                tile_row < 0
+                                or tile_col < 0
+                                or tile_row >= tiles_y
+                                or tile_col >= tiles_x
+                            ):
+                                continue
+
+                            tile_idx = tile_row * tiles_x + tile_col
+                            if tile_idx >= len(source_meta.tile_offsets):
+                                continue
+
+                            sample_requests.append(
+                                COGTileRequest(
+                                    url=url,
+                                    offset=int(source_meta.tile_offsets[tile_idx]),
+                                    size=int(source_meta.tile_byte_counts[tile_idx]),
+                                    row=tile_row,
+                                    col=tile_col,
+                                    metadata=source_meta,
+                                    band_index=source_band_index,
+                                )
+                            )
+
+                    tile_arrays_map = (
+                        await shared_reader.read_merged_tiles(sample_requests)
+                        if sample_requests
+                        else {}
                     )
 
                     for tile_row, tile_col in batch:
-                        tile_arrays = tile_arrays_map.get((tile_row, tile_col))
-                        if not tile_arrays:
+                        tile_arrays = []
+                        missing_band = False
+                        for source in source_group:
+                            band_index = source["band_index"]
+                            tile_data = tile_arrays_map.get(
+                                (tile_row, tile_col, band_index)
+                            )
+                            if tile_data is None:
+                                missing_band = True
+                                break
+                            tile_arrays.append(tile_data)
+                        if missing_band or not tile_arrays:
                             continue
 
                         samples = tile_groups.get((tile_row, tile_col), [])

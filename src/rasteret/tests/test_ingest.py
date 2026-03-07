@@ -426,6 +426,35 @@ class TestBuildFromTable:
         ids = collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
         assert ids == ["scene-2"]
 
+    def test_build_from_table_hf_uri_uses_hf_reader(self):
+        import rasteret
+
+        table = _minimal_table()
+        filter_expr = ds.field("id") == "scene-1"
+        captured: dict[str, object] = {}
+
+        def _fake_load_hf_table(path: str, *, columns, filter_expr):
+            captured["path"] = path
+            captured["columns"] = columns
+            captured["filter_expr"] = filter_expr
+            return table
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                "rasteret.ingest.parquet_record_table.load_hf_parquet_table",
+                _fake_load_hf_table,
+            )
+            collection = rasteret.build_from_table(
+                "hf://datasets/terrafloww/example/index.parquet",
+                columns=["id", "datetime", "geometry", "assets"],
+                filter_expr=filter_expr,
+            )
+
+        assert isinstance(collection, Collection)
+        assert captured["path"] == "hf://datasets/terrafloww/example/index.parquet"
+        assert captured["columns"] == ["id", "datetime", "geometry", "assets"]
+        assert captured["filter_expr"] is filter_expr
+
 
 # ---------------------------------------------------------------------------
 # COG enrichment helpers

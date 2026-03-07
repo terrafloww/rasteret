@@ -41,6 +41,66 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 
 
+def _normalize_spatial_y_axis_order(merged: Any) -> Any:
+    """Normalize y-axis ordering to match CF GeoTransform semantics.
+
+    Xarray alignment/merge operations can change coordinate ordering when
+    forming unions. For raster-like outputs, downstream consumers often
+    assume that:
+      - north-up rasters (GeoTransform[5] < 0) have decreasing y
+      - south-up rasters (GeoTransform[5] > 0) have increasing y
+
+    When we can infer the expected orientation from ``spatial_ref``'s
+    ``GeoTransform`` attribute, we enforce it via ``sortby("y")``.
+    """
+    if not hasattr(merged, "coords") or "y" not in getattr(merged, "coords", {}):
+        return merged
+
+    spatial_ref = None
+    try:
+        spatial_ref = merged.coords.get("spatial_ref")
+    except Exception:  # pragma: no cover - defensive for non-xarray types
+        spatial_ref = None
+    if spatial_ref is None:
+        return merged
+
+    geotransform = getattr(spatial_ref, "attrs", {}).get("GeoTransform")
+    if not geotransform:
+        return merged
+
+    try:
+        parts = [float(p) for p in str(geotransform).split()]
+    except Exception:
+        return merged
+    if len(parts) != 6:
+        return merged
+    e = float(parts[5])
+    if e == 0.0:
+        return merged
+
+    try:
+        import numpy as np
+
+        y = merged["y"].values
+        if getattr(y, "ndim", 1) != 1 or y.size < 2:
+            return merged
+
+        is_non_decreasing = bool(np.all(y[1:] >= y[:-1]))
+        is_non_increasing = bool(np.all(y[1:] <= y[:-1]))
+    except Exception:
+        return merged
+
+    if e < 0.0:
+        if is_non_increasing:
+            return merged
+        return merged.sortby("y", ascending=False)
+
+    # e > 0.0 (south-up)
+    if is_non_decreasing:
+        return merged
+    return merged.sortby("y", ascending=True)
+
+
 def _ensure_geoarrow(geometries: Any) -> pa.Array:
     """Coerce any geometry input to a GeoArrow native array."""
     from rasteret.core.geometry import coerce_to_geoarrow
@@ -262,6 +322,7 @@ def get_collection_xarray(
     geometry_crs: int | None = 4326,
     all_touched: bool = False,
     progress: bool = False,
+    xr_combine: str = "combine_first",
     **filters: Any,
 ) -> xr.Dataset:
     """Load selected bands as an ``xarray.Dataset``.
@@ -287,6 +348,13 @@ def get_collection_xarray(
     all_touched : bool
         Passed through to polygon masking behavior. ``False`` matches
         rasterio default semantics.
+    xr_combine : str
+        Strategy for merging per-record xarray Datasets.
+        ``"combine_first"`` (default) preserves all data and fills
+        NaN gaps from subsequent records. ``"merge"`` uses
+        ``xr.merge(join="outer")`` which raises on value conflicts.
+        ``"merge_override"`` uses ``xr.merge(compat="override")``
+        which silently picks one record's values in overlaps.
     filters : kwargs
         Additional keyword arguments forwarded to ``Collection.subset()``.
 
@@ -317,10 +385,22 @@ def get_collection_xarray(
 
     def _merge(datasets):
         logger.info("Merging %s datasets", len(datasets))
-        merged = xr.merge(datasets, join="outer", compat="override")
+        if xr_combine == "combine_first":
+            from functools import reduce
+
+            merged = reduce(lambda a, b: a.combine_first(b), datasets)
+        elif xr_combine == "merge_override":
+            merged = xr.merge(datasets, join="outer", compat="override")
+        elif xr_combine == "merge":
+            merged = xr.merge(datasets, join="outer")
+        else:
+            raise ValueError(
+                f"Unknown xr_combine strategy {xr_combine!r}. "
+                "Use 'combine_first', 'merge', or 'merge_override'."
+            )
         if "time" in merged.coords:
-            return merged.sortby("time")
-        return merged
+            merged = merged.sortby("time")
+        return _normalize_spatial_y_axis_order(merged)
 
     return _load_and_merge(
         collection=collection,
