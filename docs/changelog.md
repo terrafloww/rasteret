@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.3.4
+
+### Added
+
+- **HuggingFace integration**: `rasteret.load("hf://datasets/<org>/<repo>")`
+  resolves remote Parquet shards via `huggingface_hub` and loads them as a
+  Collection. No local clone or download step needed.
+- **AEF v1 Annual Rasteret Collection**: prebuilt read-ready collection
+  published on [HuggingFace](https://huggingface.co/datasets/terrafloww/aef-v1-annual-rasteret)
+  and [Source Cooperative](https://source.coop/terrafloww/aef-v1-annual-rasteret).
+  235K tiles, 64-band int8 embeddings, global coverage 2017–2024.
+- **AEF similarity search tutorial** (`notebooks/07_aef_similarity_search`):
+  end-to-end embedding similarity search using `sample_points`, `get_xarray`,
+  `get_gdf`, and TorchGeo `GridGeoSampler`. Demonstrates DuckDB Arrow-native
+  pivot for reference vectors and lonboard GPU-accelerated visualization.
+
+### Changed
+
+- **Unified tile engine**: `RasterAccessor` consolidated into a single
+  `_read_tile()` code path shared by `get_xarray`, `get_numpy`, `get_gdf`,
+  and TorchGeo `__getitem__`. Four divergent tile-read implementations
+  replaced with one.
+- **COGReader simplified**: removed duplicate decode paths, tightened the
+  fetch → decompress → crop pipeline, reduced code surface by ~200 lines.
+- **TorchGeo edge-chip hardening**: empty-read validation returns
+  nodata-filled tensors for chips outside coverage; positive-overlap
+  filtering skips false bbox-only candidates; fallback loop fills chips
+  with nodata when all candidate tiles fail instead of crashing the
+  DataLoader.
+- **Error surfacing**: `get_gdf` and `get_numpy` warn on partial
+  band/geometry/record failures instead of returning silent empty results.
+  Point geometry AOIs raise `UnsupportedGeometryError` pointing to
+  `sample_points()`. Exception chaining (`raise ... from e`) throughout
+  the read pipeline.
+
+### Fixed
+
+- `sample_points` COG read path: tile metadata validation was skipping
+  valid tiles when the source raster had multiple matching records.
+- `xr_combine` parameter now correctly plumbed through `get_xarray()`.
+
+### Tested
+
+- `test_torchgeo_error_propagation`: edge-chip, empty-read, and fallback
+  loop coverage.
+- `test_huggingface`: URI resolution and table loading mocks.
+- `test_public_api_surface`: validates all public imports from `rasteret`.
+- `test_public_network_smoke`: live AEF reads and point sampling parity
+  against `rasterio.sample()`.
+- Extended `test_execution` with `get_gdf` error path coverage.
+
+---
+
 ## v0.3.3
 
 ### Performance
