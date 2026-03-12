@@ -29,9 +29,19 @@ def _write_cached_collection(path: Path) -> None:
                     {"B04": {"href": "https://example.com/s2.tif"}},
                 ]
             ),
-            "scene_bbox": pa.array(
-                [[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
-                type=pa.list_(pa.float64(), 4),
+            "bbox": pa.array(
+                [
+                    {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0},
+                    {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0},
+                ],
+                type=pa.struct(
+                    [
+                        pa.field("xmin", pa.float64()),
+                        pa.field("ymin", pa.float64()),
+                        pa.field("xmax", pa.float64()),
+                        pa.field("ymax", pa.float64()),
+                    ]
+                ),
             ),
             "collection": pa.array(["sentinel-2-l2a", "sentinel-2-l2a"]),
             "year": pa.array([2024, 2024], type=pa.int32()),
@@ -135,8 +145,16 @@ def test_collections_import_materializes_record_table(tmp_path, capsys) -> None:
             "datetime": pa.array([datetime(2024, 1, 10)], type=pa.timestamp("us")),
             "geometry": pa.array([None], type=pa.null()),
             "assets": pa.array([{"B04": {"href": "https://example.com/s1.tif"}}]),
-            "scene_bbox": pa.array(
-                [[0.0, 0.0, 1.0, 1.0]], type=pa.list_(pa.float64(), 4)
+            "bbox": pa.array(
+                [{"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}],
+                type=pa.struct(
+                    [
+                        pa.field("xmin", pa.float64()),
+                        pa.field("ymin", pa.float64()),
+                        pa.field("xmax", pa.float64()),
+                        pa.field("ymax", pa.float64()),
+                    ]
+                ),
             ),
         }
     )
@@ -179,7 +197,7 @@ def test_datasets_register_local_persists_descriptor(tmp_path, capsys) -> None:
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["id"] == "local/demo"
-    assert payload["geoparquet_uri"] == str(cache_dir.resolve())
+    assert payload["collection_uri"] == str(cache_dir.resolve())
     assert registry_path.exists()
 
 

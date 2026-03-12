@@ -30,8 +30,16 @@ def _write_minimal_collection(path: Path) -> None:
             "datetime": pa.array([datetime(2024, 1, 10)], type=pa.timestamp("us")),
             "geometry": pa.array([None], type=pa.null()),
             "assets": pa.array([{"B04": {"href": "https://example.com/s1.tif"}}]),
-            "scene_bbox": pa.array(
-                [[0.0, 0.0, 1.0, 1.0]], type=pa.list_(pa.float64(), 4)
+            "bbox": pa.array(
+                [{"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}],
+                type=pa.struct(
+                    [
+                        pa.field("xmin", pa.float64()),
+                        pa.field("ymin", pa.float64()),
+                        pa.field("xmax", pa.float64()),
+                        pa.field("ymax", pa.float64()),
+                    ]
+                ),
             ),
             "collection": pa.array(["sentinel-2-l2a"]),
             "year": pa.array([2024], type=pa.int32()),
@@ -58,6 +66,48 @@ class TestDatasetDescriptor:
         assert d.license_url == ""
         assert d.commercial_use is True
         assert d.static_catalog is False
+
+    def test_field_roles_infer_compatibility_hints(self):
+        d = DatasetDescriptor(
+            id="test/roles",
+            name="Roles",
+            field_roles={
+                "id": "fid",
+                "geometry": "geom",
+                "datetime": "year",
+                "href": "path",
+            },
+        )
+        assert d.column_map == {"fid": "id", "geom": "geometry", "year": "datetime"}
+        assert d.href_column == "path"
+        assert d.source_field("id") == "fid"
+        assert d.source_field("datetime") == "year"
+        assert d.source_field("href") == "path"
+
+    def test_field_roles_infer_proj_epsg_alias(self):
+        d = DatasetDescriptor(
+            id="test/epsg-role",
+            name="EPSG Role",
+            field_roles={"proj:epsg": "crs"},
+        )
+        assert d.column_map == {"crs": "proj:epsg"}
+        assert d.source_field("proj:epsg") == "crs"
+
+    def test_invalid_surface_fields_raise_clear_error(self):
+        with pytest.raises(ValueError, match="surface_fields contains unsupported"):
+            DatasetDescriptor(
+                id="test/bad-surface",
+                name="Bad Surface",
+                surface_fields={"wide_data": ["id"]},
+            )
+
+    def test_invalid_field_roles_raise_clear_error(self):
+        with pytest.raises(ValueError, match="field_roles must map non-empty"):
+            DatasetDescriptor(
+                id="test/bad-roles",
+                name="Bad Roles",
+                field_roles={"id": ""},
+            )
 
 
 class TestDatasetRegistry:
@@ -197,7 +247,7 @@ class TestBuildAPI:
             registry_path=registry_path,
         )
         assert descriptor.id == "local/shared"
-        assert descriptor.geoparquet_uri == str(collection_path.resolve())
+        assert descriptor.collection_uri == str(collection_path.resolve())
         assert DatasetRegistry.get("local/shared") is not None
 
         payload = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -253,7 +303,7 @@ class TestBuildAPI:
 
         payload = json.loads(export_path.read_text(encoding="utf-8"))
         assert payload["id"] == "local/export-test"
-        assert payload["geoparquet_uri"] == str(collection_path.resolve())
+        assert payload["collection_uri"] == str(collection_path.resolve())
 
 
 class TestPublicAPISurface:

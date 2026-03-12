@@ -84,13 +84,13 @@ class TestBuildCollectionFromTable:
         assert out.column("year").to_pylist() == [2024, 2024]
         assert out.column("month").to_pylist() == [1, 3]
 
-    def test_auto_adds_scene_bbox(self):
+    def test_auto_adds_bbox(self):
         table = _minimal_table()
-        assert "scene_bbox" not in table.schema.names
+        assert "bbox" not in table.schema.names
 
         collection = build_collection_from_table(table)
         out = collection.dataset.to_table()
-        assert "scene_bbox" in out.schema.names
+        assert "bbox" in out.schema.names
 
     def test_preserves_existing_year_month(self):
         table = _minimal_table()

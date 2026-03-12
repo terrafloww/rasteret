@@ -605,8 +605,12 @@ def _handle_datasets_info(args: argparse.Namespace) -> int:
         print(f"  STAC API:     {descriptor.stac_api}")
     if descriptor.stac_collection:
         print(f"  Collection:   {descriptor.stac_collection}")
-    if descriptor.geoparquet_uri:
-        print(f"  GeoParquet:   {descriptor.geoparquet_uri}")
+    if descriptor.record_table_uri:
+        print(f"  Record table: {descriptor.record_table_uri}")
+    if descriptor.index_uri:
+        print(f"  Index:        {descriptor.index_uri}")
+    if descriptor.collection_uri:
+        print(f"  Collection:   {descriptor.collection_uri}")
     if descriptor.spatial_coverage:
         print(f"  Coverage:     {descriptor.spatial_coverage}")
     if descriptor.license:
@@ -720,7 +724,10 @@ def _handle_datasets_register_local(args: argparse.Namespace) -> int:
 
     print(f"Registered local dataset: {descriptor.id}")
     print(f"Name: {descriptor.name}")
-    print(f"GeoParquet: {descriptor.geoparquet_uri}")
+    if descriptor.collection_uri:
+        print(f"Collection: {descriptor.collection_uri}")
+    elif descriptor.record_table_uri:
+        print(f"Record table: {descriptor.record_table_uri}")
     print(f"Persisted: {'no' if args.no_persist else 'yes'}")
     return 0
 

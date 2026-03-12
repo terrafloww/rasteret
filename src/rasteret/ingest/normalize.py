@@ -25,7 +25,14 @@ logger = logging.getLogger(__name__)
 # Columns required by the Collection contract.
 REQUIRED_COLUMNS = frozenset({"id", "datetime", "geometry", "assets"})
 
-_BBOX_SCALAR_COLUMNS = ("bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy")
+_BBOX_STRUCT_TYPE = pa.struct(
+    [
+        pa.field("xmin", pa.float64()),
+        pa.field("ymin", pa.float64()),
+        pa.field("xmax", pa.float64()),
+        pa.field("ymax", pa.float64()),
+    ]
+)
 
 
 def parse_epsg(crs_value: object) -> int | None:
@@ -48,78 +55,28 @@ def parse_epsg(crs_value: object) -> int | None:
     return None
 
 
-def _add_scene_bbox(table: pa.Table) -> pa.Table:
-    """Derive ``scene_bbox`` from the ``geometry`` column.
+def _add_bbox_struct(table: pa.Table) -> pa.Table:
+    """Derive ``bbox`` struct from the ``geometry`` column.
 
     Uses GeoArrow for Arrow-native bbox extraction (no Shapely).
-    Falls back to a null column if parsing fails.
+    Falls back to a null struct column if parsing fails.
     """
     try:
         from rasteret.core.geometry import bbox_array
 
         geom_col = table.column("geometry")
         xmin, ymin, xmax, ymax = bbox_array(geom_col)
-
-        # Build scene_bbox as list<float64>[4] for backwards compatibility
-        n = len(table)
-        bboxes = []
-        for i in range(n):
-            x0, y0, x1, y1 = (
-                xmin[i].as_py(),
-                ymin[i].as_py(),
-                xmax[i].as_py(),
-                ymax[i].as_py(),
-            )
-            if x0 is None:
-                bboxes.append(None)
-            else:
-                bboxes.append([x0, y0, x1, y1])
-
-        return table.append_column(
-            "scene_bbox", pa.array(bboxes, type=pa.list_(pa.float64(), 4))
+        bbox = pa.StructArray.from_arrays(
+            [xmin, ymin, xmax, ymax],
+            fields=_BBOX_STRUCT_TYPE,
         )
+        return table.append_column("bbox", bbox)
     except (KeyError, TypeError, ValueError, pa.ArrowInvalid) as exc:
         logger.warning(
-            "Could not derive scene_bbox from geometry: %s; adding null column", exc
+            "Could not derive bbox from geometry: %s; adding null column", exc
         )
-        nulls = pa.array([None] * len(table), type=pa.list_(pa.float64(), 4))
-        return table.append_column("scene_bbox", nulls)
-
-
-def _add_bbox_scalar_columns(table: pa.Table) -> pa.Table:
-    """Add scalar bbox columns derived from ``scene_bbox``.
-
-    Rasteret keeps ``scene_bbox`` as a 4-element list for portability, but
-    Arrow dataset filtering cannot efficiently filter inside list values.
-    These scalar columns are the supported, pushdown-friendly filtering keys.
-    """
-    if "scene_bbox" not in table.schema.names:
-        return table
-
-    missing = [name for name in _BBOX_SCALAR_COLUMNS if name not in table.schema.names]
-    if not missing:
-        return table
-
-    bbox = table.column("scene_bbox")
-    try:
-        minx = pc.list_element(bbox, 0)
-        miny = pc.list_element(bbox, 1)
-        maxx = pc.list_element(bbox, 2)
-        maxy = pc.list_element(bbox, 3)
-    except (KeyError, TypeError, ValueError, pa.ArrowInvalid) as exc:
-        logger.warning("Could not derive scalar bbox columns from scene_bbox: %s", exc)
-        return table
-
-    mapping: dict[str, pa.Array] = {
-        "bbox_minx": minx,
-        "bbox_miny": miny,
-        "bbox_maxx": maxx,
-        "bbox_maxy": maxy,
-    }
-    for name, values in mapping.items():
-        if name not in table.schema.names:
-            table = table.append_column(name, values)
-    return table
+        nulls = pa.nulls(len(table), type=_BBOX_STRUCT_TYPE)
+        return table.append_column("bbox", nulls)
 
 
 def build_collection_from_table(
@@ -134,7 +91,7 @@ def build_collection_from_table(
 ) -> Any:
     """Normalise an Arrow table into a Collection.
 
-    Validates the Collection contract columns, adds ``scene_bbox``
+    Validates the Collection contract columns, adds ``bbox``
     and partition columns when missing, and optionally materialises
     to Parquet.
 
@@ -165,10 +122,9 @@ def build_collection_from_table(
     if missing:
         raise ValueError(f"Table is missing required columns: {missing}")
 
-    # Add scene_bbox if absent.
-    if "scene_bbox" not in table.schema.names:
-        table = _add_scene_bbox(table)
-    table = _add_bbox_scalar_columns(table)
+    # Add canonical bbox if absent.
+    if "bbox" not in table.schema.names:
+        table = _add_bbox_struct(table)
 
     # Add year/month partition columns if absent.
     datetime_col = table.column("datetime")

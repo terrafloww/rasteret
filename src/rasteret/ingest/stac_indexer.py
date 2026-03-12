@@ -207,7 +207,7 @@ class StacCollectionBuilder(CollectionBuilder):
         Builds the Arrow table directly from STAC item dicts using native
         pyarrow, avoiding the stac-geoparquet ndjson/parquet roundtrip.
 
-        Generic normalisation (year/month/scene_bbox/validation) is
+        Generic normalisation (year/month/bbox/validation) is
         delegated to :func:`build_collection_from_table`.
         """
         from datetime import datetime as dt
@@ -276,20 +276,41 @@ class StacCollectionBuilder(CollectionBuilder):
                 dt_idx, "datetime", pa.array(dt_vals, type=pa.timestamp("us"))
             )
 
-        # Add scene_bbox from original STAC geometries
+        # Add canonical bbox struct from original STAC geometries
         item_bboxes = {}
         for item in stac_items:
             if "bbox" in item and item["bbox"]:
                 b = item["bbox"]
-                item_bboxes[item["id"]] = [b[0], b[1], b[2], b[3]]
+                item_bboxes[item["id"]] = {
+                    "xmin": b[0],
+                    "ymin": b[1],
+                    "xmax": b[2],
+                    "ymax": b[3],
+                }
             else:
                 from rasteret.core.geometry import bbox_from_geojson_coords
 
                 b = bbox_from_geojson_coords(item["geometry"])
-                item_bboxes[item["id"]] = list(b)
+                item_bboxes[item["id"]] = {
+                    "xmin": b[0],
+                    "ymin": b[1],
+                    "xmax": b[2],
+                    "ymax": b[3],
+                }
         bbox_list = [item_bboxes[id_] for id_ in table.column("id").to_pylist()]
         table = table.append_column(
-            "scene_bbox", pa.array(bbox_list, type=pa.list_(pa.float64(), 4))
+            "bbox",
+            pa.array(
+                bbox_list,
+                type=pa.struct(
+                    [
+                        pa.field("xmin", pa.float64()),
+                        pa.field("ymin", pa.float64()),
+                        pa.field("xmax", pa.float64()),
+                        pa.field("ymax", pa.float64()),
+                    ]
+                ),
+            ),
         )
 
         # Add per-band metadata columns from COG header enrichment

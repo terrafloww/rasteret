@@ -36,6 +36,16 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 logger = logging.getLogger(__name__)
+_COLUMN_MAP_COMPATIBLE_FIELDS = {
+    "id",
+    "geometry",
+    "datetime",
+    "bbox",
+    "assets",
+    "proj:epsg",
+    "collection",
+}
+_VALID_SURFACE_NAMES = {"record_table", "index", "collection"}
 
 
 def _local_registry_path(path: str | Path | None = None) -> Path:
@@ -56,12 +66,16 @@ class DatasetDescriptor:
 
         id, name, description             -> dataset identity
         stac_api, stac_collection         -> access (stac_query)
-        geoparquet_uri                    -> access (parquet_record_table)
+        record_table_uri                  -> access (parquet_record_table)
+        index_uri                         -> access (published narrow index)
+        collection_uri                    -> access (published runtime collection)
         band_map                          -> field roles (input bands)
         spatial_coverage, temporal_range  -> coverage metadata
         license, license_url,
         commercial_use                    -> licensing
         static_catalog                    -> static STAC catalog traversal
+        field_roles, surface_fields,
+        filter_capabilities               -> planning/schema hints
         column_map, href_column,
         band_index_map, bbox_columns      -> normalisation hints
 
@@ -80,8 +94,30 @@ class DatasetDescriptor:
     stac_collection : str, optional
         STAC collection identifier.  May be ``None`` for static catalogs
         that should be traversed from the root.
+    record_table_uri : str, optional
+        URI to a record table used by ``build()``.
+    index_uri : str, optional
+        URI to a narrow published index used for index-first runtime planning.
+    collection_uri : str, optional
+        URI to a published, read-ready Rasteret Collection artifact. This is
+        the runtime path used by :func:`rasteret.load` when callers pass the
+        dataset id instead of a filesystem/cloud path.
     geoparquet_uri : str, optional
-        URI to a GeoParquet record table.
+        Deprecated compatibility alias. Use ``record_table_uri`` or ``index_uri``
+        instead.
+    field_roles : dict, optional
+        ``{canonical: source}`` mapping for Rasteret's canonical metadata
+        fields. Use this for execution-facing semantics such as ``id``,
+        ``geometry``, ``bbox``, ``datetime``, and ``href``. Rasteret derives
+        compatibility ``column_map`` / ``href_column`` values from this when
+        possible.
+    surface_fields : dict, optional
+        Optional ``{surface: [canonical_field, ...]}`` hints describing which
+        canonical fields are available on each surface. Valid surface keys are
+        ``record_table``, ``index``, and ``collection``.
+    filter_capabilities : dict, optional
+        Optional ``{surface: [filter_name, ...]}`` hints describing which
+        canonical filters can be pushed to each surface.
     column_map : dict, optional
         ``{source: contract}`` alias map for GeoParquet normalisation.
         Source columns are preserved; contract-name columns are added
@@ -151,7 +187,13 @@ class DatasetDescriptor:
     # --- Access (spec: record_source via parquet_record_table) ---
     stac_api: str | None = None
     stac_collection: str | None = None
+    record_table_uri: str | None = None
+    index_uri: str | None = None
+    collection_uri: str | None = None
     geoparquet_uri: str | None = None
+    field_roles: dict[str, str] | None = None
+    surface_fields: dict[str, list[str]] | None = None
+    filter_capabilities: dict[str, list[str]] | None = None
     column_map: dict[str, str] | None = None
 
     # --- GeoParquet normalisation hints ---
@@ -183,6 +225,143 @@ class DatasetDescriptor:
     # --- Cross-references ---
     torchgeo_class: str | None = None
     torchgeo_verified: bool = False
+
+    def __post_init__(self) -> None:
+        # Compatibility: older descriptors may still provide only geoparquet_uri.
+        if (
+            self.record_table_uri is None
+            and self.index_uri is None
+            and self.geoparquet_uri
+        ):
+            object.__setattr__(self, "record_table_uri", self.geoparquet_uri)
+        if (
+            self.geoparquet_uri is None
+            and self.record_table_uri
+            and self.index_uri is None
+        ):
+            object.__setattr__(self, "geoparquet_uri", self.record_table_uri)
+
+        if self.field_roles is not None:
+            invalid = [
+                (canonical, source)
+                for canonical, source in self.field_roles.items()
+                if not isinstance(canonical, str)
+                or not canonical
+                or not isinstance(source, str)
+                or not source
+            ]
+            if invalid:
+                raise ValueError(
+                    "field_roles must map non-empty canonical field names to "
+                    f"non-empty source column names. Invalid entries: {invalid!r}"
+                )
+        if self.surface_fields is not None:
+            invalid_surfaces = sorted(
+                surface
+                for surface in self.surface_fields
+                if surface not in _VALID_SURFACE_NAMES
+            )
+            if invalid_surfaces:
+                raise ValueError(
+                    "surface_fields contains unsupported surface names: "
+                    f"{invalid_surfaces}. Valid surfaces are: "
+                    f"{sorted(_VALID_SURFACE_NAMES)}"
+                )
+        if self.filter_capabilities is not None:
+            invalid_surfaces = sorted(
+                surface
+                for surface in self.filter_capabilities
+                if surface not in _VALID_SURFACE_NAMES
+            )
+            if invalid_surfaces:
+                raise ValueError(
+                    "filter_capabilities contains unsupported surface names: "
+                    f"{invalid_surfaces}. Valid surfaces are: "
+                    f"{sorted(_VALID_SURFACE_NAMES)}"
+                )
+
+        resolved_field_roles = dict(self.field_roles or {})
+        for source, canonical in (self.column_map or {}).items():
+            resolved_field_roles.setdefault(canonical, source)
+        if self.href_column:
+            resolved_field_roles.setdefault("href", self.href_column)
+        if "bbox" not in resolved_field_roles and self.bbox_columns is None:
+            resolved_field_roles["bbox"] = "bbox"
+        if resolved_field_roles:
+            object.__setattr__(self, "field_roles", resolved_field_roles)
+
+        resolved_column_map = dict(self.column_map or {})
+        for canonical, source in resolved_field_roles.items():
+            if canonical in _COLUMN_MAP_COMPATIBLE_FIELDS and source != canonical:
+                resolved_column_map.setdefault(source, canonical)
+        if resolved_column_map:
+            object.__setattr__(self, "column_map", resolved_column_map)
+
+        if self.href_column is None and resolved_field_roles.get("href"):
+            object.__setattr__(self, "href_column", resolved_field_roles["href"])
+
+        if self.surface_fields is not None:
+            object.__setattr__(
+                self,
+                "surface_fields",
+                {
+                    surface: list(dict.fromkeys(fields))
+                    for surface, fields in self.surface_fields.items()
+                },
+            )
+        if self.filter_capabilities is not None:
+            object.__setattr__(
+                self,
+                "filter_capabilities",
+                {
+                    surface: list(dict.fromkeys(fields))
+                    for surface, fields in self.filter_capabilities.items()
+                },
+            )
+
+    @property
+    def build_source_uri(self) -> str | None:
+        return self.record_table_uri or self.index_uri or self.geoparquet_uri
+
+    @property
+    def runtime_index_uri(self) -> str | None:
+        return self.index_uri or self.geoparquet_uri or self.record_table_uri
+
+    def source_field(self, canonical: str) -> str:
+        """Return the source column backing a canonical Rasteret field."""
+        if self.field_roles and canonical in self.field_roles:
+            return self.field_roles[canonical]
+        return canonical
+
+    def surface_has_field(self, surface: str, canonical: str) -> bool:
+        """Whether a surface is declared to carry a canonical field."""
+        if self.surface_fields and surface in self.surface_fields:
+            return canonical in set(self.surface_fields[surface])
+        if surface == "collection":
+            return canonical in {"id", "geometry", "datetime", "bbox", "assets"}
+        if canonical == "href":
+            return bool(
+                self.href_column or (self.field_roles and "href" in self.field_roles)
+            )
+        if self.field_roles and canonical in self.field_roles:
+            return True
+        if self.column_map:
+            return canonical in set(self.column_map.values())
+        if canonical == "bbox" and self.bbox_columns is None:
+            return True
+        return canonical in {"id", "geometry", "datetime", "bbox", "assets"}
+
+    def surface_supports_filter(self, surface: str, capability: str) -> bool:
+        """Whether a canonical filter capability is declared for a surface."""
+        if self.filter_capabilities and surface in self.filter_capabilities:
+            return capability in set(self.filter_capabilities[surface])
+        if capability == "bbox":
+            return bool(self.bbox_columns) or self.surface_has_field(surface, "bbox")
+        if capability == "datetime":
+            return self.surface_has_field(surface, "datetime")
+        if capability == "id":
+            return self.surface_has_field(surface, "id")
+        return self.surface_has_field(surface, capability)
 
 
 class DatasetRegistry:
@@ -363,7 +542,7 @@ def unregister_local_descriptor(
     removed_in_memory: DatasetDescriptor | None = None
     if (
         in_memory is not None
-        and in_memory.geoparquet_uri
+        and (in_memory.collection_uri or in_memory.build_source_uri)
         and in_memory.spatial_coverage == "local"
     ):
         removed_in_memory = DatasetRegistry.unregister(dataset_id)
@@ -386,7 +565,9 @@ def export_local_descriptor(
         runtime_descriptor = DatasetRegistry.get(dataset_id)
         if (
             runtime_descriptor is not None
-            and runtime_descriptor.geoparquet_uri
+            and (
+                runtime_descriptor.collection_uri or runtime_descriptor.build_source_uri
+            )
             and runtime_descriptor.spatial_coverage == "local"
         ):
             descriptor = runtime_descriptor
@@ -688,19 +869,43 @@ DatasetRegistry.register(
         id="aef/v1-annual",
         name="AlphaEarth Foundation Embeddings (Annual)",
         description="64-band int8 foundation-model embeddings, 10m, global",
-        geoparquet_uri=(
+        record_table_uri=(
             "s3://us-west-2.opendata.source.coop/"
-            "tge-labs/aef/v1/annual/aef_index.parquet"
+            "terrafloww/aef-v1-annual-rasteret/index.parquet"
         ),
-        column_map={"fid": "id", "geom": "geometry", "year": "datetime"},
-        href_column="path",
-        band_index_map={f"A{i:02d}": i for i in range(64)},
-        bbox_columns={
-            "minx": "wgs84_west",
-            "miny": "wgs84_south",
-            "maxx": "wgs84_east",
-            "maxy": "wgs84_north",
+        index_uri=(
+            "s3://us-west-2.opendata.source.coop/"
+            "terrafloww/aef-v1-annual-rasteret/index.parquet"
+        ),
+        collection_uri="s3://us-west-2.opendata.source.coop/terrafloww/aef-v1-annual-rasteret/data",
+        field_roles={
+            "id": "fid",
+            "geometry": "geom",
+            "datetime": "year",
+            "bbox": "bbox",
+            "href": "path",
+            "proj:epsg": "crs",
         },
+        surface_fields={
+            "record_table": ["id", "geometry", "bbox", "datetime", "href"],
+            "index": ["id", "geometry", "bbox", "datetime", "href", "year", "utm_zone"],
+            "collection": [
+                "id",
+                "geometry",
+                "bbox",
+                "datetime",
+                "assets",
+                "year",
+                "utm_zone",
+                "proj:epsg",
+            ],
+        },
+        filter_capabilities={
+            "record_table": ["id", "bbox", "datetime", "year", "utm_zone"],
+            "index": ["id", "bbox", "datetime", "year", "utm_zone"],
+            "collection": ["id", "bbox", "datetime", "year", "utm_zone"],
+        },
+        band_index_map={f"A{i:02d}": i for i in range(64)},
         separate_files=False,
         spatial_coverage="global",
         temporal_range=("2018-01-01", "2023-12-31"),
@@ -711,7 +916,7 @@ DatasetRegistry.register(
             "provider": "aws",
             "region": "us-west-2",
             "url_patterns": {
-                "s3://us-west-2.opendata.source.coop/": ("https://data.source.coop/"),
+                "https://data.source.coop/": ("s3://us-west-2.opendata.source.coop/"),
             },
         },
         example_bbox=(11.3, -0.002, 11.5, 0.001),

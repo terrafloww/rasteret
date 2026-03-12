@@ -253,7 +253,7 @@ def build(
     and routes to :func:`build_from_stac` or :func:`build_from_table`
     based on the descriptor's access fields.
 
-    For descriptors backed only by ``geoparquet_uri`` (for example local
+    For descriptors backed only by ``record_table_uri`` (for example local
     collections registered with :func:`register_local`), ``bbox`` and
     ``date_range`` are optional and ignored.
 
@@ -365,8 +365,8 @@ def build(
 
     # Local descriptors are already-built Collections. Prefer loading them as-is
     # rather than re-running enrichment/build logic.
-    if descriptor.spatial_coverage == "local" and descriptor.geoparquet_uri:
-        local_path = Path(descriptor.geoparquet_uri).expanduser()
+    if descriptor.spatial_coverage == "local" and descriptor.collection_uri:
+        local_path = Path(descriptor.collection_uri).expanduser()
         if local_path.exists():
             return load(local_path, name=name)
 
@@ -377,43 +377,33 @@ def build(
         filesystem for anonymous S3, and passes descriptor normalisation
         fields through.
         """
+        import pandas as pd
+        import pyarrow as pa
         import pyarrow.dataset as pads
 
-        geoparquet_uri = descriptor.geoparquet_uri or ""
+        record_table_uri = descriptor.build_source_uri or ""
 
         # --- Construct filter_expr from bbox_columns + date_range ---
         filter_parts: list[pads.Expression] = []
 
-        if bbox and descriptor.bbox_columns:
-            bc = descriptor.bbox_columns
-            if "minx" in bc and "maxx" in bc and "miny" in bc and "maxy" in bc:
-                filter_parts.append(pads.field(bc["minx"]) <= bbox[2])
-                filter_parts.append(pads.field(bc["maxx"]) >= bbox[0])
-                filter_parts.append(pads.field(bc["miny"]) <= bbox[3])
-                filter_parts.append(pads.field(bc["maxy"]) >= bbox[1])
-
-        # Date range filter: find the source column that maps to "datetime".
-        if date_range and descriptor.column_map:
-            datetime_source = None
-            for src, dst in descriptor.column_map.items():
-                if dst == "datetime":
-                    datetime_source = src
-                    break
-            if datetime_source and datetime_source != "datetime":
-                start_year = int(date_range[0][:4])
-                end_year = int(date_range[1][:4])
-                filter_parts.append(pads.field(datetime_source) >= start_year)
-                filter_parts.append(pads.field(datetime_source) <= end_year)
-
-        filter_expr = None
-        if filter_parts:
-            filter_expr = filter_parts[0]
-            for part in filter_parts[1:]:
-                filter_expr = filter_expr & part
+        if bbox:
+            if descriptor.bbox_columns:
+                bc = descriptor.bbox_columns
+                if "minx" in bc and "maxx" in bc and "miny" in bc and "maxy" in bc:
+                    filter_parts.append(pads.field(bc["minx"]) <= bbox[2])
+                    filter_parts.append(pads.field(bc["maxx"]) >= bbox[0])
+                    filter_parts.append(pads.field(bc["miny"]) <= bbox[3])
+                    filter_parts.append(pads.field(bc["maxy"]) >= bbox[1])
+            else:
+                bbox_source = descriptor.source_field("bbox")
+                filter_parts.append(pads.field(bbox_source, "xmax") >= bbox[0])
+                filter_parts.append(pads.field(bbox_source, "xmin") <= bbox[2])
+                filter_parts.append(pads.field(bbox_source, "ymax") >= bbox[1])
+                filter_parts.append(pads.field(bbox_source, "ymin") <= bbox[3])
 
         # --- Construct filesystem for anonymous S3 URIs ---
         fs = None
-        if geoparquet_uri.startswith("s3://") and not descriptor.requires_auth:
+        if record_table_uri.startswith("s3://") and not descriptor.requires_auth:
             try:
                 import pyarrow.fs as pafs
 
@@ -431,9 +421,61 @@ def build(
         # --- Strip scheme when filesystem is provided ---
         # PyArrow expects bare "bucket/key" paths with an explicit filesystem,
         # not full "s3://bucket/key" URIs.
-        read_path = geoparquet_uri
-        if fs is not None and geoparquet_uri.startswith("s3://"):
-            read_path = geoparquet_uri[len("s3://") :]
+        read_path = record_table_uri
+        if fs is not None and record_table_uri.startswith("s3://"):
+            read_path = record_table_uri[len("s3://") :]
+
+        # Date range filter: inspect the actual source field type so Rasteret
+        # can fail clearly instead of silently assuming integer years.
+        if date_range:
+            datetime_source = descriptor.source_field("datetime")
+            if datetime_source:
+                try:
+                    schema = pads.dataset(
+                        read_path,
+                        format="parquet",
+                        filesystem=fs,
+                    ).schema
+                except Exception as exc:
+                    raise ValueError(
+                        f"Could not inspect build source schema for dataset "
+                        f"'{descriptor.id}' at {record_table_uri!r}: {exc}"
+                    ) from exc
+                if datetime_source not in schema.names:
+                    raise ValueError(
+                        f"Dataset '{descriptor.id}' declares canonical datetime -> "
+                        f"{datetime_source!r}, but that column is missing from the "
+                        f"build source at {record_table_uri!r}."
+                    )
+                dt_type = schema.field(datetime_source).type
+                start = pd.Timestamp(date_range[0])
+                end = pd.Timestamp(date_range[1])
+                if pa.types.is_integer(dt_type):
+                    filter_parts.append(pads.field(datetime_source) >= int(start.year))
+                    filter_parts.append(pads.field(datetime_source) <= int(end.year))
+                elif pa.types.is_timestamp(dt_type):
+                    start_scalar = pa.scalar(start.to_pydatetime(), type=dt_type)
+                    end_scalar = pa.scalar(end.to_pydatetime(), type=dt_type)
+                    filter_parts.append(pads.field(datetime_source) >= start_scalar)
+                    filter_parts.append(pads.field(datetime_source) <= end_scalar)
+                elif pa.types.is_date32(dt_type) or pa.types.is_date64(dt_type):
+                    start_scalar = pa.scalar(start.to_pydatetime().date(), type=dt_type)
+                    end_scalar = pa.scalar(end.to_pydatetime().date(), type=dt_type)
+                    filter_parts.append(pads.field(datetime_source) >= start_scalar)
+                    filter_parts.append(pads.field(datetime_source) <= end_scalar)
+                else:
+                    raise ValueError(
+                        f"Dataset '{descriptor.id}' uses source datetime column "
+                        f"{datetime_source!r} with unsupported type {dt_type}. "
+                        "Rasteret build() currently supports integer year, date32/date64, "
+                        "or timestamp source columns for date_range pushdown."
+                    )
+
+        filter_expr = None
+        if filter_parts:
+            filter_expr = filter_parts[0]
+            for part in filter_parts[1:]:
+                filter_expr = filter_expr & part
 
         # --- URL rewrite patterns from cloud_config ---
         url_rewrite_patterns = None
@@ -446,7 +488,9 @@ def build(
             data_source=descriptor.stac_collection or descriptor.id,
             workspace_dir=resolved_workspace,
             column_map=descriptor.column_map,
-            href_column=descriptor.href_column,
+            href_column=descriptor.source_field("href")
+            if descriptor.source_field("href") != "href"
+            else descriptor.href_column,
             band_index_map=descriptor.band_index_map,
             url_rewrite_patterns=url_rewrite_patterns,
             filesystem=fs,
@@ -461,7 +505,7 @@ def build(
 
     # GeoParquet-first path: descriptors that have no STAC API, or user
     # explicitly prefers GeoParquet.
-    if descriptor.geoparquet_uri and (
+    if descriptor.build_source_uri and (
         prefer_geoparquet or not (descriptor.stac_api and descriptor.stac_collection)
     ):
         return _build_from_geoparquet()
@@ -492,11 +536,11 @@ def build(
         )
 
     # GeoParquet fallback
-    if descriptor.geoparquet_uri:
+    if descriptor.build_source_uri:
         return _build_from_geoparquet()
 
     raise ValueError(
-        f"Dataset '{dataset}' has no STAC API or GeoParquet URI configured."
+        f"Dataset '{dataset}' has no STAC API or record-table URI configured."
     )
 
 
@@ -577,7 +621,7 @@ def register_local(
         id=dataset_id,
         name=name or collection.name or dataset_id,
         description=description or collection.description,
-        geoparquet_uri=str(local_path),
+        collection_uri=str(local_path),
         stac_collection=resolved_source or None,
         band_map=band_map or None,
         separate_files=True,
@@ -613,7 +657,61 @@ def load(path: str | Path, name: str = "") -> "Collection":
     -------
     Collection
     """
+    from rasteret.catalog import DatasetRegistry
     from rasteret.core.collection import Collection
+    from rasteret.integrations.huggingface import is_hf_dataset_uri
+
+    path_str = str(path)
+    descriptor = DatasetRegistry.get(path_str)
+    if descriptor is not None and descriptor.collection_uri:
+        record_index_filesystem = None
+        record_index_url_rewrite_patterns = None
+        runtime_index_uri = descriptor.runtime_index_uri
+        if runtime_index_uri:
+            if descriptor.cloud_config:
+                record_index_url_rewrite_patterns = descriptor.cloud_config.get(
+                    "url_patterns"
+                )
+            if runtime_index_uri.startswith("s3://") and not descriptor.requires_auth:
+                try:
+                    import pyarrow.fs as pafs
+
+                    cloud_region = "us-west-2"
+                    if descriptor.cloud_config:
+                        cloud_region = descriptor.cloud_config.get(
+                            "region", cloud_region
+                        )
+                    record_index_filesystem = pafs.S3FileSystem(
+                        anonymous=True,
+                        region=cloud_region,
+                    )
+                except Exception:
+                    record_index_filesystem = None
+        return Collection.from_parquet(
+            descriptor.collection_uri,
+            name=name or descriptor.name,
+            data_source=descriptor.id,
+            defer_dataset_open=bool(
+                runtime_index_uri
+                and runtime_index_uri != descriptor.collection_uri
+                and not is_hf_dataset_uri(descriptor.collection_uri)
+            ),
+            record_index_path=(
+                runtime_index_uri
+                if runtime_index_uri and runtime_index_uri != descriptor.collection_uri
+                else None
+            ),
+            record_index_field_roles=descriptor.field_roles,
+            record_index_column_map=descriptor.column_map,
+            record_index_href_column=descriptor.source_field("href")
+            if descriptor.source_field("href") != "href"
+            else descriptor.href_column,
+            record_index_band_index_map=descriptor.band_index_map,
+            record_index_url_rewrite_patterns=record_index_url_rewrite_patterns,
+            record_index_filesystem=record_index_filesystem,
+            surface_fields=descriptor.surface_fields,
+            filter_capabilities=descriptor.filter_capabilities,
+        )
 
     return Collection.from_parquet(path, name=name)
 
@@ -631,7 +729,7 @@ def _total_ram_bytes() -> int | None:
 
 
 def as_collection(
-    table: "pa.Table | pads.Dataset",
+    table: Any,
     *,
     name: str = "",
     data_source: str = "",
@@ -654,10 +752,14 @@ def as_collection(
 
     Parameters
     ----------
-    table : pyarrow.Table or pyarrow.dataset.Dataset
-        Arrow object to wrap. ``pyarrow.dataset.Dataset`` is recommended for
-        large collections to keep scans lazy. Despite the parameter name,
-        both table and dataset inputs are first-class.
+    table : Arrow-compatible object
+        Read-ready Arrow object to wrap. Supports
+        ``pyarrow.dataset.Dataset`` (preferred for lazy scans),
+        ``pyarrow.Table``, ``pyarrow.RecordBatch``,
+        ``pyarrow.RecordBatchReader``, and Arrow-compatible Python objects
+        implementing the standard PyCapsule interchange protocol.
+        Only ``pyarrow.dataset.Dataset`` preserves an already-lazy dataset
+        view. Other Arrow-native inputs may be wrapped as in-memory datasets.
     name : str
         Optional collection name.
     data_source : str
@@ -685,14 +787,42 @@ def as_collection(
     from rasteret.core.collection import Collection
     from rasteret.core.utils import infer_data_source_from_dataset
 
-    if not isinstance(table, (pa.Table, pads.Dataset)):
-        raise TypeError(
-            "as_collection() expects a pyarrow.Table or pyarrow.dataset.Dataset."
-        )
+    materialized_table: pa.Table | None = None
+    if isinstance(table, pads.Dataset):
+        dataset = table
+    else:
+        if isinstance(table, pa.Table):
+            materialized_table = table
+            dataset = pads.dataset(materialized_table)
+        elif isinstance(table, pa.RecordBatch):
+            dataset = pads.dataset(table)
+        elif isinstance(table, pa.RecordBatchReader):
+            dataset = pads.dataset(table)
+        else:
+            stream_export = getattr(table, "__arrow_c_stream__", None)
+            if callable(stream_export):
+                try:
+                    dataset = pads.dataset(pa.RecordBatchReader.from_stream(table))
+                except Exception as exc:
+                    raise TypeError(
+                        "as_collection() could not consume the Arrow stream "
+                        "export from the provided object."
+                    ) from exc
+            else:
+                try:
+                    materialized_table = pa.table(table)
+                except Exception as exc:
+                    raise TypeError(
+                        "as_collection() expects a pyarrow.dataset.Dataset, "
+                        "pyarrow.Table, pyarrow.RecordBatch, "
+                        "pyarrow.RecordBatchReader, or an Arrow-compatible object "
+                        "implementing the PyCapsule protocol."
+                    ) from exc
+                dataset = pads.dataset(materialized_table)
 
-    if isinstance(table, pa.Table):
+    if materialized_table is not None:
         global _AS_COLLECTION_MEMORY_WARNING_EMITTED
-        table_bytes = int(getattr(table, "nbytes", 0) or 0)
+        table_bytes = int(getattr(materialized_table, "nbytes", 0) or 0)
         total_ram = _total_ram_bytes()
         warn_large_absolute = table_bytes >= 2 * 1024**3
         warn_large_ratio = (
@@ -717,11 +847,9 @@ def as_collection(
                 stacklevel=2,
             )
             _AS_COLLECTION_MEMORY_WARNING_EMITTED = True
-
-    dataset = pads.dataset(table) if isinstance(table, pa.Table) else table
     schema_names = set(dataset.schema.names)
 
-    required = {"id", "datetime", "geometry", "assets", "scene_bbox"}
+    required = {"id", "datetime", "geometry", "assets", "bbox"}
     missing = required - schema_names
     if missing:
         raise ValueError(

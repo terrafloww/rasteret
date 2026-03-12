@@ -19,6 +19,7 @@ Terminology
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -53,6 +54,7 @@ def prepare_record_table(
     href_column: str | None = None,
     band_index_map: dict[str, int] | None = None,
     url_rewrite_patterns: dict[str, str] | None = None,
+    required_columns: Sequence[str] | None = None,
 ) -> pa.Table:
     """Normalise column types and construct ``assets`` when absent.
 
@@ -69,9 +71,14 @@ def prepare_record_table(
     """
     names = set(table.schema.names)
     rewrites = url_rewrite_patterns or {}
+    required = set(required_columns) if required_columns is not None else None
 
     # --- id: int -> string ---
-    if "id" in names and pa.types.is_integer(table.schema.field("id").type):
+    if (
+        "id" in names
+        and pa.types.is_integer(table.schema.field("id").type)
+        and (required is None or "id" in required)
+    ):
         table = table.set_column(
             table.schema.get_field_index("id"),
             "id",
@@ -79,7 +86,11 @@ def prepare_record_table(
         )
 
     # --- datetime: int year -> timestamp ---
-    if "datetime" in names and pa.types.is_integer(table.schema.field("datetime").type):
+    if (
+        "datetime" in names
+        and pa.types.is_integer(table.schema.field("datetime").type)
+        and (required is None or "datetime" in required)
+    ):
         years = table.column("datetime").to_pylist()
         timestamps = pa.array(
             [datetime(int(y), 1, 1) if y is not None else None for y in years],
@@ -92,7 +103,12 @@ def prepare_record_table(
         )
 
     # --- assets: construct from href_column + band_index_map ---
-    if "assets" not in names and href_column and band_index_map:
+    if (
+        "assets" not in names
+        and href_column
+        and band_index_map
+        and (required is None or "assets" in required)
+    ):
         if href_column not in names:
             raise ValueError(
                 f"href_column '{href_column}' not found in table. "
@@ -114,7 +130,11 @@ def prepare_record_table(
         table = table.append_column("assets", pa.array(assets_list))
 
     # --- proj:epsg: derive from crs column ---
-    if "proj:epsg" not in names and "crs" in names:
+    if (
+        "proj:epsg" not in names
+        and "crs" in names
+        and (required is None or "proj:epsg" in required)
+    ):
         crs_values = table.column("crs").to_pylist()
         epsg_array = pa.array([parse_epsg(v) for v in crs_values], type=pa.int32())
         table = table.append_column("proj:epsg", epsg_array)

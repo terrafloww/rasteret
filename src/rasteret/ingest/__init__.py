@@ -6,7 +6,7 @@
 Each builder knows how to read records from one source type (STAC API,
 Parquet record tables, etc.) and normalise them into an Arrow table that
 satisfies the Collection contract columns
-(``id``, ``datetime``, ``geometry``, ``assets``, ``scene_bbox``,
+(``id``, ``datetime``, ``geometry``, ``assets``, ``bbox``,
 plus optional ``proj:epsg``, ``{band}_metadata``, ``year``, ``month``).
 
 The shared normalisation layer lives in :mod:`rasteret.ingest.normalize`.

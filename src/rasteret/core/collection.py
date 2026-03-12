@@ -8,10 +8,12 @@ import json
 import logging
 import re
 import struct
+import threading
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
+from urllib.parse import urlparse
 
 import pandas as pd
 import pyarrow as pa
@@ -20,15 +22,23 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from rasteret.core.execution import (
+    _derive_query_bbox,
     get_collection_gdf,
     get_collection_numpy,
     get_collection_xarray,
 )
+from rasteret.core.geometry import intersect_bbox
+from rasteret.core.parquet_read_planner import ParquetReadPlanner
 from rasteret.core.point_sampling import get_collection_point_samples
 from rasteret.core.raster_accessor import RasterAccessor
 from rasteret.integrations.huggingface import (
+    HFStreamingSource,
+    head_hf_streaming_source,
     is_hf_dataset_uri,
-    open_hf_parquet_dataset,
+    iter_hf_arrow_tables,
+    load_hf_parquet_table,
+    open_hf_streaming_source,
+    subset_hf_streaming_source,
 )
 from rasteret.types import RasterInfo
 
@@ -40,11 +50,42 @@ if TYPE_CHECKING:
     from rasteret.integrations.torchgeo import RasteretGeoDataset
 
 logger = logging.getLogger(__name__)
+_UNSET_RECORD_INDEX_FILTER = object()
+_PARQUET_DATASET_CACHE: dict[tuple[str, bool], tuple[object, ds.Dataset]] = {}
+_PARQUET_DATASET_CACHE_LOCK = threading.Lock()
 
 
 def _is_cloud_uri(path: str) -> bool:
     """Return True for s3://, gs://, az:// and similar cloud URIs."""
     return "://" in path and not path.startswith("file://")
+
+
+def _local_dataset_fingerprint(path_str: str) -> tuple:
+    """Best-effort local fingerprint for cache invalidation.
+
+    Uses the dataset path plus the standard metadata sidecar when present.
+    This keeps the cache stable across repeated reads while invalidating when a
+    local file/directory is replaced or rewritten.
+    """
+    path = Path(path_str)
+    if path.is_file():
+        stat = path.stat()
+        return ("file", str(path), stat.st_mtime_ns, stat.st_size)
+
+    sidecar = path / "_metadata"
+    if sidecar.is_file():
+        sidecar_stat = sidecar.stat()
+        dir_stat = path.stat()
+        return (
+            "dir+metadata",
+            str(path),
+            dir_stat.st_mtime_ns,
+            sidecar_stat.st_mtime_ns,
+            sidecar_stat.st_size,
+        )
+
+    dir_stat = path.stat()
+    return ("dir", str(path), dir_stat.st_mtime_ns)
 
 
 def _open_parquet_dataset(path_str: str, *, try_hive: bool = True) -> ds.Dataset:
@@ -53,20 +94,63 @@ def _open_parquet_dataset(path_str: str, *, try_hive: bool = True) -> ds.Dataset
     PyArrow's ``ds.dataset()`` handles both local paths and cloud URIs
     (s3://, gs://) when the string is passed directly.  We try Hive-style
     partitioning first, then fall back to plain Parquet.
+
+    For local datasets, a standard Parquet ``_metadata`` sidecar is preferred
+    when present so readers can avoid reopening every file footer. For cloud
+    datasets, Rasteret relies on an in-process dataset cache instead of
+    forcing a potentially large remote ``_metadata`` download.
     """
-    if is_hf_dataset_uri(path_str):
-        return open_hf_parquet_dataset(path_str)
+    cache_key = (path_str, try_hive)
+    fingerprint: object
+    if _is_cloud_uri(path_str):
+        fingerprint = ("cloud", path_str)
+    else:
+        fingerprint = _local_dataset_fingerprint(path_str)
+
+    with _PARQUET_DATASET_CACHE_LOCK:
+        cached = _PARQUET_DATASET_CACHE.get(cache_key)
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
 
     kwargs: dict[str, Any] = {
         "format": "parquet",
         "exclude_invalid_files": True,
     }
+    metadata_path: str | None = None
+    if not _is_cloud_uri(path_str):
+        try:
+            candidate = Path(path_str) / "_metadata"
+            if candidate.is_file():
+                metadata_path = str(candidate)
+        except Exception:
+            metadata_path = None
+
+    dataset: ds.Dataset
+    if metadata_path is not None:
+        try:
+            dataset = ds.parquet_dataset(
+                metadata_path,
+                partitioning="hive" if try_hive else None,
+                partition_base_dir=path_str if try_hive else None,
+            )
+            with _PARQUET_DATASET_CACHE_LOCK:
+                _PARQUET_DATASET_CACHE[cache_key] = (fingerprint, dataset)
+            return dataset
+        except (pa.ArrowInvalid, FileNotFoundError, OSError):
+            pass
+
     if try_hive:
         try:
-            return ds.dataset(path_str, partitioning="hive", **kwargs)
+            dataset = ds.dataset(path_str, partitioning="hive", **kwargs)
+            with _PARQUET_DATASET_CACHE_LOCK:
+                _PARQUET_DATASET_CACHE[cache_key] = (fingerprint, dataset)
+            return dataset
         except pa.ArrowInvalid:
             pass
-    return ds.dataset(path_str, **kwargs)
+    dataset = ds.dataset(path_str, **kwargs)
+    with _PARQUET_DATASET_CACHE_LOCK:
+        _PARQUET_DATASET_CACHE[cache_key] = (fingerprint, dataset)
+    return dataset
 
 
 def _stem_from_path(path_str: str) -> str:
@@ -76,6 +160,13 @@ def _stem_from_path(path_str: str) -> str:
     parsed = urlparse(path_str)
     tail = parsed.path.rstrip("/") if parsed.scheme else path_str.rstrip("/")
     return Path(tail).stem if tail else ""
+
+
+def _filesystem_source_path(path_str: str) -> str:
+    parsed = urlparse(path_str)
+    if not parsed.scheme:
+        return path_str
+    return f"{parsed.netloc}{parsed.path}"
 
 
 # WKB geometry type id -> GeoParquet type name (OGC Simple Features).
@@ -113,14 +204,53 @@ def _bbox_overlap_expr(
     miny: float,
     maxx: float,
     maxy: float,
+    *,
+    field_name: str = "bbox",
 ) -> ds.Expression:
     """Arrow expression testing whether a record's bbox overlaps the given bounds."""
     return (
-        (ds.field("bbox_maxx") >= minx)
-        & (ds.field("bbox_minx") <= maxx)
-        & (ds.field("bbox_maxy") >= miny)
-        & (ds.field("bbox_miny") <= maxy)
+        (ds.field(field_name, "xmax") >= minx)
+        & (ds.field(field_name, "xmin") <= maxx)
+        & (ds.field(field_name, "ymax") >= miny)
+        & (ds.field(field_name, "ymin") <= maxy)
     )
+
+
+def _bbox_struct_field(schema: pa.Schema, field_name: str = "bbox") -> pa.Field | None:
+    if field_name not in schema.names:
+        return None
+    field = schema.field(field_name)
+    if not pa.types.is_struct(field.type):
+        return None
+    child_names = {child.name for child in field.type}
+    required = {"xmin", "ymin", "xmax", "ymax"}
+    if not required.issubset(child_names):
+        return None
+    return field
+
+
+def _bbox_value_to_list(value: Any) -> list[float] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        xmin = value.get("xmin")
+        ymin = value.get("ymin")
+        xmax = value.get("xmax")
+        ymax = value.get("ymax")
+        if None in (xmin, ymin, xmax, ymax):
+            return None
+        return [float(xmin), float(ymin), float(xmax), float(ymax)]
+    if isinstance(value, (list, tuple)) and len(value) == 4:
+        return [float(v) for v in value]
+    return None
+
+
+def _and_filters(
+    current: ds.Expression | None, new: ds.Expression | None
+) -> ds.Expression | None:
+    if new is None:
+        return current
+    return new if current is None else current & new
 
 
 class Collection:
@@ -146,6 +276,19 @@ class Collection:
     def __init__(
         self,
         dataset: ds.Dataset | None = None,
+        hf_streaming: HFStreamingSource | None = None,
+        collection_path: str | None = None,
+        record_index_path: str | None = None,
+        record_index_field_roles: dict[str, str] | None = None,
+        record_index_column_map: dict[str, str] | None = None,
+        record_index_href_column: str | None = None,
+        record_index_band_index_map: dict[str, int] | None = None,
+        record_index_url_rewrite_patterns: dict[str, str] | None = None,
+        record_index_filesystem: Any | None = None,
+        surface_fields: dict[str, list[str]] | None = None,
+        filter_capabilities: dict[str, list[str]] | None = None,
+        record_index_filter_expr: ds.Expression | None = None,
+        wide_filter_expr: ds.Expression | None = None,
         name: str = "",
         description: str = "",
         data_source: str = "",
@@ -157,7 +300,10 @@ class Collection:
         Parameters
         ----------
         dataset : pyarrow.dataset.Dataset, optional
-            Backing Arrow dataset. ``None`` creates an empty collection.
+            Backing Arrow dataset. ``None`` creates an empty or non-Dataset-backed
+            collection.
+        hf_streaming : HFStreamingSource, optional
+            Hugging Face streaming-backed metadata source.
         name : str
             Human-readable collection name.
         description : str
@@ -170,24 +316,455 @@ class Collection:
             Collection temporal end.
         """
         self.dataset = dataset
+        self._hf_streaming = hf_streaming
         self.name = name
         self.description = description
         self.data_source = data_source
         self.start_date = start_date
         self.end_date = end_date
+        self._planner = ParquetReadPlanner(
+            collection_path=collection_path,
+            record_index_path=record_index_path,
+            record_index_field_roles=record_index_field_roles or {},
+            record_index_column_map=record_index_column_map or {},
+            record_index_href_column=record_index_href_column,
+            record_index_band_index_map=record_index_band_index_map,
+            record_index_url_rewrite_patterns=record_index_url_rewrite_patterns or {},
+            record_index_filesystem=record_index_filesystem,
+            surface_fields=(
+                {
+                    surface: tuple(fields)
+                    for surface, fields in (surface_fields or {}).items()
+                }
+                or None
+            ),
+            filter_capabilities=(
+                {
+                    surface: tuple(fields)
+                    for surface, fields in (filter_capabilities or {}).items()
+                }
+                or None
+            ),
+            record_index_filter_expr=record_index_filter_expr,
+            wide_filter_expr=wide_filter_expr,
+        )
+        self._record_index_dataset: ds.Dataset | None = None
+        if self.dataset is not None and self._hf_streaming is not None:
+            raise ValueError(
+                "Collection cannot use both Dataset and HF streaming backends"
+            )
         if self.dataset is not None:
             self._validate_parquet_dataset()
 
-    def _view(self, dataset: ds.Dataset) -> Collection:
+    def _view(
+        self,
+        dataset: ds.Dataset | None = None,
+        *,
+        hf_streaming: HFStreamingSource | None = None,
+        collection_path: str | None | object = None,
+        record_index_filter_expr: ds.Expression | None | object = None,
+        wide_filter_expr: ds.Expression | None | object = None,
+        drop_record_index: bool = False,
+    ) -> Collection:
         """Return a new Collection view preserving this Collection's metadata."""
+        resolved_collection_path = self._collection_path
+        if collection_path is not None:
+            resolved_collection_path = (
+                None
+                if collection_path is _UNSET_RECORD_INDEX_FILTER
+                else collection_path
+            )
+        resolved_record_index_filter = self._record_index_filter_expr
+        resolved_wide_filter = self._wide_filter_expr
+        if record_index_filter_expr is not None:
+            resolved_record_index_filter = (
+                None
+                if record_index_filter_expr is _UNSET_RECORD_INDEX_FILTER
+                else record_index_filter_expr
+            )
+        if wide_filter_expr is not None:
+            resolved_wide_filter = (
+                None
+                if wide_filter_expr is _UNSET_RECORD_INDEX_FILTER
+                else wide_filter_expr
+            )
         return Collection(
             dataset=dataset,
+            hf_streaming=hf_streaming,
+            collection_path=None if drop_record_index else resolved_collection_path,
+            record_index_path=None if drop_record_index else self._record_index_path,
+            record_index_field_roles=(
+                None if drop_record_index else self._record_index_field_roles
+            ),
+            record_index_column_map=(
+                None if drop_record_index else self._record_index_column_map
+            ),
+            record_index_href_column=(
+                None if drop_record_index else self._record_index_href_column
+            ),
+            record_index_band_index_map=(
+                None if drop_record_index else self._record_index_band_index_map
+            ),
+            record_index_url_rewrite_patterns=(
+                None if drop_record_index else self._record_index_url_rewrite_patterns
+            ),
+            record_index_filesystem=(
+                None if drop_record_index else self._record_index_filesystem
+            ),
+            surface_fields=None if drop_record_index else self._surface_fields,
+            filter_capabilities=(
+                None if drop_record_index else self._filter_capabilities
+            ),
+            record_index_filter_expr=(
+                None if drop_record_index else resolved_record_index_filter
+            ),
+            wide_filter_expr=None if drop_record_index else resolved_wide_filter,
             name=self.name,
             description=self.description,
             data_source=self.data_source,
             start_date=self.start_date,
             end_date=self.end_date,
         )
+
+    def _has_record_index(self) -> bool:
+        return bool(self._record_index_path)
+
+    @property
+    def _collection_path(self) -> str | None:
+        return self._planner.collection_path
+
+    @property
+    def _record_index_path(self) -> str | None:
+        return self._planner.record_index_path
+
+    @property
+    def _record_index_column_map(self) -> dict[str, str]:
+        return self._planner.record_index_column_map or {}
+
+    @property
+    def _record_index_field_roles(self) -> dict[str, str]:
+        return self._planner.record_index_field_roles or {}
+
+    @property
+    def _record_index_href_column(self) -> str | None:
+        return self._planner.record_index_href_column
+
+    @property
+    def _record_index_band_index_map(self) -> dict[str, int] | None:
+        return self._planner.record_index_band_index_map
+
+    @property
+    def _record_index_url_rewrite_patterns(self) -> dict[str, str]:
+        return self._planner.record_index_url_rewrite_patterns or {}
+
+    @property
+    def _record_index_filesystem(self) -> Any | None:
+        return self._planner.record_index_filesystem
+
+    @property
+    def _record_index_filter_expr(self) -> ds.Expression | None:
+        return self._planner.record_index_filter_expr
+
+    @property
+    def _wide_filter_expr(self) -> ds.Expression | None:
+        return self._planner.wide_filter_expr
+
+    @property
+    def _surface_fields(self) -> dict[str, list[str]]:
+        if not self._planner.surface_fields:
+            return {}
+        return {
+            surface: list(fields)
+            for surface, fields in self._planner.surface_fields.items()
+        }
+
+    @property
+    def _filter_capabilities(self) -> dict[str, list[str]]:
+        if not self._planner.filter_capabilities:
+            return {}
+        return {
+            surface: list(fields)
+            for surface, fields in self._planner.filter_capabilities.items()
+        }
+
+    def _record_index_inverse_map(self) -> dict[str, str]:
+        return {dst: src for src, dst in self._record_index_column_map.items()}
+
+    def _record_index_source_column(self, name: str) -> str:
+        source = self._planner.source_field(name)
+        if source != name:
+            return source
+        return self._record_index_inverse_map().get(name, name)
+
+    def _surface_has_field(
+        self,
+        surface: str,
+        canonical: str,
+        schema: pa.Schema | None = None,
+    ) -> bool:
+        if surface == "index":
+            source_name = self._record_index_source_column(canonical)
+            if schema is not None and source_name in schema.names:
+                return True
+        elif surface == "collection":
+            if schema is not None and canonical in schema.names:
+                return True
+        return self._planner.surface_has_field(surface, canonical)
+
+    def _surface_supports_filter(
+        self,
+        surface: str,
+        capability: str,
+        schema: pa.Schema | None = None,
+    ) -> bool:
+        if self._planner.filter_capabilities and surface in self._filter_capabilities:
+            return self._planner.surface_supports_filter(surface, capability)
+        if capability == "bbox":
+            field_name = (
+                self._record_index_source_column("bbox")
+                if surface == "index"
+                else "bbox"
+            )
+            if (
+                schema is not None
+                and _bbox_struct_field(schema, field_name) is not None
+            ):
+                return True
+            return self._planner.surface_supports_filter(surface, capability)
+        return self._surface_has_field(surface, capability, schema=schema)
+
+    def _open_record_index_dataset(self) -> ds.Dataset:
+        if not self._record_index_path:
+            raise ValueError("Collection has no record index")
+        if is_hf_dataset_uri(self._record_index_path):
+            raise ValueError("HF record indexes use table reads, not datasets")
+        if self._record_index_dataset is None:
+            source = self._record_index_path
+            if self._record_index_filesystem is not None:
+                source = _filesystem_source_path(source)
+            self._record_index_dataset = ds.dataset(
+                source,
+                format="parquet",
+                filesystem=self._record_index_filesystem,
+            )
+        return self._record_index_dataset
+
+    def _record_index_supports_expr(self, expr: ds.Expression) -> bool:
+        if not self._record_index_path:
+            return False
+        try:
+            dataset = self._open_record_index_dataset()
+            columns = [dataset.schema.names[0]] if dataset.schema.names else None
+            dataset.scanner(columns=columns, filter=expr)
+            return True
+        except Exception:
+            return False
+
+    def _dataset_supports_expr(
+        self, dataset: ds.Dataset | None, expr: ds.Expression
+    ) -> bool:
+        if dataset is None:
+            return False
+        try:
+            columns = [dataset.schema.names[0]] if dataset.schema.names else None
+            dataset.scanner(columns=columns, filter=expr)
+            return True
+        except Exception:
+            return False
+
+    def _data_dataset(self) -> ds.Dataset | None:
+        if self.dataset is not None:
+            return self.dataset
+        if self._collection_path is None:
+            return None
+        self.dataset = _open_parquet_dataset(self._collection_path)
+        return self.dataset
+
+    def _record_index_required_raw_columns(
+        self, columns: list[str] | None = None
+    ) -> list[str] | None:
+        if not self._record_index_path:
+            return columns
+        if columns is None:
+            return None
+
+        raw_columns: set[str] = set()
+        for column in columns:
+            if column == "assets":
+                if self._record_index_href_column:
+                    raw_columns.add(self._record_index_href_column)
+                elif "assets" in self._open_record_index_dataset().schema.names:
+                    raw_columns.add("assets")
+                continue
+            if column == "proj:epsg":
+                raw_columns.add(self._record_index_source_column("proj:epsg"))
+                continue
+            raw_columns.add(self._record_index_source_column(column))
+        return sorted(raw_columns)
+
+    def _read_raw_record_index_table(
+        self,
+        raw_columns: list[str] | None = None,
+        *,
+        limit: int | None = None,
+    ) -> pa.Table:
+        if not self._record_index_path:
+            raise ValueError("Collection has no record index")
+        if is_hf_dataset_uri(self._record_index_path):
+            return load_hf_parquet_table(
+                self._record_index_path,
+                columns=raw_columns,
+                filter_expr=self._record_index_filter_expr,
+            )
+        dataset = self._open_record_index_dataset()
+        if limit is not None:
+            return dataset.head(
+                limit,
+                columns=raw_columns,
+                filter=self._record_index_filter_expr,
+            )
+        return dataset.to_table(
+            columns=raw_columns,
+            filter=self._record_index_filter_expr,
+        )
+
+    def _read_record_index_table(
+        self,
+        columns: list[str] | None = None,
+        *,
+        limit: int | None = None,
+    ) -> pa.Table:
+        if not self._record_index_path:
+            raise ValueError("Collection has no record index")
+        raw_columns = self._record_index_required_raw_columns(columns)
+        return self._read_raw_record_index_table(raw_columns, limit=limit)
+
+    def _prepare_record_index_table(
+        self,
+        columns: list[str] | None = None,
+        *,
+        table: pa.Table | None = None,
+        limit: int | None = None,
+    ) -> pa.Table:
+        from rasteret.ingest.parquet_record_table import (
+            _apply_column_map_aliases,
+            prepare_record_table,
+        )
+
+        table = table or self._read_record_index_table(columns=columns, limit=limit)
+        table = _apply_column_map_aliases(table, self._record_index_column_map)
+        table = prepare_record_table(
+            table,
+            href_column=self._record_index_href_column,
+            band_index_map=self._record_index_band_index_map,
+            url_rewrite_patterns=self._record_index_url_rewrite_patterns,
+            required_columns=columns,
+        )
+        if columns is not None:
+            keep = [column for column in columns if column in table.column_names]
+            table = table.select(keep)
+        return table
+
+    def _materialize_record_index_collection(
+        self, columns: list[str] | None = None
+    ) -> Collection:
+        if not self._record_index_path:
+            raise ValueError("Collection has no record index")
+        from rasteret.ingest.normalize import build_collection_from_table
+
+        table = self._prepare_record_index_table(columns=columns)
+        return build_collection_from_table(
+            table,
+            name=self.name,
+            description=self.description,
+            data_source=self.data_source,
+        )
+
+    def _filtered_data_dataset(self) -> ds.Dataset | None:
+        dataset = self._data_dataset()
+        if dataset is None:
+            return None
+        if not self._has_record_index():
+            if self._wide_filter_expr is not None:
+                return dataset.filter(self._wide_filter_expr)
+            return dataset
+        if self._record_index_filter_expr is None:
+            return (
+                dataset.filter(self._wide_filter_expr)
+                if self._wide_filter_expr is not None
+                else dataset
+            )
+
+        raw_columns = [self._record_index_source_column("id")]
+        index_dataset = self._open_record_index_dataset()
+        if "source_part" in index_dataset.schema.names:
+            raw_columns.append("source_part")
+        raw_index = self._read_raw_record_index_table(raw_columns)
+        if raw_index.num_rows == 0:
+            return dataset.filter(ds.field("id").isin(pa.array([], type=pa.string())))
+
+        prepared = self._prepare_record_index_table(columns=["id"], table=raw_index)
+        ids = prepared.column("id").combine_chunks()
+        if len(ids) == 0:
+            return dataset.filter(ds.field("id").isin(pa.array([], type=pa.string())))
+
+        filtered_dataset = dataset
+        if "source_part" in raw_index.column_names:
+            requested_parts = {
+                value
+                for value in raw_index.column("source_part").to_pylist()
+                if isinstance(value, str) and value
+            }
+            if requested_parts:
+                fragment_paths = [
+                    fragment.path
+                    for fragment in dataset.get_fragments()
+                    if any(
+                        fragment.path == part or fragment.path.endswith("/" + part)
+                        for part in requested_parts
+                    )
+                ]
+                if fragment_paths:
+                    filtered_dataset = ds.dataset(fragment_paths, format="parquet")
+        final_filter = ds.field("id").isin(ids)
+        if (
+            self._wide_filter_expr is None
+            and self._record_index_filter_expr is not None
+            and self._dataset_supports_expr(
+                filtered_dataset, self._record_index_filter_expr
+            )
+        ):
+            final_filter = _and_filters(final_filter, self._record_index_filter_expr)
+        final_filter = _and_filters(final_filter, self._wide_filter_expr)
+        return filtered_dataset.filter(final_filter)
+
+    @property
+    def _schema(self) -> pa.Schema | None:
+        dataset = self._data_dataset()
+        if dataset is not None:
+            return dataset.schema
+        if self._hf_streaming is not None:
+            return self._hf_streaming.schema
+        return None
+
+    def _iter_record_batches(
+        self,
+        *,
+        columns: list[str],
+        batch_size: int = 1024,
+    ):
+        dataset = self._data_dataset()
+        if dataset is not None:
+            scanner = dataset.scanner(columns=columns, batch_size=batch_size)
+            yield from scanner.to_batches()
+            return
+        if self._hf_streaming is not None:
+            for table in iter_hf_arrow_tables(
+                self._hf_streaming,
+                columns=columns,
+                batch_size=batch_size,
+            ):
+                yield from table.to_batches()
 
     @staticmethod
     def _metadata_from_schema(dataset: ds.Dataset) -> dict[str, str]:
@@ -248,7 +825,23 @@ class Collection:
         )
 
     @classmethod
-    def from_parquet(cls, path: str | Path, name: str = "") -> Collection:
+    def from_parquet(
+        cls,
+        path: str | Path,
+        name: str = "",
+        *,
+        data_source: str = "",
+        defer_dataset_open: bool = False,
+        record_index_path: str | None = None,
+        record_index_field_roles: dict[str, str] | None = None,
+        record_index_column_map: dict[str, str] | None = None,
+        record_index_href_column: str | None = None,
+        record_index_band_index_map: dict[str, int] | None = None,
+        record_index_url_rewrite_patterns: dict[str, str] | None = None,
+        record_index_filesystem: Any | None = None,
+        surface_fields: dict[str, list[str]] | None = None,
+        filter_capabilities: dict[str, list[str]] | None = None,
+    ) -> Collection:
         """Load a Collection from any Parquet file or directory.
 
         Accepts local paths **and** cloud URIs (``s3://``, ``gs://``).
@@ -263,22 +856,54 @@ class Collection:
             if not p.exists():
                 raise FileNotFoundError(f"Parquet not found at {path_str}")
 
-        try:
-            dataset = _open_parquet_dataset(path_str)
-        except FileNotFoundError:
-            raise
-        except Exception as exc:
-            raise FileNotFoundError(f"Cannot open Parquet at {path_str}") from exc
+        if is_hf_dataset_uri(path_str):
+            try:
+                hf_streaming = open_hf_streaming_source(path_str)
+            except Exception as exc:
+                raise FileNotFoundError(f"Cannot open Parquet at {path_str}") from exc
 
-        required = {"id", "datetime", "geometry", "assets", "scene_bbox"}
-        missing = required - set(dataset.schema.names)
-        if missing:
-            raise ValueError(
-                f"Parquet is missing required columns: {missing}. "
-                "See the Schema Contract page in docs for the expected schema."
+            required = {"id", "datetime", "geometry", "assets"}
+            missing = required - set(hf_streaming.schema.names)
+            if missing or _bbox_struct_field(hf_streaming.schema) is None:
+                raise ValueError(
+                    f"Parquet is missing required columns: {missing or {'bbox'}}. "
+                    "See the Schema Contract page in docs for the expected schema."
+                )
+
+            return cls(
+                hf_streaming=hf_streaming,
+                name=name or _stem_from_path(path_str),
+                data_source=data_source,
+                record_index_path=record_index_path,
+                record_index_field_roles=record_index_field_roles,
+                record_index_column_map=record_index_column_map,
+                record_index_href_column=record_index_href_column,
+                record_index_band_index_map=record_index_band_index_map,
+                record_index_url_rewrite_patterns=record_index_url_rewrite_patterns,
+                record_index_filesystem=record_index_filesystem,
+                surface_fields=surface_fields,
+                filter_capabilities=filter_capabilities,
             )
 
-        meta = cls._metadata_from_schema(dataset)
+        dataset = None
+        meta: dict[str, str] = {}
+        if not defer_dataset_open:
+            try:
+                dataset = _open_parquet_dataset(path_str)
+            except FileNotFoundError:
+                raise
+            except Exception as exc:
+                raise FileNotFoundError(f"Cannot open Parquet at {path_str}") from exc
+
+            required = {"id", "datetime", "geometry", "assets"}
+            missing = required - set(dataset.schema.names)
+            if missing or _bbox_struct_field(dataset.schema) is None:
+                raise ValueError(
+                    f"Parquet is missing required columns: {missing or {'bbox'}}. "
+                    "See the Schema Contract page in docs for the expected schema."
+                )
+
+            meta = cls._metadata_from_schema(dataset)
         resolved_name = name or meta.get("name") or _stem_from_path(path_str)
 
         start_date = None
@@ -291,8 +916,18 @@ class Collection:
 
         return cls(
             dataset=dataset,
+            collection_path=path_str if defer_dataset_open else None,
+            record_index_path=record_index_path,
+            record_index_field_roles=record_index_field_roles,
+            record_index_column_map=record_index_column_map,
+            record_index_href_column=record_index_href_column,
+            record_index_band_index_map=record_index_band_index_map,
+            record_index_url_rewrite_patterns=record_index_url_rewrite_patterns,
+            record_index_filesystem=record_index_filesystem,
+            surface_fields=surface_fields,
+            filter_capabilities=filter_capabilities,
             name=resolved_name,
-            data_source=meta.get("data_source", ""),
+            data_source=data_source or meta.get("data_source", ""),
             description=meta.get("description", ""),
             start_date=start_date,
             end_date=end_date,
@@ -335,6 +970,244 @@ class Collection:
         Collection
             A new Collection with the filtered dataset view.
         """
+        if self._hf_streaming is not None:
+            if all(
+                value is None
+                for value in (
+                    cloud_cover_lt,
+                    date_range,
+                    bbox,
+                    geometries,
+                    split,
+                )
+            ):
+                raise ValueError("No filters provided")
+            return self._view(
+                hf_streaming=subset_hf_streaming_source(
+                    self._hf_streaming,
+                    cloud_cover_lt=cloud_cover_lt,
+                    date_range=date_range,
+                    bbox=bbox,
+                    geometries=geometries,
+                    split=split,
+                    split_column=split_column,
+                )
+            )
+
+        if self._has_record_index():
+            filter_expr = self._record_index_filter_expr
+            wide_filter_expr = self._wide_filter_expr
+            index_dataset = self._open_record_index_dataset()
+            wide_dataset = self.dataset
+            index_schema = index_dataset.schema
+            wide_schema = wide_dataset.schema if wide_dataset is not None else None
+
+            if all(
+                value is None
+                for value in (
+                    cloud_cover_lt,
+                    date_range,
+                    bbox,
+                    geometries,
+                    split,
+                )
+            ):
+                raise ValueError("No filters provided")
+
+            if cloud_cover_lt is not None:
+                if not self._surface_supports_filter(
+                    "index",
+                    "eo:cloud_cover",
+                    schema=index_schema,
+                ):
+                    filtered_dataset = self._filtered_data_dataset()
+                    return self._view(
+                        filtered_dataset.filter(
+                            ds.field("eo:cloud_cover") < float(cloud_cover_lt)
+                        )
+                        if filtered_dataset is not None
+                        else None,
+                        record_index_filter_expr=_UNSET_RECORD_INDEX_FILTER,
+                        wide_filter_expr=_UNSET_RECORD_INDEX_FILTER,
+                        drop_record_index=True,
+                    )
+                if not isinstance(cloud_cover_lt, (int, float)) or not (
+                    0 <= cloud_cover_lt <= 100
+                ):
+                    raise ValueError(
+                        f"Invalid cloud_cover_lt={cloud_cover_lt!r}: must be between 0 and 100."
+                    )
+                filter_expr = _and_filters(
+                    filter_expr, ds.field("eo:cloud_cover") < float(cloud_cover_lt)
+                )
+                if self._surface_supports_filter(
+                    "collection",
+                    "eo:cloud_cover",
+                    schema=wide_schema,
+                ):
+                    wide_filter_expr = _and_filters(
+                        wide_filter_expr,
+                        ds.field("eo:cloud_cover") < float(cloud_cover_lt),
+                    )
+
+            if date_range is not None:
+                start_raw, end_raw = date_range
+                if not start_raw or not end_raw:
+                    raise ValueError("Invalid date range")
+                start = pd.Timestamp(start_raw)
+                end = pd.Timestamp(end_raw)
+                if start > end:
+                    raise ValueError("Invalid date range")
+                datetime_source = self._record_index_source_column("datetime")
+                if datetime_source not in index_schema.names:
+                    raise ValueError("Collection has no datetime data")
+                dt_type = index_schema.field(datetime_source).type
+                if pa.types.is_integer(dt_type):
+                    filter_expr = _and_filters(
+                        filter_expr, ds.field(datetime_source) >= int(start.year)
+                    )
+                    filter_expr = _and_filters(
+                        filter_expr, ds.field(datetime_source) <= int(end.year)
+                    )
+                else:
+                    start_scalar = pa.scalar(start.to_pydatetime(), type=dt_type)
+                    end_scalar = pa.scalar(end.to_pydatetime(), type=dt_type)
+                    filter_expr = _and_filters(
+                        filter_expr,
+                        (ds.field(datetime_source) >= start_scalar)
+                        & (ds.field(datetime_source) <= end_scalar),
+                    )
+                if (
+                    self._surface_supports_filter(
+                        "collection",
+                        "datetime",
+                        schema=wide_schema,
+                    )
+                    and wide_schema is not None
+                    and "datetime" in wide_schema.names
+                ):
+                    wide_ts_type = wide_schema.field("datetime").type
+                    start_scalar = pa.scalar(start.to_pydatetime(), type=wide_ts_type)
+                    end_scalar = pa.scalar(end.to_pydatetime(), type=wide_ts_type)
+                    wide_filter_expr = _and_filters(
+                        wide_filter_expr,
+                        (ds.field("datetime") >= start_scalar)
+                        & (ds.field("datetime") <= end_scalar),
+                    )
+                if self._surface_has_field("collection", "year", schema=wide_schema):
+                    wide_filter_expr = _and_filters(
+                        wide_filter_expr, ds.field("year") >= int(start.year)
+                    )
+                    wide_filter_expr = _and_filters(
+                        wide_filter_expr, ds.field("year") <= int(end.year)
+                    )
+
+            if bbox is not None:
+                if not self._surface_supports_filter(
+                    "index", "bbox", schema=index_schema
+                ):
+                    raise ValueError(
+                        "bbox filtering requires a root-level 'bbox' struct with "
+                        "xmin/ymin/xmax/ymax children."
+                    )
+                if len(bbox) != 4:
+                    raise ValueError("Invalid bbox format")
+                minx, miny, maxx, maxy = bbox
+                if minx > maxx or miny > maxy:
+                    raise ValueError("Invalid bbox coordinates")
+                filter_expr = _and_filters(
+                    filter_expr,
+                    _bbox_overlap_expr(
+                        minx,
+                        miny,
+                        maxx,
+                        maxy,
+                        field_name=self._record_index_source_column("bbox"),
+                    ),
+                )
+                if self._surface_supports_filter(
+                    "collection",
+                    "bbox",
+                    schema=wide_schema,
+                ):
+                    wide_filter_expr = _and_filters(
+                        wide_filter_expr, _bbox_overlap_expr(minx, miny, maxx, maxy)
+                    )
+
+            if geometries is not None:
+                if not self._surface_supports_filter(
+                    "index", "bbox", schema=index_schema
+                ):
+                    raise ValueError(
+                        "geometry filtering requires a root-level 'bbox' struct with "
+                        "xmin/ymin/xmax/ymax children."
+                    )
+                from rasteret.core.geometry import bbox_array, coerce_to_geoarrow
+
+                geo_arr = coerce_to_geoarrow(geometries)
+                xmin, ymin, xmax, ymax = bbox_array(geo_arr)
+                geometry_filter: ds.Expression | None = None
+                for i in range(len(xmin)):
+                    geom_expr = _bbox_overlap_expr(
+                        xmin[i].as_py(),
+                        ymin[i].as_py(),
+                        xmax[i].as_py(),
+                        ymax[i].as_py(),
+                        field_name=self._record_index_source_column("bbox"),
+                    )
+                    geometry_filter = (
+                        geom_expr
+                        if geometry_filter is None
+                        else (geometry_filter | geom_expr)
+                    )
+                filter_expr = _and_filters(filter_expr, geometry_filter)
+                if geometry_filter is not None and self._surface_supports_filter(
+                    "collection",
+                    "bbox",
+                    schema=wide_schema,
+                ):
+                    wide_filter_expr = _and_filters(wide_filter_expr, geometry_filter)
+
+            if split is not None:
+                if split_column not in index_schema.names:
+                    filtered_dataset = self._filtered_data_dataset()
+                    return self._view(
+                        Collection(dataset=filtered_dataset)
+                        .subset(split=split, split_column=split_column)
+                        .dataset
+                        if filtered_dataset is not None
+                        else None,
+                        record_index_filter_expr=_UNSET_RECORD_INDEX_FILTER,
+                        wide_filter_expr=_UNSET_RECORD_INDEX_FILTER,
+                        drop_record_index=True,
+                    )
+                if isinstance(split, str):
+                    split_expr = ds.field(split_column) == split
+                elif (
+                    isinstance(split, Sequence)
+                    and not isinstance(split, (str, bytes))
+                    and split
+                    and all(isinstance(value, str) for value in split)
+                ):
+                    split_expr = ds.field(split_column).isin(list(split))
+                else:
+                    raise ValueError(
+                        "Invalid split filter. Use a split name or sequence of split names."
+                    )
+                filter_expr = _and_filters(filter_expr, split_expr)
+                if self._surface_supports_filter(
+                    "collection",
+                    split_column,
+                    schema=wide_schema,
+                ):
+                    wide_filter_expr = _and_filters(wide_filter_expr, split_expr)
+
+            return self._view(
+                self.dataset,
+                record_index_filter_expr=filter_expr,
+                wide_filter_expr=wide_filter_expr,
+            )
+
         if self.dataset is None:
             return self
 
@@ -378,11 +1251,10 @@ class Collection:
             filter_expr = _and(filter_expr, date_filter)
 
         if bbox is not None:
-            required_cols = {"bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy"}
-            if not required_cols.issubset(set(self.dataset.schema.names)):
+            if _bbox_struct_field(self.dataset.schema) is None:
                 raise ValueError(
-                    "bbox filtering requires scalar bbox columns "
-                    "('bbox_minx', 'bbox_miny', 'bbox_maxx', 'bbox_maxy'). "
+                    "bbox filtering requires a root-level 'bbox' struct with "
+                    "xmin/ymin/xmax/ymax children. "
                     "Rebuild or re-normalize the collection with rasteret>=1.0.0."
                 )
             if len(bbox) != 4:
@@ -393,11 +1265,10 @@ class Collection:
             filter_expr = _and(filter_expr, _bbox_overlap_expr(minx, miny, maxx, maxy))
 
         if geometries is not None:
-            required_cols = {"bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy"}
-            if not required_cols.issubset(set(self.dataset.schema.names)):
+            if _bbox_struct_field(self.dataset.schema) is None:
                 raise ValueError(
-                    "geometry filtering requires scalar bbox columns "
-                    "('bbox_minx', 'bbox_miny', 'bbox_maxx', 'bbox_maxy'). "
+                    "geometry filtering requires a root-level 'bbox' struct with "
+                    "xmin/ymin/xmax/ymax children. "
                     "Rebuild or re-normalize the collection with rasteret>=1.0.0."
                 )
             from rasteret.core.geometry import bbox_array, coerce_to_geoarrow
@@ -459,9 +1330,55 @@ class Collection:
 
     def where(self, expr: ds.Expression) -> Collection:
         """Return a filtered view using a raw Arrow dataset expression."""
+        if self._hf_streaming is not None:
+            raise NotImplementedError(
+                "where(expr) is not supported for HF streaming collections. "
+                "Use subset(...) with managed filters instead."
+            )
+        if self._has_record_index():
+            index_expr = expr if self._record_index_supports_expr(expr) else None
+            wide_expr = (
+                expr if self._dataset_supports_expr(self.dataset, expr) else None
+            )
+            if index_expr is None and wide_expr is None:
+                raise ValueError("where(expr) could not be applied to the collection")
+            if index_expr is not None:
+                return self._view(
+                    self.dataset,
+                    record_index_filter_expr=_and_filters(
+                        self._record_index_filter_expr, index_expr
+                    ),
+                    wide_filter_expr=_and_filters(self._wide_filter_expr, wide_expr),
+                )
+            filtered_dataset = self._filtered_data_dataset()
+            if filtered_dataset is None:
+                return self
+            return self._view(
+                filtered_dataset.filter(expr),
+                record_index_filter_expr=_UNSET_RECORD_INDEX_FILTER,
+                wide_filter_expr=_UNSET_RECORD_INDEX_FILTER,
+                drop_record_index=True,
+            )
         if self.dataset is None:
             return self
         return self._view(self.dataset.filter(expr))
+
+    def head(self, n: int = 5, columns: list[str] | None = None) -> pa.Table:
+        """Return the first *n* metadata rows as a PyArrow table."""
+        if n < 0:
+            raise ValueError("head() requires n >= 0")
+        if self._has_record_index():
+            return self._prepare_record_index_table(columns=columns, limit=n)
+        if self.dataset is not None:
+            return self.dataset.head(n, columns=columns)
+        if self._hf_streaming is not None:
+            return head_hf_streaming_source(self._hf_streaming, n=n, columns=columns)
+        schema = (
+            pa.schema([])
+            if columns is None
+            else pa.schema([pa.field(name, pa.null()) for name in columns])
+        )
+        return schema.empty_table()
 
     @classmethod
     def list_collections(
@@ -621,6 +1538,15 @@ class Collection:
                     }
                 },
             }
+            if _bbox_struct_field(table.schema) is not None:
+                geo["columns"]["geometry"]["covering"] = {
+                    "bbox": {
+                        "xmin": ["bbox", "xmin"],
+                        "ymin": ["bbox", "ymin"],
+                        "xmax": ["bbox", "xmax"],
+                        "ymax": ["bbox", "ymax"],
+                    }
+                }
             merged_metadata[b"geo"] = json.dumps(
                 geo, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
@@ -642,7 +1568,9 @@ class Collection:
         )
 
     async def iterate_rasters(
-        self, data_source: str | None = None
+        self,
+        data_source: str | None = None,
+        bands: list[str] | None = None,
     ) -> AsyncIterator[RasterAccessor]:
         """Iterate through raster records in this Collection.
 
@@ -659,43 +1587,61 @@ class Collection:
         ------
         RasterAccessor
         """
-        required_fields = {"id", "datetime", "geometry", "assets", "scene_bbox"}
+        required_fields = {"id", "datetime", "geometry", "assets", "bbox"}
 
-        if self.dataset is None:
+        schema = self._schema
+        if schema is None:
             return
 
         # Check required fields
-        missing = required_fields - set(self.dataset.schema.names)
+        missing = required_fields - set(schema.names)
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
 
         resolved_source = data_source or self.data_source or ""
-        schema_names = set(self.dataset.schema.names)
+        schema_names = set(schema.names)
         band_metadata_cols = [
-            name for name in self.dataset.schema.names if name.endswith("_metadata")
+            name for name in schema.names if name.endswith("_metadata")
         ]
         optional_cols = [
             name
             for name in ("proj:epsg", "eo:cloud_cover", "collection")
             if name in schema_names
         ]
+        requested_band_metadata_cols: list[str] | None = None
+        if bands:
+            requested_band_metadata_cols = [
+                f"{band}_metadata"
+                for band in bands
+                if f"{band}_metadata" in schema_names
+            ]
         scan_cols = [
             "id",
             "datetime",
             "geometry",
             "assets",
-            "scene_bbox",
+            "bbox",
             *optional_cols,
-            *band_metadata_cols,
+            *(
+                requested_band_metadata_cols
+                if requested_band_metadata_cols is not None
+                else band_metadata_cols
+            ),
         ]
 
-        scanner = self.dataset.scanner(columns=scan_cols)
-        for batch in scanner.to_batches():
+        batch_source: Collection = self
+        if self.dataset is not None:
+            scan_dataset = self._filtered_data_dataset()
+            if scan_dataset is None:
+                return
+            batch_source = self._view(scan_dataset)
+
+        for batch in batch_source._iter_record_batches(columns=scan_cols):
             ids = batch.column(batch.schema.get_field_index("id"))
             datetimes = batch.column(batch.schema.get_field_index("datetime"))
             geometries = batch.column(batch.schema.get_field_index("geometry"))
             assets = batch.column(batch.schema.get_field_index("assets"))
-            scene_bboxes = batch.column(batch.schema.get_field_index("scene_bbox"))
+            bbox_col = batch.column(batch.schema.get_field_index("bbox"))
 
             crs_col = (
                 batch.column(batch.schema.get_field_index("proj:epsg"))
@@ -714,7 +1660,11 @@ class Collection:
             )
             band_cols = {
                 name: batch.column(batch.schema.get_field_index(name))
-                for name in band_metadata_cols
+                for name in (
+                    requested_band_metadata_cols
+                    if requested_band_metadata_cols is not None
+                    else band_metadata_cols
+                )
                 if name in batch.schema.names
             }
 
@@ -732,7 +1682,7 @@ class Collection:
                         id=ids[idx].as_py(),
                         datetime=datetimes[idx].as_py(),
                         footprint=geometries[idx].as_py(),
-                        bbox=scene_bboxes[idx].as_py(),
+                        bbox=_bbox_value_to_list(bbox_col[idx].as_py()) or [],
                         crs=crs_col[idx].as_py() if crs_col is not None else None,
                         cloud_cover=(
                             cloud_col[idx].as_py()
@@ -768,6 +1718,18 @@ class Collection:
 
     def __len__(self) -> int:
         """Number of scene records in this collection."""
+        if self._hf_streaming is not None:
+            raise TypeError(
+                "len() is not available for HF streaming collections. "
+                "Use head() or explicit scans instead."
+            )
+        if self._has_record_index():
+            if is_hf_dataset_uri(self._record_index_path or ""):
+                return self._read_record_index_table(
+                    columns=[self._record_index_source_column("id")]
+                ).num_rows
+            dataset = self._open_record_index_dataset()
+            return dataset.count_rows(filter=self._record_index_filter_expr)
         if self.dataset is None:
             return 0
         return self.dataset.count_rows()
@@ -775,45 +1737,49 @@ class Collection:
     @property
     def bands(self) -> list[str]:
         """Available band codes in this collection."""
-        if self.dataset is None:
+        if self._has_record_index() and self._record_index_band_index_map:
+            return list(self._record_index_band_index_map.keys())
+        schema = self._schema
+        if schema is None:
             return []
         return [
-            c.removesuffix("_metadata")
-            for c in self.dataset.schema.names
-            if c.endswith("_metadata")
+            c.removesuffix("_metadata") for c in schema.names if c.endswith("_metadata")
         ]
 
     @property
     def bounds(self) -> tuple[float, float, float, float] | None:
         """Spatial extent as ``(minx, miny, maxx, maxy)`` or ``None``."""
-        if self.dataset is None:
+        if self._has_record_index():
+            table = self._prepare_record_index_table(columns=["bbox"])
+            if table.num_rows == 0 or "bbox" not in table.column_names:
+                return None
+            bbox_col = table.column("bbox")
+            minx = pc.min(pc.struct_field(bbox_col, "xmin")).as_py()
+            miny = pc.min(pc.struct_field(bbox_col, "ymin")).as_py()
+            maxx = pc.max(pc.struct_field(bbox_col, "xmax")).as_py()
+            maxy = pc.max(pc.struct_field(bbox_col, "ymax")).as_py()
+            if None in (minx, miny, maxx, maxy):
+                return None
+            return (float(minx), float(miny), float(maxx), float(maxy))
+        schema = self._schema
+        if schema is None:
             return None
-        names = set(self.dataset.schema.names)
-        cols = ("bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy")
-        if not all(c in names for c in cols):
+        if _bbox_struct_field(schema) is None:
             return None
-        scanner = self.dataset.scanner(columns=list(cols))
         minx: float | None = None
         miny: float | None = None
         maxx: float | None = None
         maxy: float | None = None
 
-        for batch in scanner.to_batches():
+        for batch in self._iter_record_batches(columns=["bbox"]):
             if batch.num_rows == 0:
                 continue
 
-            bminx = pc.min(
-                batch.column(batch.schema.get_field_index("bbox_minx"))
-            ).as_py()
-            bminy = pc.min(
-                batch.column(batch.schema.get_field_index("bbox_miny"))
-            ).as_py()
-            bmaxx = pc.max(
-                batch.column(batch.schema.get_field_index("bbox_maxx"))
-            ).as_py()
-            bmaxy = pc.max(
-                batch.column(batch.schema.get_field_index("bbox_maxy"))
-            ).as_py()
+            bbox_col = batch.column(batch.schema.get_field_index("bbox"))
+            bminx = pc.min(pc.struct_field(bbox_col, "xmin")).as_py()
+            bminy = pc.min(pc.struct_field(bbox_col, "ymin")).as_py()
+            bmaxx = pc.max(pc.struct_field(bbox_col, "xmax")).as_py()
+            bmaxy = pc.max(pc.struct_field(bbox_col, "ymax")).as_py()
 
             if bminx is not None:
                 minx = bminx if minx is None else min(minx, bminx)
@@ -831,13 +1797,31 @@ class Collection:
     @property
     def epsg(self) -> list[int]:
         """Unique EPSG codes in this collection."""
-        if self.dataset is None:
+        if self._has_record_index():
+            try:
+                table = self._prepare_record_index_table(columns=["proj:epsg"])
+            except Exception:
+                table = None
+            if table is not None and "proj:epsg" in table.column_names:
+                from rasteret.ingest.normalize import parse_epsg
+
+                col = table.column("proj:epsg")
+                unique = pc.unique(pc.drop_null(col))
+                codes = {
+                    int(parsed)
+                    for value in unique
+                    if value.is_valid
+                    for parsed in [parse_epsg(value.as_py())]
+                    if parsed is not None
+                }
+                return sorted(codes)
+        schema = self._schema
+        if schema is None:
             return []
-        if "proj:epsg" not in self.dataset.schema.names:
+        if "proj:epsg" not in schema.names:
             return []
-        scanner = self.dataset.scanner(columns=["proj:epsg"])
         codes: set[int] = set()
-        for batch in scanner.to_batches():
+        for batch in self._iter_record_batches(columns=["proj:epsg"]):
             col = batch.column(batch.schema.get_field_index("proj:epsg"))
             unique = pc.unique(pc.drop_null(col))
             for value in unique:
@@ -849,7 +1833,7 @@ class Collection:
         n_bands = len(self.bands)
         try:
             n_rows = len(self)
-        except (pa.ArrowInvalid, pa.ArrowKeyError, OSError):
+        except Exception:
             n_rows = "?"
 
         parts = [f"Collection({self.name!r}"]
@@ -888,9 +1872,13 @@ class Collection:
         dates = None
         if self.start_date and self.end_date:
             dates = (str(self.start_date)[:10], str(self.end_date)[:10])
+        try:
+            records = len(self)
+        except Exception:
+            records = "?"
         return build_describe_result(
             name=self.name,
-            records=len(self),
+            records=records,
             bands=self.bands,
             bounds=self.bounds,
             crs=self.epsg,
@@ -943,7 +1931,7 @@ class Collection:
 
         return build_catalog_comparison(
             name=self.name,
-            records=len(self),
+            records=self.describe()["records"],
             bands=self.bands,
             bounds=self.bounds,
             crs=self.epsg,
@@ -1093,6 +2081,9 @@ class Collection:
         chip_size: int | None = None,
         is_image: bool = True,
         allow_resample: bool = False,
+        cloud_cover_lt: float | None = None,
+        date_range: tuple[str, str] | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
         split: str | Sequence[str] | None = None,
         split_column: str = "split",
         label_field: str | None = None,
@@ -1125,6 +2116,15 @@ class Collection:
             If ``True``, Rasteret will resample bands to the dataset grid when
             requested bands have different resolutions. This is opt-in because
             it may change pixel values (resampling) and can be slow.
+        cloud_cover_lt : float, optional
+            Keep only records with ``eo:cloud_cover`` below this value before
+            constructing the TorchGeo dataset.
+        date_range : tuple of str, optional
+            Keep only records whose ``datetime`` falls within
+            ``(start, end)`` before constructing the TorchGeo dataset.
+        bbox : tuple of float, optional
+            Spatial bbox filter applied before constructing the TorchGeo
+            dataset.
         split : str or sequence of str, optional
             Filter to the given split(s) before creating the dataset.
         split_column : str
@@ -1160,11 +2160,40 @@ class Collection:
 
         self._validate_bands(bands)
 
-        selected_collection = (
-            self.select_split(split, split_column=split_column)
-            if split is not None
-            else self
-        )
+        selected_collection = self
+        explicit_prefilter_kwargs: dict[str, Any] = {}
+        if cloud_cover_lt is not None:
+            explicit_prefilter_kwargs["cloud_cover_lt"] = cloud_cover_lt
+        if date_range is not None:
+            explicit_prefilter_kwargs["date_range"] = date_range
+        if bbox is not None:
+            explicit_prefilter_kwargs["bbox"] = bbox
+        if split is not None:
+            explicit_prefilter_kwargs["split"] = split
+            explicit_prefilter_kwargs["split_column"] = split_column
+
+        if explicit_prefilter_kwargs:
+            selected_collection = self.subset(**explicit_prefilter_kwargs)
+
+        if geometries is not None:
+            derived_bbox = _derive_query_bbox(geometries, geometry_crs=geometries_crs)
+            if derived_bbox is not None:
+                merged_bbox = intersect_bbox(bbox, derived_bbox)
+                if bbox is not None and merged_bbox is None:
+                    selected_collection = selected_collection._view(
+                        selected_collection.dataset.filter(ds.scalar(False))
+                    )
+                else:
+                    try:
+                        selected_collection = selected_collection.subset(
+                            bbox=merged_bbox or derived_bbox
+                        )
+                    except ValueError as exc:
+                        logger.debug(
+                            "TorchGeo prefilter could not apply derived bbox %s: %s",
+                            merged_bbox or derived_bbox,
+                            exc,
+                        )
 
         return RasteretGeoDataset(
             collection=selected_collection,
