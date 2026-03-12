@@ -362,6 +362,13 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             self._warned_image_dtype_casts: set[tuple[str, str]] = set()
             self._warned_cog_read_failures = False
 
+            scan_dataset = self.collection._filtered_data_dataset()
+            if scan_dataset is None:
+                raise ValueError(
+                    "TorchGeo integration requires a dataset-backed collection scan. "
+                    "Streaming-only collection backends are not supported here."
+                )
+
             columns = [
                 "id",
                 "datetime",
@@ -371,7 +378,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             ]
             if label_field and label_field not in columns:
                 columns.append(label_field)
-            schema_names = self.collection.dataset.schema.names
+            schema_names = scan_dataset.schema.names
             # collection column is optional - we prefer Collection.data_source
             if "collection" in schema_names:
                 columns.append("collection")
@@ -385,7 +392,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     f"Collection is missing required columns: {missing_columns}"
                 )
 
-            table = self.collection.dataset.to_table(columns=columns)
+            table = scan_dataset.to_table(columns=columns)
             df = table.to_pandas()
 
             if df.empty:

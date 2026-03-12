@@ -275,6 +275,12 @@ class AsyncCOGHeaderParser:
             try:
                 async with self.semaphore:
                     data = await self._backend.get_range(url, start=start, length=size)
+                    if len(data) != size:
+                        raise IOError(
+                            "Truncated header range response for "
+                            f"{url}: requested bytes={start}..{start + size}, "
+                            f"expected {size} bytes, got {len(data)}."
+                        )
                     self.header_cache[cache_key] = data
                     return data
 

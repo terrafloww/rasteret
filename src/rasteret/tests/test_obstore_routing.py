@@ -219,6 +219,43 @@ class TestAutoObstoreBackendRouting:
                 assert backend._s3_regions["copernicus-dem-30m"] == "eu-central-1"
                 assert mock_get.call_count == 2
 
+    def test_get_range_retries_truncated_responses(self):
+        backend = _create_obstore_backend()
+
+        with patch("obstore.get_range_async", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = [b"", b"x"]
+            result = asyncio.run(
+                backend.get_range("https://example.com/file.tif", 0, 1)
+            )
+            assert result == b"x"
+            assert mock_get.call_count == 2
+
+    def test_get_range_raises_after_repeated_truncated_responses(self):
+        backend = _create_obstore_backend()
+
+        with patch("obstore.get_range_async", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = [b"", b"", b""]
+            with pytest.raises(IOError, match="Truncated range response"):
+                asyncio.run(backend.get_range("https://example.com/file.tif", 0, 1))
+            assert mock_get.call_count == 3
+
+    def test_get_range_retries_unexpected_range_generic_error(self):
+        from obstore.exceptions import GenericError
+
+        backend = _create_obstore_backend()
+
+        err = GenericError(
+            "Generic HTTP error: Requested 10..20, got 10..12 "
+            "source: UnexpectedRange"
+        )
+        with patch("obstore.get_range_async", new_callable=AsyncMock) as mock_get:
+            mock_get.side_effect = [err, b"abcdef"]
+            result = asyncio.run(
+                backend.get_range("https://example.com/file.tif", 0, 6)
+            )
+            assert result == b"abcdef"
+            assert mock_get.call_count == 2
+
 
 # ---------------------------------------------------------------------------
 # Backend URL pattern rewriting

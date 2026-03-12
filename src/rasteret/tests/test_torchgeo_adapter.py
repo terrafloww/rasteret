@@ -5,10 +5,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from types import SimpleNamespace
+
 import numpy as np
+import pyarrow as pa
+import pyarrow.dataset as pads
 import pytest
 
 from rasteret.integrations.torchgeo import (
+    RasteretGeoDataset,
     _array_to_image_tensor_torchgeo_compatible,
     _coerce_label_value,
 )
@@ -94,3 +100,47 @@ class TestImageTensorConversion:
         assert tensor.dtype == torch.uint8
         arr[0, 0] = 255
         assert int(tensor[0, 0].item()) == 255
+
+
+def _torchgeo_test_table(ids: list[str]) -> pa.Table:
+    meta = {
+        "transform": [10.0, 500000.0, -10.0, 1000000.0],
+        "image_width": 128,
+        "image_height": 128,
+        "tile_width": 64,
+        "tile_height": 64,
+        "dtype": "uint16",
+        "compress": 8,
+        "predictor": 1,
+        "tile_offsets": [0],
+        "tile_byte_counts": [1],
+    }
+    return pa.table(
+        {
+            "id": pa.array(ids),
+            "datetime": pa.array(
+                [datetime(2024, 1, 1)] * len(ids), type=pa.timestamp("us")
+            ),
+            "assets": pa.array(
+                [{"B04": {"href": "s3://example-bucket/test.tif", "band_index": 0}}]
+                * len(ids)
+            ),
+            "proj:epsg": pa.array([32615] * len(ids), type=pa.int32()),
+            "B04_metadata": pa.array([meta] * len(ids)),
+        }
+    )
+
+
+def test_rasteret_geodataset_uses_filtered_dataset_not_raw_dataset() -> None:
+    raw_dataset = pads.dataset(_torchgeo_test_table(["scene-1", "scene-2"]))
+    filtered_dataset = pads.dataset(_torchgeo_test_table(["scene-2"]))
+
+    collection = SimpleNamespace(
+        dataset=raw_dataset,
+        data_source="demo/torchgeo-filtered",
+        _filtered_data_dataset=lambda: filtered_dataset,
+    )
+
+    ds = RasteretGeoDataset(collection=collection, bands=["B04"])
+
+    assert len(ds.index) == 1

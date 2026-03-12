@@ -68,12 +68,16 @@ _OBSTORE_RETRY_CONFIG: dict[str, object] = {
     },
 }
 
+_SHORT_READ_RETRY_ATTEMPTS = 3
+_SHORT_READ_BACKOFF_BASE_S = 0.25
+
 
 _S3_HOST_RE = re.compile(
     r"^([a-z0-9][a-z0-9.\-]+)\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$"
 )
 _AZURE_BLOB_RE = re.compile(r"^([a-z0-9]+)\.blob\.core\.windows\.net$")
 _CREDENTIAL_PROVIDER_EXCEPTIONS = (TypeError, UnknownConfigurationKeyError)
+_UNEXPECTED_RANGE_RE = re.compile(r"requested\s+\d+\.\.\d+,\s*got\s+\d+\.\.\d+", re.I)
 
 
 def _extract_s3_bucket(netloc: str) -> str | None:
@@ -438,42 +442,100 @@ class _AutoObstoreBackend:
             self._stores[cache_key] = store
         return store
 
+    @staticmethod
+    def _is_short_range_exception(exc: Exception) -> bool:
+        msg = str(exc)
+        low = msg.lower()
+        return (
+            "unexpectedrange" in low
+            or "content-range" in low
+            or _UNEXPECTED_RANGE_RE.search(msg) is not None
+        )
+
+    @staticmethod
+    def _truncated_read_error(
+        url: str, start: int, length: int, actual: int
+    ) -> IOError:
+        return IOError(
+            "Truncated range response for "
+            f"{url}: requested bytes={start}..{start + length}, "
+            f"expected {length} bytes, got {actual}."
+        )
+
+    async def _retry_backoff(self, attempt: int) -> None:
+        await asyncio.sleep(_SHORT_READ_BACKOFF_BASE_S * (2**attempt))
+
     async def get_range(self, url: str, start: int, length: int) -> bytes:
         import obstore as obs
 
-        store, path = self._store_for(url)
-        try:
-            buf = await obs.get_range_async(store, path, start=start, length=length)
-            return bytes(buf)
-        except _ObstoreGenericError as exc:
-            # obstore raises GenericError for S3 region redirects.  There is
-            # no typed redirect exception, so we check the message string.
-            parsed = urlparse(url)
-            bucket = (
-                parsed.netloc
-                if parsed.scheme == "s3"
-                else _extract_s3_bucket(parsed.netloc)
-            )
-            if not bucket or "Received redirect without LOCATION" not in str(exc):
+        for attempt in range(_SHORT_READ_RETRY_ATTEMPTS):
+            store, path = self._store_for(url)
+            try:
+                buf = await obs.get_range_async(store, path, start=start, length=length)
+                data = bytes(buf)
+                if len(data) != length:
+                    raise self._truncated_read_error(url, start, length, len(data))
+                return data
+            except _ObstoreGenericError as exc:
+                # obstore raises GenericError for S3 region redirects.  There is
+                # no typed redirect exception, so we check the message string.
+                parsed = urlparse(url)
+                bucket = (
+                    parsed.netloc
+                    if parsed.scheme == "s3"
+                    else _extract_s3_bucket(parsed.netloc)
+                )
+                if bucket and "Received redirect without LOCATION" in str(exc):
+                    logger.debug(
+                        "S3 region redirect for bucket '%s', discovering region", bucket
+                    )
+                    region = self._s3_regions.get(bucket) or _discover_s3_bucket_region(
+                        bucket
+                    )
+                    if not region:
+                        raise RuntimeError(
+                            f"S3 bucket region auto-detection failed for '{bucket}'. "
+                            "Provide a region explicitly (e.g. via "
+                            "`rasteret.create_backend(default_s3_config={'region': '...'})` "
+                            "or a per-bucket override) and retry."
+                        ) from exc
+
+                    self._s3_regions[bucket] = region
+                    self._stores.pop(f"s3://{bucket}", None)
+                    continue
+
+                if self._is_short_range_exception(exc):
+                    if attempt < _SHORT_READ_RETRY_ATTEMPTS - 1:
+                        logger.warning(
+                            "Short/invalid range response for %s (attempt %d/%d): %s",
+                            url,
+                            attempt + 1,
+                            _SHORT_READ_RETRY_ATTEMPTS,
+                            exc,
+                        )
+                        await self._retry_backoff(attempt)
+                        continue
+                    raise IOError(
+                        "Range response validation failed after retries for "
+                        f"{url}: {exc}"
+                    ) from exc
+                raise
+            except IOError as exc:
+                if "Truncated range response" not in str(exc):
+                    raise
+                if attempt < _SHORT_READ_RETRY_ATTEMPTS - 1:
+                    logger.warning(
+                        "Truncated range response for %s (attempt %d/%d): %s",
+                        url,
+                        attempt + 1,
+                        _SHORT_READ_RETRY_ATTEMPTS,
+                        exc,
+                    )
+                    await self._retry_backoff(attempt)
+                    continue
                 raise
 
-            logger.debug(
-                "S3 region redirect for bucket '%s', discovering region", bucket
-            )
-            region = self._s3_regions.get(bucket) or _discover_s3_bucket_region(bucket)
-            if not region:
-                raise RuntimeError(
-                    f"S3 bucket region auto-detection failed for '{bucket}'. "
-                    "Provide a region explicitly (e.g. via "
-                    "`rasteret.create_backend(default_s3_config={'region': '...'})` "
-                    "or a per-bucket override) and retry."
-                ) from exc
-
-            self._s3_regions[bucket] = region
-            self._stores.pop(f"s3://{bucket}", None)
-            store = self._get_s3_store(bucket)
-            buf = await obs.get_range_async(store, path, start=start, length=length)
-            return bytes(buf)
+        raise RuntimeError("Unexpected range-read retry flow fell through")
 
     async def get_ranges(self, url: str, ranges: list[tuple[int, int]]) -> list[bytes]:
         if not ranges:
@@ -481,40 +543,84 @@ class _AutoObstoreBackend:
 
         import obstore as obs
 
-        store, path = self._store_for(url)
         starts, lengths = zip(*ranges)
-        try:
-            buffers = await obs.get_ranges_async(
-                store, path, starts=list(starts), lengths=list(lengths)
-            )
-            return [bytes(b) for b in buffers]
-        except _ObstoreGenericError as exc:
-            parsed = urlparse(url)
-            bucket = (
-                parsed.netloc
-                if parsed.scheme == "s3"
-                else _extract_s3_bucket(parsed.netloc)
-            )
-            if not bucket or "Received redirect without LOCATION" not in str(exc):
+        for attempt in range(_SHORT_READ_RETRY_ATTEMPTS):
+            store, path = self._store_for(url)
+            try:
+                buffers = await obs.get_ranges_async(
+                    store, path, starts=list(starts), lengths=list(lengths)
+                )
+                data = [bytes(b) for b in buffers]
+                if len(data) != len(lengths):
+                    raise IOError(
+                        "Truncated multi-range response for "
+                        f"{url}: expected {len(lengths)} ranges, got {len(data)}."
+                    )
+                for i, (chunk, expected_len) in enumerate(
+                    zip(data, lengths, strict=True)
+                ):
+                    if len(chunk) != expected_len:
+                        start = starts[i]
+                        raise self._truncated_read_error(
+                            url, int(start), int(expected_len), len(chunk)
+                        )
+                return data
+            except _ObstoreGenericError as exc:
+                parsed = urlparse(url)
+                bucket = (
+                    parsed.netloc
+                    if parsed.scheme == "s3"
+                    else _extract_s3_bucket(parsed.netloc)
+                )
+                if bucket and "Received redirect without LOCATION" in str(exc):
+                    logger.debug(
+                        "S3 region redirect for bucket '%s', discovering region", bucket
+                    )
+                    region = self._s3_regions.get(bucket) or _discover_s3_bucket_region(
+                        bucket
+                    )
+                    if not region:
+                        raise RuntimeError(
+                            f"S3 bucket region auto-detection failed for '{bucket}'. "
+                            "Provide a region explicitly and retry."
+                        ) from exc
+
+                    self._s3_regions[bucket] = region
+                    self._stores.pop(f"s3://{bucket}", None)
+                    continue
+
+                if self._is_short_range_exception(exc):
+                    if attempt < _SHORT_READ_RETRY_ATTEMPTS - 1:
+                        logger.warning(
+                            "Short/invalid multi-range response for %s (attempt %d/%d): %s",
+                            url,
+                            attempt + 1,
+                            _SHORT_READ_RETRY_ATTEMPTS,
+                            exc,
+                        )
+                        await self._retry_backoff(attempt)
+                        continue
+                    raise IOError(
+                        "Range response validation failed after retries for "
+                        f"{url}: {exc}"
+                    ) from exc
+                raise
+            except IOError as exc:
+                if "Truncated" not in str(exc):
+                    raise
+                if attempt < _SHORT_READ_RETRY_ATTEMPTS - 1:
+                    logger.warning(
+                        "Truncated multi-range response for %s (attempt %d/%d): %s",
+                        url,
+                        attempt + 1,
+                        _SHORT_READ_RETRY_ATTEMPTS,
+                        exc,
+                    )
+                    await self._retry_backoff(attempt)
+                    continue
                 raise
 
-            logger.debug(
-                "S3 region redirect for bucket '%s', discovering region", bucket
-            )
-            region = self._s3_regions.get(bucket) or _discover_s3_bucket_region(bucket)
-            if not region:
-                raise RuntimeError(
-                    f"S3 bucket region auto-detection failed for '{bucket}'. "
-                    "Provide a region explicitly and retry."
-                ) from exc
-
-            self._s3_regions[bucket] = region
-            self._stores.pop(f"s3://{bucket}", None)
-            store = self._get_s3_store(bucket)
-            buffers = await obs.get_ranges_async(
-                store, path, starts=list(starts), lengths=list(lengths)
-            )
-            return [bytes(b) for b in buffers]
+        raise RuntimeError("Unexpected multi-range retry flow fell through")
 
 
 @dataclass
@@ -657,6 +763,11 @@ class COGReader:
         out: dict[tuple[int, int, int | None], np.ndarray] = {}
         for (offset, size, _meta_id), group in grouped.items():
             tile_data = data[offset - start : offset - start + size]
+            if len(tile_data) != size:
+                raise IOError(
+                    "Merged tile range was shorter than expected for "
+                    f"{url}: tile offset={offset}, expected={size} bytes, got={len(tile_data)}."
+                )
             metadata = group[0].metadata
             decompressed = await loop.run_in_executor(
                 None, self._decompress_tile_sync, tile_data, metadata
@@ -682,6 +793,9 @@ class COGReader:
 
     async def _read_range(self, url: str, start: int, end: int) -> bytes:
         """Read a byte range via the storage backend."""
+        length = end - start
+        if length < 0:
+            raise ValueError(f"Invalid range: start={start}, end={end}")
         # Local file paths are handled directly, regardless of backend.
         parsed = urlparse(url)
         if parsed.scheme in {"", "file"}:
@@ -690,13 +804,27 @@ class COGReader:
             def _read_local() -> bytes:
                 with open(path, "rb") as f:
                     f.seek(start)
-                    return f.read(end - start)
+                    return f.read(length)
 
             async with self.sem:
-                return await asyncio.to_thread(_read_local)
+                data = await asyncio.to_thread(_read_local)
+                if len(data) != length:
+                    raise IOError(
+                        "Truncated local range response for "
+                        f"{path}: requested bytes={start}..{end}, "
+                        f"expected {length} bytes, got {len(data)}."
+                    )
+                return data
 
         async with self.sem:
-            return await self._backend.get_range(url, start, end - start)
+            data = await self._backend.get_range(url, start, length)
+            if len(data) != length:
+                raise IOError(
+                    "Truncated backend range response for "
+                    f"{url}: requested bytes={start}..{end}, "
+                    f"expected {length} bytes, got {len(data)}."
+                )
+            return data
 
     def _decompress_tile_sync(
         self, data: bytes, metadata: CogMetadata

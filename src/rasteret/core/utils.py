@@ -52,6 +52,18 @@ def infer_data_source(collection: "Collection") -> str:
     if collection.data_source:
         return str(collection.data_source)
 
+    if getattr(collection, "_hf_streaming", None) is not None:
+        try:
+            head = collection.head(1, columns=["collection"])
+            if head.num_rows:
+                source = head.column("collection")[0].as_py()
+                if isinstance(source, str) and source:
+                    return source
+        except Exception as exc:
+            logger.debug(
+                "Failed to infer data_source from HF streaming collection: %s", exc
+            )
+
     return infer_data_source_from_dataset(collection.dataset)
 
 

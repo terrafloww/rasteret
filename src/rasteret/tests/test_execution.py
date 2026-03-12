@@ -21,6 +21,7 @@ import xarray as xr
 from rasteret.core.collection import Collection
 from rasteret.core.execution import (
     _detect_target_crs,
+    _narrow_query_filters,
     get_collection_numpy,
     get_collection_xarray,
 )
@@ -202,6 +203,57 @@ class TestXarrayMerge:
                     data_source="sentinel-2-l2a",
                 )
         assert excinfo.value.__cause__ is first
+
+
+class TestQueryNarrowing:
+    def test_derived_bbox_added_from_geometries(self):
+        filters, is_empty = _narrow_query_filters(
+            geometries=(10.0, 20.0, 30.0, 40.0),
+            geometry_crs=4326,
+            filters={},
+        )
+
+        assert is_empty is False
+        assert filters["bbox"] == (10.0, 20.0, 30.0, 40.0)
+
+    def test_user_bbox_is_intersected_with_geometry_bbox(self):
+        filters, is_empty = _narrow_query_filters(
+            geometries=(10.0, 20.0, 30.0, 40.0),
+            geometry_crs=4326,
+            filters={"bbox": (15.0, 25.0, 35.0, 45.0)},
+        )
+
+        assert is_empty is False
+        assert filters["bbox"] == (15.0, 25.0, 30.0, 40.0)
+
+    def test_disjoint_bbox_short_circuits(self):
+        filters, is_empty = _narrow_query_filters(
+            geometries=(10.0, 20.0, 30.0, 40.0),
+            geometry_crs=4326,
+            filters={"bbox": (100.0, 100.0, 101.0, 101.0)},
+        )
+
+        assert is_empty is True
+        assert filters["bbox"] == (100.0, 100.0, 101.0, 101.0)
+
+    def test_geometry_crs_is_transformed_before_narrowing(self):
+        with patch(
+            "rasteret.core.utils.transform_bbox",
+            return_value=(1.0, 2.0, 3.0, 4.0),
+        ) as mocked_transform:
+            filters, is_empty = _narrow_query_filters(
+                geometries=(10.0, 20.0, 30.0, 40.0),
+                geometry_crs=3857,
+                filters={},
+            )
+
+        assert is_empty is False
+        assert filters["bbox"] == (1.0, 2.0, 3.0, 4.0)
+        mocked_transform.assert_called_once_with(
+            (10.0, 20.0, 30.0, 40.0),
+            3857,
+            4326,
+        )
 
     def test_xr_combine_merge_strategy_merges_distinct_variables(self):
         ds1 = xr.Dataset(
@@ -535,6 +587,34 @@ class TestGeometryErrors:
 
 
 class TestRasterAccessorGdfCrs:
+    def test_merge_geodataframe_empty_results_has_geometry_column(self):
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        info = RasterInfo(
+            id="r-empty-gdf",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        out = accessor._merge_geodataframe_results(
+            results=[],
+            geometries=coerce_to_geoarrow((0.0, 0.0, 1.0, 1.0)),
+            geometry_crs=4326,
+            target_crs=None,
+        )
+        assert list(out.columns) == ["geometry"]
+        assert out.empty
+        assert str(out.crs) == "EPSG:4326"
+
     @pytest.mark.asyncio
     async def test_load_bands_gdf_sets_crs_and_reprojects_geometry(self):
         """GeoDataFrame output should always have a CRS and match target_crs when given."""
@@ -593,6 +673,64 @@ class TestRasterAccessorGdfCrs:
         bounds = out.geometry.iloc[0].bounds
         # Rough sanity: degrees->meters for 1 degree at equator (~111km).
         assert bounds[2] > 100_000
+
+    @pytest.mark.asyncio
+    async def test_load_bands_numpy_path_bypasses_geodataframe_merge(self):
+        from shapely.geometry import box
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import RasterInfo
+
+        class _DummyReader:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        info = RasterInfo(
+            id="r-numpy",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        geom = box(0.0, 0.0, 1.0, 1.0)
+        geometries = coerce_to_geoarrow(geom)
+
+        async def _ok(*_args, **_kwargs):
+            return {
+                "data": np.ones((1, 1), dtype=np.uint8),
+                "transform": None,
+                "band": "B04",
+            }
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=_DummyReader()),
+            patch.object(accessor, "_load_single_band", new=AsyncMock(side_effect=_ok)),
+            patch.object(
+                accessor,
+                "_merge_geodataframe_results",
+                side_effect=AssertionError("numpy path should not build GeoDataFrame"),
+            ),
+        ):
+            out = await accessor.load_bands(
+                geometries=geometries,
+                band_codes=["B04"],
+                max_concurrent=5,
+                for_xarray=False,
+                for_numpy=True,
+            )
+
+        assert isinstance(out, list)
+        assert len(out) == 1
 
 
 class TestRasterAccessorPointSampling:
@@ -1078,7 +1216,7 @@ class TestPointSampling:
             self.last_filters = _filters
             return self
 
-        async def iterate_rasters(self, _data_source=None):
+        async def iterate_rasters(self, _data_source=None, bands=None):
             for raster in self._rasters:
                 yield raster
 

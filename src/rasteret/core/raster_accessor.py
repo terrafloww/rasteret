@@ -691,6 +691,7 @@ class RasterAccessor:
         band_codes: list[str],
         max_concurrent: int = 50,
         for_xarray: bool = True,
+        for_numpy: bool = False,
         progress: bool = False,
         backend: object | None = None,
         target_crs: int | None = None,
@@ -709,6 +710,9 @@ class RasterAccessor:
             Maximum concurrent HTTP requests.
         for_xarray : bool
             If ``True``, return ``xr.Dataset``; otherwise ``gpd.GeoDataFrame``.
+        for_numpy : bool
+            If ``True``, return raw per-geometry band results for NumPy assembly
+            without constructing GeoPandas objects.
         backend : object, optional
             Pluggable I/O backend.
         target_crs : int, optional
@@ -728,6 +732,11 @@ class RasterAccessor:
             declared in the COG metadata.
         """
         from rasteret.fetch.cog import COGReader
+
+        if for_xarray and for_numpy:
+            raise ValueError(
+                "load_bands() cannot request xarray and numpy outputs together"
+            )
 
         n_geoms = len(geometries)
         logger.debug(f"Loading {len(band_codes)} bands for {n_geoms} geometries")
@@ -891,6 +900,8 @@ class RasterAccessor:
             warnings.warn(msg, RuntimeWarning, stacklevel=2)
 
         # Process results
+        if for_numpy:
+            return results
         if for_xarray:
             return self._merge_xarray_results(results, target_crs=target_crs)
         else:
@@ -1041,7 +1052,8 @@ class RasterAccessor:
                 )
 
         if not rows:
-            return gpd.GeoDataFrame(crs=f"EPSG:{out_crs}")
+            empty_geometry = gpd.GeoSeries([], name="geometry", crs=f"EPSG:{out_crs}")
+            return gpd.GeoDataFrame(geometry=empty_geometry, crs=f"EPSG:{out_crs}")
 
         return gpd.GeoDataFrame(rows, geometry="geometry", crs=f"EPSG:{out_crs}")
 

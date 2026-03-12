@@ -257,7 +257,7 @@ def test_sample_points_matches_rasterio_sample(tmp_path: Path) -> None:
 
     assert collection.dataset is not None
     row = collection.dataset.to_table(
-        columns=["id", "scene_bbox", "proj:epsg", "assets"]
+        columns=["id", "bbox", "proj:epsg", "assets"]
     ).to_pylist()[0]
     record_id = row["id"]
     asset = row["assets"]["B02"]

@@ -24,8 +24,10 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 from tqdm.asyncio import tqdm
 
+from rasteret.core.geometry import bbox_array, intersect_bbox
 from rasteret.core.utils import infer_data_source, run_sync
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -108,6 +110,61 @@ def _ensure_geoarrow(geometries: Any) -> pa.Array:
     return coerce_to_geoarrow(geometries)
 
 
+def _derive_query_bbox(
+    geometries: Any,
+    *,
+    geometry_crs: int | None,
+) -> tuple[float, float, float, float] | None:
+    """Derive a query bbox in EPSG:4326 from any supported geometry input."""
+    if geometries is None:
+        return None
+
+    from rasteret.core.utils import transform_bbox
+
+    geo_arr = _ensure_geoarrow(geometries)
+    if len(geo_arr) == 0:
+        return None
+
+    xmin, ymin, xmax, ymax = bbox_array(geo_arr)
+    bbox = (
+        pc.min(xmin).as_py(),
+        pc.min(ymin).as_py(),
+        pc.max(xmax).as_py(),
+        pc.max(ymax).as_py(),
+    )
+    if any(value is None for value in bbox):
+        return None
+
+    derived = tuple(float(value) for value in bbox)
+    if geometry_crs not in (None, 4326):
+        derived = transform_bbox(derived, geometry_crs, 4326)
+    return derived
+
+
+def _narrow_query_filters(
+    *,
+    geometries: Any,
+    geometry_crs: int | None,
+    filters: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Return filters narrowed by any bbox derivable from *geometries*.
+
+    The returned bool is ``True`` when user-provided spatial constraints are
+    provably disjoint, allowing callers to short-circuit without any pixel I/O.
+    """
+    narrowed = dict(filters)
+    derived_bbox = _derive_query_bbox(geometries, geometry_crs=geometry_crs)
+    if derived_bbox is None:
+        return narrowed, False
+
+    merged_bbox = intersect_bbox(narrowed.get("bbox"), derived_bbox)
+    if narrowed.get("bbox") is not None and merged_bbox is None:
+        return narrowed, True
+
+    narrowed["bbox"] = merged_bbox or derived_bbox
+    return narrowed, False
+
+
 async def _load_collection_data(
     *,
     collection: "Collection",
@@ -116,6 +173,7 @@ async def _load_collection_data(
     bands: list[str],
     max_concurrent: int,
     for_xarray: bool,
+    for_numpy: bool = False,
     batch_size: int = 10,
     progress: bool = False,
     backend: object | None = None,
@@ -125,14 +183,24 @@ async def _load_collection_data(
     **filters: Any,
 ) -> tuple[list[gpd.GeoDataFrame] | list, list[tuple[str, Exception]]]:
     """Core loading loop: iterate records, fetch tiles."""
-    selected_collection = collection.subset(**filters) if filters else collection
+    narrowed_filters, is_empty = _narrow_query_filters(
+        geometries=geometries,
+        geometry_crs=geometry_crs,
+        filters=filters,
+    )
+    if is_empty:
+        return [], []
+
+    selected_collection = (
+        collection.subset(**narrowed_filters) if narrowed_filters else collection
+    )
 
     results = []
     errors: list[tuple[str, Exception]] = []
     raster_batches = []
     current_batch = []
 
-    async for raster in selected_collection.iterate_rasters(data_source):
+    async for raster in selected_collection.iterate_rasters(data_source, bands=bands):
         current_batch.append(raster)
 
         if len(current_batch) == batch_size:
@@ -152,6 +220,7 @@ async def _load_collection_data(
                 band_codes=bands,
                 max_concurrent=max_concurrent,
                 for_xarray=for_xarray,
+                for_numpy=for_numpy,
                 progress=progress,
                 backend=backend,
                 target_crs=target_crs,
@@ -173,7 +242,14 @@ async def _load_collection_data(
                     and len(result.data_vars) == 0
                 ):
                     continue
-                if not for_xarray and hasattr(result, "empty") and result.empty:
+                if for_numpy and len(result) == 0:
+                    continue
+                if (
+                    not for_xarray
+                    and not for_numpy
+                    and hasattr(result, "empty")
+                    and result.empty
+                ):
                     continue
                 results.append(result)
 
@@ -191,6 +267,7 @@ def _load_and_merge(
     geometries: Any,
     bands: list[str],
     for_xarray: bool,
+    for_numpy: bool,
     merge_fn: Callable[[list[Any]], Any],
     data_source: str | None = None,
     max_concurrent: int = 50,
@@ -228,6 +305,7 @@ def _load_and_merge(
             max_concurrent=max_concurrent,
             backend=backend,
             for_xarray=for_xarray,
+            for_numpy=for_numpy,
             target_crs=target_crs,
             progress=bool(progress),
             geometry_crs=geometry_crs,
@@ -260,6 +338,9 @@ def _load_and_merge(
 def _detect_target_crs(
     collection: "Collection",
     filters: dict[str, Any],
+    *,
+    geometries: Any = None,
+    geometry_crs: int | None = 4326,
 ) -> int | None:
     """Auto-detect multi-CRS and return a target CRS if reprojection is needed.
 
@@ -274,9 +355,17 @@ def _detect_target_crs(
     """
     if collection is None:
         return None
-    selected = collection.subset(**filters) if filters else collection
-    ds = selected.dataset
-    if ds is None or "proj:epsg" not in ds.schema.names:
+    narrowed_filters, is_empty = _narrow_query_filters(
+        geometries=geometries,
+        geometry_crs=geometry_crs,
+        filters=filters,
+    )
+    if is_empty:
+        return None
+
+    selected = collection.subset(**narrowed_filters) if narrowed_filters else collection
+    schema = selected._schema
+    if schema is None or "proj:epsg" not in schema.names:
         return None
 
     from collections import Counter
@@ -284,8 +373,7 @@ def _detect_target_crs(
     import pyarrow.compute as pc
 
     counts: Counter[int] = Counter()
-    scanner = ds.scanner(columns=["proj:epsg"])
-    for batch in scanner.to_batches():
+    for batch in selected._iter_record_batches(columns=["proj:epsg"]):
         col = batch.column(batch.schema.get_field_index("proj:epsg"))
         non_null = pc.drop_null(col)
         if len(non_null) == 0:
@@ -381,7 +469,12 @@ def get_collection_xarray(
     # Auto-detect multi-CRS to prevent silent spatial data corruption
     # from merging tiles with incompatible coordinate systems.
     if target_crs is None:
-        target_crs = _detect_target_crs(collection, filters)
+        target_crs = _detect_target_crs(
+            collection,
+            geometries=geometries,
+            geometry_crs=geometry_crs,
+            filters=filters,
+        )
 
     def _merge(datasets):
         logger.info("Merging %s datasets", len(datasets))
@@ -407,6 +500,7 @@ def get_collection_xarray(
         geometries=geometries,
         bands=bands,
         for_xarray=True,
+        for_numpy=False,
         merge_fn=_merge,
         data_source=data_source,
         max_concurrent=max_concurrent,
@@ -480,6 +574,7 @@ def get_collection_gdf(
         geometries=geometries,
         bands=bands,
         for_xarray=False,
+        for_numpy=False,
         merge_fn=_merge_gdfs,
         data_source=data_source,
         max_concurrent=max_concurrent,
@@ -543,7 +638,7 @@ def get_collection_numpy(
     """
     import numpy as np
 
-    def _merge_numpy(frames: list[gpd.GeoDataFrame]):
+    def _merge_numpy(frames: list[list[tuple[list[dict], int]]]):
         if not frames:
             raise ValueError("No valid data found")
 
@@ -551,18 +646,31 @@ def get_collection_numpy(
         per_band_arrays: dict[str, list[np.ndarray]] = {band: [] for band in bands}
 
         for frame in frames:
-            if frame is None or frame.empty:
+            if frame is None:
                 continue
-            if "band" not in frame.columns or "data" not in frame.columns:
-                raise ValueError(
-                    "Cannot assemble numpy output: missing 'band'/'data' columns."
-                )
-            band_values = frame["band"].to_numpy()
-            data_values = frame["data"].to_numpy()
-            for band_value, data_value in zip(band_values, data_values, strict=False):
-                band_name = str(band_value)
-                if band_name in expected_bands:
-                    per_band_arrays[band_name].append(data_value)
+            if hasattr(frame, "empty"):
+                if frame.empty:
+                    continue
+                if "band" not in frame.columns or "data" not in frame.columns:
+                    raise ValueError(
+                        "Cannot assemble numpy output: missing 'band'/'data' columns."
+                    )
+                band_values = frame["band"].to_numpy()
+                data_values = frame["data"].to_numpy()
+                for band_value, data_value in zip(
+                    band_values, data_values, strict=False
+                ):
+                    band_name = str(band_value)
+                    if band_name in expected_bands:
+                        per_band_arrays[band_name].append(data_value)
+                continue
+            if len(frame) == 0:
+                continue
+            for band_results, _geom_id in frame:
+                for band_result in band_results:
+                    band_name = str(band_result["band"])
+                    if band_name in expected_bands:
+                        per_band_arrays[band_name].append(band_result["data"])
 
         if not any(per_band_arrays.values()):
             raise ValueError("No valid data found")
@@ -610,6 +718,7 @@ def get_collection_numpy(
         geometries=geometries,
         bands=bands,
         for_xarray=False,
+        for_numpy=True,
         merge_fn=_merge_numpy,
         data_source=data_source,
         max_concurrent=max_concurrent,

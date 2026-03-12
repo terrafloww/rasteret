@@ -208,7 +208,10 @@ def get_collection_point_samples(
             # Select the latest record per (point_index, band) using only metadata.
             # This avoids reading pixels from older records that will be discarded.
             rasters: list[Any] = []
-            async for raster in selected_collection.iterate_rasters(resolved_source):
+            async for raster in selected_collection.iterate_rasters(
+                resolved_source,
+                bands=bands,
+            ):
                 rasters.append(raster)
             rasters.sort(key=_raster_datetime_key, reverse=True)
 
@@ -384,12 +387,16 @@ def get_collection_point_samples(
             if progress:
                 rasters = []
                 async for raster in selected_collection.iterate_rasters(
-                    resolved_source
+                    resolved_source,
+                    bands=bands,
                 ):
                     rasters.append(raster)
                 iterable = tqdm(rasters, desc="Sampling points")
             else:
-                iterable = selected_collection.iterate_rasters(resolved_source)
+                iterable = selected_collection.iterate_rasters(
+                    resolved_source,
+                    bands=bands,
+                )
 
             if progress:
                 async with COGReader(
