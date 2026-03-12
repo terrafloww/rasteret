@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.24.0",
     "pyarrow>=14.0.1",
+    "huggingface_hub>=0.23.0",
     "pystac-client>=0.7.5",
     "obstore>=0.8.0",
     "cachetools>=5.3.2",
