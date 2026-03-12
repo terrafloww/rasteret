@@ -1,5 +1,68 @@
 # Changelog
 
+## v0.3.5
+
+### Added
+
+- **Descriptor-backed dual-surface planning**: catalog entries can now
+  describe separate record-table, index, and collection surfaces via
+  `record_table_uri`, `index_uri`, and `collection_uri`. This lets Rasteret
+  keep build-time metadata sources separate from published runtime
+  collections.
+- **`Collection.head()`**: first-class metadata preview API that uses the
+  narrow record index when available instead of forcing a wide collection
+  scan.
+- **Internal Parquet read planner**: `ParquetReadPlanner` keeps index-side and
+  wide-scan filter state coherent across `subset()`, `where()`, `len()`,
+  `head()`, pixel reads, and TorchGeo entry points.
+- **Hugging Face streaming runtime**: `HFStreamingSource` and batch iterators
+  now provide a stable metadata path for `hf://datasets/...` collections
+  without routing through the older `datasets` streaming shutdown path.
+
+### Changed
+
+- **Index-first runtime filtering**: when a collection has both a narrow index
+  and a wide read-ready surface, Rasteret now plans metadata filters against
+  the index first, then carries compatible predicates into the wide scan.
+- **GeoParquet bbox contract**: bbox filtering now targets the canonical
+  `bbox` struct (`xmin`, `ymin`, `xmax`, `ymax`) instead of older scalar bbox
+  columns. Catalog tests, CLI fixtures, and filter tests were updated to
+  match the GeoParquet 1.1 shape.
+- **TorchGeo filter propagation**: `to_torchgeo_dataset()` now respects
+  collection filters and geometry / bbox narrowing before chip sampling
+  starts, reducing unnecessary raster candidates for gridded reads.
+- **Local Parquet metadata reuse**: local datasets prefer a `_metadata`
+  sidecar when present, and Rasteret now keeps an in-process Parquet dataset
+  cache to reduce repeated footer/schema setup during interactive sessions.
+- **Catalog surface reporting**: CLI output and descriptor helpers now surface
+  record-table, index, and collection paths explicitly instead of collapsing
+  everything into `geoparquet_uri`.
+
+### Fixed
+
+- **Hugging Face filter execution**: Arrow expression handling on HF-backed
+  metadata batches now fails more clearly and avoids the unstable runtime path
+  that could crash during shutdown or long scans.
+- **AEF runtime aliasing**: the built-in AEF descriptor now points at the
+  published Terrafloww collection/index surfaces with explicit field-role and
+  filter-capability hints.
+- **Read-path correctness on filtered collections**: `len()`, `head()`,
+  `sample_points()`, TorchGeo reads, and other collection-backed reads now
+  stay aligned when filters are staged across both record-index and wide-data
+  surfaces.
+
+### Tested
+
+- Expanded `test_collection_filters` for bbox-struct filtering and TorchGeo
+  prefilter behavior.
+- Expanded `test_catalog`, `test_cli`, and `test_public_api_surface` for the
+  new descriptor surface roles and runtime load/build paths.
+- Expanded `test_huggingface`, `test_execution`, and `test_torchgeo_adapter`
+  for the new HF runtime path, filter propagation, and collection-read
+  behavior.
+
+---
+
 ## v0.3.4
 
 ### Added
@@ -54,7 +117,6 @@
 ---
 
 ## v0.3.3
-
 ### Performance
 
 - **Arrow-batch native point sampling**: `sample_points()` internals now use
