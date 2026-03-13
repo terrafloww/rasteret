@@ -1,0 +1,57 @@
+# Rasteret
+
+> Index-first access to cloud-native GeoTIFF collections for ML and analysis. A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), up to 20x faster reads.
+
+Index-first access to cloud-native GeoTIFF collections for ML and analysis. A growing catalog of pre-registered datasets, multi-cloud (S3/Azure/GCS), up to 20x faster reads.
+
+## Getting Started
+
+- [Getting Started](https://terrafloww.github.io/rasteret/getting-started/index.md)
+
+## Tutorials
+
+- [Quickstart](https://terrafloww.github.io/rasteret/tutorials/01_quickstart/index.md)
+- [TorchGeo Integration](https://terrafloww.github.io/rasteret/tutorials/02_torchgeo_09_accelerator/index.md)
+- [Parquet Filtering](https://terrafloww.github.io/rasteret/tutorials/03_parquet_first_filtering/index.md)
+- [Configuring Custom Collections](https://terrafloww.github.io/rasteret/tutorials/04_custom_cloud_and_bands/index.md)
+- [TorchGeo Benchmark](https://terrafloww.github.io/rasteret/tutorials/05_torchgeo_comparison/index.md)
+- [Building from Parquet](https://terrafloww.github.io/rasteret/tutorials/06_non_stac_cog_collections/index.md)
+
+## How-To Guides
+
+- [How-To Guides](https://terrafloww.github.io/rasteret/how-to/index.md)
+- [AEF Embeddings](https://terrafloww.github.io/rasteret/how-to/aef-embeddings/index.md)
+- [Build from Parquet](https://terrafloww.github.io/rasteret/how-to/build-from-parquet/index.md)
+- [Collection Management](https://terrafloww.github.io/rasteret/how-to/collection-management/index.md)
+- [Custom Cloud Provider](https://terrafloww.github.io/rasteret/how-to/custom-cloud-provider/index.md)
+- [Dataset Catalog](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/index.md)
+- [Enriched Parquet Workflows](https://terrafloww.github.io/rasteret/how-to/enriched-parquet-workflows/index.md)
+- [ML Training with Splits](https://terrafloww.github.io/rasteret/how-to/ml-training-splits/index.md)
+- [Multi-Dataset Training](https://terrafloww.github.io/rasteret/how-to/multi-dataset-training/index.md)
+- [Point Sampling and Masking](https://terrafloww.github.io/rasteret/how-to/point-sampling-and-masking/index.md)
+
+## API Reference
+
+- [Collection](https://terrafloww.github.io/rasteret/reference/core/collection/index.md)
+- [Execution](https://terrafloww.github.io/rasteret/reference/core/execution/index.md)
+- [RasterAccessor](https://terrafloww.github.io/rasteret/reference/core/raster_accessor/index.md)
+- [Utilities](https://terrafloww.github.io/rasteret/reference/core/utils/index.md)
+- [COG Reader](https://terrafloww.github.io/rasteret/reference/fetch/cog/index.md)
+- [Header Parser](https://terrafloww.github.io/rasteret/reference/fetch/header_parser/index.md)
+- [rasteret.ingest](https://terrafloww.github.io/rasteret/reference/ingest/index.md)
+- [COG Enrichment](https://terrafloww.github.io/rasteret/reference/ingest/enrich/index.md)
+- [Normalize](https://terrafloww.github.io/rasteret/reference/ingest/normalize/index.md)
+- [Record Table](https://terrafloww.github.io/rasteret/reference/ingest/parquet_record_table/index.md)
+- [STAC Indexer](https://terrafloww.github.io/rasteret/reference/ingest/stac_indexer/index.md)
+- [TorchGeo](https://terrafloww.github.io/rasteret/reference/integrations/torchgeo/index.md)
+
+## Explanation
+
+- [Explanation](https://terrafloww.github.io/rasteret/explanation/index.md)
+- [Architecture](https://terrafloww.github.io/rasteret/explanation/architecture/index.md)
+- [Benchmarks](https://terrafloww.github.io/rasteret/explanation/benchmark/index.md)
+- [Correctness Contract](https://terrafloww.github.io/rasteret/explanation/correctness/index.md)
+- [Design Decisions](https://terrafloww.github.io/rasteret/explanation/design-decisions/index.md)
+- [Ecosystem Comparison](https://terrafloww.github.io/rasteret/explanation/interop/index.md)
+- [Schema Contract](https://terrafloww.github.io/rasteret/explanation/schema-contract/index.md)
+

@@ -1,0 +1,413 @@
+/* ── Brand colours (light mode) ────────────────────────────────── */
+
+:root {
+  --md-primary-fg-color: #009DD1;
+  --md-primary-fg-color--light: #38bdf8;
+  --md-primary-fg-color--dark: #0c4a6e;
+
+  --md-accent-fg-color: #007a8a;
+  --md-accent-fg-color--transparent: rgba(0, 122, 138, 0.1);
+}
+
+/* ── Dark mode - softer blues, warm neutral background ─────────── */
+
+[data-md-color-scheme="slate"] {
+  /* Warm neutral dark background */
+  --md-default-bg-color: #1c1c1c;
+  --md-default-bg-color--light: #242424;
+  --md-default-bg-color--lighter: #2e2e2e;
+
+  /* Softer off-white text */
+  --md-default-fg-color: #d4d4d8;
+  --md-default-fg-color--light: #a1a1aa;
+  --md-default-fg-color--lighter: #71717a;
+  --md-default-fg-color--lightest: #3f3f46;
+
+  /* Muted brand blue for header */
+  --md-primary-fg-color: #0c4a6e;
+  --md-primary-fg-color--light: #7cc4e8;
+
+  /* Soft sky-blue accent - on-brand, easy on eyes */
+  --md-accent-fg-color: #7cc4e8;
+  --md-accent-fg-color--transparent: rgba(124, 196, 232, 0.1);
+
+  /* Link color */
+  --md-typeset-a-color: #7cc4e8;
+
+  /* Code block backgrounds */
+  --md-code-bg-color: #141414;
+  --md-code-fg-color: #d4d4d8;
+  --md-code-hl-color: rgba(124, 196, 232, 0.12);
+}
+
+/* ── Header - light mode: white so brand logo is visible ─────── */
+
+.md-header {
+  background-color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  color: #1a1a1a;
+}
+
+.md-header[data-md-state="shadow"] {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.md-header__title {
+  color: #1a1a1a;
+}
+
+.md-header__button {
+  color: #555555;
+}
+
+.md-header__button:hover {
+  color: #009DD1;
+}
+
+.md-header .md-header__topic {
+  color: #1a1a1a;
+}
+
+/* Tabs bar - light neutral bg */
+.md-tabs {
+  background-color: #fafafa;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.md-tabs__link {
+  color: #555555;
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  color: #009DD1;
+}
+
+/* Search bar on white header */
+.md-search__input {
+  background-color: #f0f0f0;
+  color: #333333;
+}
+
+.md-search__input::placeholder {
+  color: #999999;
+}
+
+/* Version badge if present */
+.md-header .md-header__button.md-version {
+  color: #555555;
+}
+
+/* ── Header - dark mode ──────────────────────────────────────── */
+
+[data-md-color-scheme="slate"] .md-header {
+  background-color: #1a1a1a;
+  border-bottom: 1px solid #2e2e2e;
+  box-shadow: none;
+  color: #d4d4d8;
+}
+
+[data-md-color-scheme="slate"] .md-header__title,
+[data-md-color-scheme="slate"] .md-header .md-header__topic {
+  color: #d4d4d8;
+}
+
+[data-md-color-scheme="slate"] .md-header__button {
+  color: #a1a1aa;
+}
+
+[data-md-color-scheme="slate"] .md-header__button:hover {
+  color: #7cc4e8;
+}
+
+[data-md-color-scheme="slate"] .md-tabs {
+  background-color: #1a1a1a;
+  border-bottom: 1px solid #2e2e2e;
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link {
+  color: #a1a1aa;
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link--active,
+[data-md-color-scheme="slate"] .md-tabs__link:hover {
+  color: #7cc4e8;
+}
+
+/* ── Logo swap: dark logo (light text) on dark backgrounds ───── */
+
+[data-md-color-scheme="slate"] .md-header__button.md-logo img,
+[data-md-color-scheme="slate"] .md-header__button.md-logo svg {
+  content: url("../assets/logo-dark.svg");
+}
+
+/* ── Typography ───────────────────────────────────────────────── */
+
+.md-typeset h1 {
+  font-weight: 700;
+  color: var(--md-primary-fg-color--dark);
+}
+
+[data-md-color-scheme="slate"] .md-typeset h1 {
+  color: #e0e0e0;
+}
+
+.md-typeset h2 {
+  font-weight: 600;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+  padding-bottom: 0.3em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  color: #c8c8c8;
+}
+
+.md-typeset h3 {
+  font-weight: 600;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h3 {
+  color: #b8b8b8;
+}
+
+.md-typeset p {
+  line-height: 1.7;
+}
+
+/* ── Links - soft blue in dark mode ───────────────────────────── */
+
+[data-md-color-scheme="slate"] .md-typeset a {
+  color: #7cc4e8;
+}
+
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: #a8d8f0;
+}
+
+/* ── Code blocks ──────────────────────────────────────────────── */
+
+.md-typeset pre > code {
+  border-radius: 6px;
+  font-size: 0.82em;
+}
+
+.md-typeset code {
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.85em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset code {
+  background-color: #252525;
+  color: #8ecfea;
+}
+
+[data-md-color-scheme="slate"] .md-typeset pre > code {
+  background-color: #141414;
+  color: #d4d4d8;
+}
+
+/* ── API reference - function signatures, cross-ref links ────── */
+
+/* Function/class signature blocks */
+.md-typeset .doc-heading code {
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+/* Cross-reference links in signatures (autorefs) */
+.md-typeset .doc-signature a,
+.md-typeset .doc-object a.autorefs {
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.md-typeset .doc-signature a:hover,
+.md-typeset .doc-object a.autorefs:hover {
+  border-bottom-style: solid;
+}
+
+/* Source code toggle */
+.md-typeset details.quote {
+  border-left-color: var(--md-accent-fg-color);
+}
+
+/* Object labels (func, class, attr, etc.) */
+.md-typeset .doc-label {
+  border-radius: 3px;
+  font-size: 0.7em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Parameter lists */
+.md-typeset .doc-md-description {
+  font-size: 0.88em;
+}
+
+/* ── Admonitions ──────────────────────────────────────────────── */
+
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: var(--md-accent-fg-color);
+}
+
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary {
+  background-color: var(--md-accent-fg-color--transparent);
+}
+
+/* ── Tables ───────────────────────────────────────────────────── */
+
+.md-typeset table:not([class]) {
+  font-size: 0.82rem;
+  border-collapse: collapse;
+}
+
+.md-typeset table:not([class]) th {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+.md-typeset table:not([class]) td,
+.md-typeset table:not([class]) th {
+  padding: 0.6em 1em;
+}
+
+.md-typeset table:not([class]) tbody tr:nth-child(even) {
+  background-color: var(--md-default-bg-color--light);
+}
+
+[data-md-color-scheme="slate"] .md-typeset table a {
+  color: #7cc4e8;
+}
+
+/* ── Navigation sidebar ───────────────────────────────────────── */
+
+.md-nav__link {
+  font-size: 0.72rem;
+}
+
+/* Section headers in sidebar */
+.md-nav__item--nested > .md-nav__link {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+}
+
+/* Active item */
+.md-nav__item--active > .md-nav__link {
+  font-weight: 600;
+}
+
+[data-md-color-scheme="slate"] .md-nav__item--active > .md-nav__link {
+  color: #7cc4e8;
+}
+
+/* Muted non-active sidebar links in dark mode */
+[data-md-color-scheme="slate"] .md-nav__link {
+  color: #a1a1aa;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link:hover {
+  color: #d4d4d8;
+}
+
+/* Section labels in dark mode */
+[data-md-color-scheme="slate"] .md-nav__item--nested > .md-nav__link {
+  color: #71717a;
+}
+
+/* ── Footer ───────────────────────────────────────────────────── */
+
+.md-footer {
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* ── Grid cards (landing page) ────────────────────────────────── */
+
+.md-typeset .grid.cards > ul > li {
+  border-radius: 8px;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li {
+  border-color: #3f3f46;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  border-color: #52525b;
+}
+
+/* ── Content width - wider centre, tighter sidebars ──────────── */
+
+@media screen and (min-width: 76.25em) {
+  .md-grid {
+    max-width: 1660px;
+  }
+}
+
+@media screen and (min-width: 60em) {
+  /* Narrower left nav sidebar (default 12.1rem) */
+  .md-sidebar--primary {
+    width: 11rem;
+  }
+  /* Narrower right TOC sidebar (default 12.1rem) */
+  .md-sidebar--secondary {
+    width: 11rem;
+  }
+}
+
+/* ── Search bar in dark mode ──────────────────────────────────── */
+
+[data-md-color-scheme="slate"] .md-search__input {
+  background-color: #252525;
+  color: #d4d4d8;
+}
+
+[data-md-color-scheme="slate"] .md-search__input::placeholder {
+  color: #71717a;
+}
+
+/* ── Jupyter notebooks - dark-mode override ──────────────────── */
+/* mkdocs-jupyter uses theme: light by default.  Override the
+   JupyterLab CSS variables when the Material dark scheme is active
+   so notebooks match the rest of the site in dark mode.           */
+
+[data-md-color-scheme="slate"] .jupyter-wrapper {
+  --jp-layout-color0: #1c1c1c;
+  --jp-layout-color1: #242424;
+  --jp-layout-color2: #2e2e2e;
+  --jp-content-font-color0: #d4d4d8;
+  --jp-content-font-color1: #a1a1aa;
+  --jp-cell-editor-background: #141414;
+  --jp-cell-editor-border-color: #3f3f46;
+  --jp-mirror-editor-variable-color: #d4d4d8;
+}
+
+[data-md-color-scheme="slate"] .jupyter-wrapper .jp-Cell {
+  background-color: var(--jp-layout-color0);
+}
+
+[data-md-color-scheme="slate"] .jupyter-wrapper .jp-InputArea-editor {
+  background-color: var(--jp-cell-editor-background);
+  border-color: var(--jp-cell-editor-border-color);
+}
+
+[data-md-color-scheme="slate"] .jupyter-wrapper .jp-OutputArea-output pre {
+  color: var(--jp-content-font-color0);
+}
+
+[data-md-color-scheme="slate"] .jupyter-wrapper .jp-MarkdownOutput {
+  color: var(--jp-content-font-color0);
+}
