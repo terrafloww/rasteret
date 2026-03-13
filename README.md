@@ -2,8 +2,13 @@
 
 <p align="center">
   <strong>Made to beat cold starts.</strong><br>
-  Index-first access to cloud-native GeoTIFF collections for ML and analysis.
 </p>
+<p align="center">
+Rasteret is a Python library for fast reads of geospatial imagery. 10x to 20x faster than Rasterio/GDAL <br>
+It stops repeated TIFF header parsing and cold-start overhead for ML and geospatial analysis, which you pay everytime in other tools<br>
+It interops with STAC, GeoParquet, TorchGeo, xarray, NumPy and any Arrow compatible tool like DuckDB, Polars etc.<br>
+</p>
+.
 
 <p align="center">
   <a href="https://terrafloww.github.io/rasteret"><img src="https://img.shields.io/badge/docs-terrafloww.github.io%2Frasteret-009DD1" alt="Documentation"></a>
@@ -15,6 +20,7 @@
 
 ---
 
+
 Every cold start re-parses satellite image metadata over HTTP - per
 scene, per band. Sentinel-2, Landsat, NAIP, every time. Your colleague
 did it last Tuesday, CI did it overnight, PyTorch respawns DataLoader
@@ -25,24 +31,34 @@ Rasteret parses those headers **once**, caches them in Parquet, and its
 own reader fetches pixels concurrently with no GDAL in the path.
 **Up to 20x faster** on cold starts.
 
-Rasteret separates the workflow into two parts:
+Rasteret separates the runtime querying into two parts:
 
+- **Control plane**: Parquet metadata, cached COG headers, and user columns like labels or splits
+- **Data plane**: on-demand byte-range reads from the original GeoTIFF/COG objects
 - **Control plane**: Parquet metadata, cached COG headers, and user columns like labels or splits
 - **Data plane**: on-demand byte-range reads from the original GeoTIFF/COG objects
 
 Key Features -
-- **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
-- **20x faster, saves cloud LISTs and GETs** - Our custom I/O reads tiles fast with zero STAC/header overhead once a Collection is built
-- **Zero data downloads** - work with terabytes of imagery while storing only megabytes of metadata.
-- **No STAC at training time** - query once at setup; zero API calls during training with Collection you can extend.
-- **Reproducible** - same Parquet index = same records = same results
-- **Native dtypes** - integer imagery stays integer; missing/edge coverage is represented via fill values (nodata or 0) instead of NaNs
-- **Shareable cache** - enrich our Collection with your ML splits, patch geometries, custom data points for ML, and share it, don't write folders of image chips!
+- **Easy** - Use prebuilt dataset catalog just three lines to read GeoTIFFs into a TorchGeo dataset, Xarray, GeoDataFrame or Numpy arrays.
+- **Upto 20x faster, saves cloud LISTs and GETs** - Our custom I/O reads image tiles fast with zero STAC/header overhead once a Collection is built
+- **Zero data downloads** - work with terabytes of geosaptial imagery while storing only megabytes of metadata.
+- **No STAC at training time** - query once at collection setup; zero API calls during ML training.
+- **Shareable Reproducible cache** - enrich the Collection with your ML splits, patch geometries, custom data points for ML, and share it, don't write folders of image chips!
 
-Rasteret is an **opt-in accelerator** that integrates with TorchGeo by
-returning a standard `GeoDataset`. Your samplers, DataLoader, xarray
-workflows, and analysis tools stay the same - Rasteret handles the async
-tile I/O underneath.
+---
+
+#### Read performance for on Landsat 9 data
+
+Run on AWS small machine t3.xlarge (4 vCPU) —
+Processing pipeline: 650 acres Polygon input, Filter 450,000 scenes -> 22 matches -> Read 44 COG files pixels -> Compute NDVI graph
+
+| Library | First Run | Subsequent Runs |
+|---------|-----------|-----------------|
+| **Rasterio** + Python Multiprocess | 32 s | 24 s |
+| **Rasteret** | 3 s | 3 s |
+| **Google Earth Engine** | 10–30 s | 3–5 s |
+
+![Single request performance](./assets/single_timeseries_request.png)
 
 ---
 
@@ -80,7 +96,7 @@ See [Getting Started](https://terrafloww.github.io/rasteret/getting-started/) fo
 
 ## Built-in datasets
 
-Rasteret ships with a growing catalog of datasets.
+Rasteret ships with a growing catalog of datasets for ease of getting started.
 Each entry includes license metadata and a `commercial_use` flag for quick
 filtering.
 
@@ -105,26 +121,19 @@ pc/usda-cdl                 USDA Cropland Data Layer                   conus    
 
 
 ## Use your own datasets
-- Use `build_from_stac()` for any STAC API
-- Use `build_from_table()` for Parquet files that already contain GeoTIFF/COG URLs
+- Use `build_from_stac()` for any STAC API you want to query and cache as Rasteret Collection
+- Use `build_from_table()` for Parquet files that already contain GeoTIFF/COG URLs inside them, see [tutorial](https://terrafloww.github.io/rasteret/tutorials/06_non_stac_cog_collections/) 
 
 You can also build collections using CLI `rasteret collections build` read more details [here](https://terrafloww.github.io/rasteret/how-to/collection-management/)
 
-[Here's a guide to add a dataset to rasteret's catalog](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#add-your-own-catalog-entries-advanced)
-so everyone benefits. The catalog is open to edit by anyone and will be community-driven.
-
-Each new dataset entry is around ~20 lines of Python pointing to a STAC source or a Parquet source.
-One PR adds a dataset, every rasteret user sees it in `rasteret datasets list` on the next release of rasteret.
-
----
 
 ## Quick start
-
 ### Build a Collection
 
 ```python
 import rasteret
 
+# build_from_stac(), #build_from_table() for your own datasets
 collection = rasteret.build(
     "earthsearch/sentinel-2-l2a",
     name="s2_training",
@@ -132,9 +141,6 @@ collection = rasteret.build(
     date_range=("2024-01-01", "2024-06-30"),
 )
 ```
-
-`build()` picks the dataset from the catalog, parses COG headers, and caches
-everything as Parquet. The next run loads in milliseconds.
 
 ### Inspect and filter
 
@@ -149,9 +155,7 @@ filtered = collection.subset(cloud_cover_lt=15, date_range=("2024-03-01", "2024-
 ```
 
 `subset()` accepts `cloud_cover_lt`, `date_range`, `bbox`, `geometries`,
-`split`, and `split_column` (when your split field uses a custom name).
-Use `collection.where(expr)` when you need an Arrow predicate on custom
-metadata columns.
+`split`, and `split_column` 
 
 ### ML training (TorchGeo)
 
@@ -189,44 +193,19 @@ arr = collection.get_numpy(
 # shape: [N, C, H, W] for multi-band, [N, H, W] for single-band
 ```
 
-<details>
 <summary><strong>Going further</strong></summary>
 
 | What | Where |
 |---|---|
-| Datasets not in the catalog | [`build_from_stac()`](https://terrafloww.github.io/rasteret/how-to/collection-management/) |
-| Parquet with COG URLs (Source Cooperative, STAC GeoParquet, custom) | [`build_from_table(path, name=...)`](https://terrafloww.github.io/rasteret/how-to/build-from-parquet/) |
+| STAC APIs not in the catalog | [`build_from_stac()`](https://terrafloww.github.io/rasteret/how-to/collection-management/) |
+| Parquet with COG URLs in them (Source Cooperative, STAC GeoParquet, custom) | [`build_from_table(path, name=...)`](https://terrafloww.github.io/rasteret/how-to/build-from-parquet/) |
 | Multi-band COGs (AEF embeddings, etc.) | [AEF Embeddings guide](https://terrafloww.github.io/rasteret/how-to/aef-embeddings/) |
 | Authenticated sources (PC, requester-pays, Earthdata, etc.) | [Custom Cloud Provider](https://terrafloww.github.io/rasteret/how-to/custom-cloud-provider/) |
 | Share a Collection | `collection.export("path/")` then `rasteret.load("path/")` |
-| Filter by cloud cover, date, bbox | [`collection.subset()`](https://terrafloww.github.io/rasteret/how-to/collection-management/) |
-
-</details>
 
 ---
 
 ## Benchmarks
-
-<details>
-<summary><strong>Single request performance (time series query)</strong></summary>
-
-### Single request performance
-
-Processing pipeline: Filter 450,000 scenes -> 22 matches -> Read 44 COG files
-
-![Single request performance](./assets/single_timeseries_request.png)
-
-#### Single Farm NDVI Time Series (1 Year, Landsat 9)
-
-Run on AWS t3.xlarge (4 CPU) —
-
-| Library | First Run | Subsequent Runs |
-|---------|-----------|-----------------|
-| **Rasterio** (Multiprocessing) | 32 s | 24 s |
-| **Rasteret** | 3 s | 3 s |
-| **Google Earth Engine** | 10–30 s | 3–5 s |
-
-</details>
 
 ### Cold-start comparison with TorchGeo
 
@@ -240,7 +219,7 @@ recommended GDAL settings for best-case remote COG performance.
 | Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **19x** |
 | Cross-CRS boundary, 12 scenes | 12.47 s | 0.59 s | **21x** |
 
-The difference comes from how headers are accessed: the rasterio/GDAL
+The speed difference comes from how headers are accessed and Rasteret's custom I/O engine. rasterio/GDAL
 path re-parses IFDs over HTTP on each cold start, while Rasteret reads
 them from a local Parquet cache. See
 [Benchmarks](https://terrafloww.github.io/rasteret/explanation/benchmark/)
@@ -249,13 +228,19 @@ for full methodology.
 ![Processing time comparison](./assets/benchmark_results.png)
 ![Speedup breakdown](./assets/benchmark_breakdown.png)
 
-### HuggingFace Major-TOMCore 'images-in-parquet' vs Rasteret
+### HuggingFace Major-TOMCore 'images-inside-parquet' dataset vs Rasteret
 
-Baseline method: `datasets.load_dataset(..., streaming=True, filters=...)` with
-local GeoTIFF decode, compared against Rasteret prebuilt index reads.
+There have been attempts to put 'patches' of geotiff imagery inside Parquet files instead of using COGs, and in ML training or Inference read these Parquet files at runtime, one such popular dataset is 'MajorTOM SentinelL2A' in HuggingFace.
+
+Rasteret and its parquet based Collection metadata means you can create such patches in the parquet and use Rasteret's I/O to read those patches as needed. 
+You can create H3 or A5 indices based cell patches, or regular grids as you wish. All before touching pixels in COGs, and not having to actually move images inside Parquet.
+
+Rasteret beats reading 'images-inside-parquet' datasets while giving you freedom to create any kind of patching you wish at metadata level.
+
+Baseline method HF library: `datasets.load_dataset(..., streaming=True, filters=...)` , compared against Rasteret prebuilt index reads.
 Reproduce with `examples/major_tom_benchmark/03_hf_vs_rasteret_benchmark.py`.
 
-| Patches | HF `datasets` (streaming) | Rasteret index+COG | Speedup |
+| Patches | HF `datasets` (streaming) | Rasteret index+COGs | Speedup |
 |---:|---:|---:|---:|
 | 120 | 46.83 s | 12.09 s | **3.88x** |
 | 1000 | 771.59 s | 118.69 s | **6.50x** |
@@ -263,9 +248,6 @@ Reproduce with `examples/major_tom_benchmark/03_hf_vs_rasteret_benchmark.py`.
 ![HF vs Rasteret processing time](./assets/benchmark_hf_results.png)
 ![HF vs Rasteret speedup](./assets/benchmark_hf_speedup.png)
 
-For exploration workflows, Major TOM notebooks often use HF streaming
-generators; Rasteret is optimized for reading the same patches directly from
-source COGs using an index-first cache.
 
 Notebook: [`05_torchgeo_comparison.ipynb`](docs/tutorials/05_torchgeo_comparison.ipynb)
 
