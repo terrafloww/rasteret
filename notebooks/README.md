@@ -1,7 +1,7 @@
 # Notebooks
 
-This folder is a **01-06 series** intended for humans (and AI agents) who want to learn Rasteret
-progressively. Notebooks 01-04 and 06 are tutorials; notebook 05 is a benchmark
+This folder is a **01-07 series** intended for humans (and AI agents) who want to learn Rasteret
+progressively. Notebooks 01-04, 06, and 07 are tutorials; notebook 05 is a benchmark
 that lives under **Explanation** in the docs.
 
 Notebooks are designed to:
@@ -26,6 +26,8 @@ Prerequisites:
 | 04 | `04_custom_cloud_and_bands.ipynb` | `CloudConfig.register()`, `BandRegistry.register()`, `ObstoreBackend` |
 | 05 | `05_torchgeo_comparison.ipynb` | **Benchmark** (Explanation section in docs): side-by-side standard TorchGeo vs Rasteret-accelerated workflow |
 | 06 | `06_non_stac_cog_collections.ipynb` | Building from Parquet: `build_from_table()` with Source Cooperative Maxar data, DuckDB exploration, export/share |
+| 07 | `07_aef_similarity_search.ipynb` | Similarity search notebook derived from GeoPython and GEE community tutorials, uses HuggingFace published Rasteret AEF collection |
+| 08 | `08_aef_fire_lancedb_torchgeo.ipynb` | AEF fire-patch retrieval with `sample_points()`, `to_torchgeo_dataset()`, using arrow compatible tools LanceDB, Lonboard for viz and Source Coop published Rasteret AEF collection |
 
 ## Running
 
