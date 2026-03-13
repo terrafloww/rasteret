@@ -25,12 +25,10 @@ Rasteret parses those headers **once**, caches them in Parquet, and its
 own reader fetches pixels concurrently with no GDAL in the path.
 **Up to 20x faster** on cold starts.
 
-Rasteret calls this pattern **index-first geospatial retrieval**:
+Rasteret separates the workflow into two parts:
 
-- **Control plane**: a queryable Parquet index (scene metadata, COG header metadata, user columns like splits/labels)
-- **Data plane**: on-demand tile reads from the original GeoTIFF/COG objects
-
-This keeps metadata and experiment logic in tables while leaving imagery bytes in source COGs.
+- **Control plane**: Parquet metadata, cached COG headers, and user columns like labels or splits
+- **Data plane**: on-demand byte-range reads from the original GeoTIFF/COG objects
 
 Key Features -
 - **Easy** - three lines from STAC search or Parquet file to a TorchGeo-compatible dataset
@@ -108,14 +106,14 @@ pc/usda-cdl                 USDA Cropland Data Layer                   conus    
 
 ## Use your own datasets
 - Use `build_from_stac()` for any STAC API
-- Use `build_from_table()` for Parquets that have TIFF URLs in them (eg., SourceCoop AlphaEarth index parquet)
+- Use `build_from_table()` for Parquet files that already contain GeoTIFF/COG URLs
 
 You can also build collections using CLI `rasteret collections build` read more details [here](https://terrafloww.github.io/rasteret/how-to/collection-management/)
 
 [Here's a guide to add a dataset to rasteret's catalog](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#add-your-own-catalog-entries-advanced)
 so everyone benefits. The catalog is open to edit by anyone and will be community-driven.
 
-Each new dataset entry is around ~20 lines of Python pointing to a STAC API or a GeoParquet file.
+Each new dataset entry is around ~20 lines of Python pointing to a STAC source or a Parquet source.
 One PR adds a dataset, every rasteret user sees it in `rasteret datasets list` on the next release of rasteret.
 
 ---
@@ -135,8 +133,7 @@ collection = rasteret.build(
 )
 ```
 
-`build()` picks the dataset from the catalog (backed by a STAC API or a
-GeoParquet file, depending on the entry), parses COG headers, and caches
+`build()` picks the dataset from the catalog, parses COG headers, and caches
 everything as Parquet. The next run loads in milliseconds.
 
 ### Inspect and filter
@@ -153,7 +150,8 @@ filtered = collection.subset(cloud_cover_lt=15, date_range=("2024-03-01", "2024-
 
 `subset()` accepts `cloud_cover_lt`, `date_range`, `bbox`, `geometries`,
 `split`, and `split_column` (when your split field uses a custom name).
-For raw Arrow expressions, use `collection.where(expr)`.
+Use `collection.where(expr)` when you need an Arrow predicate on custom
+metadata columns.
 
 ### ML training (TorchGeo)
 
@@ -191,23 +189,6 @@ arr = collection.get_numpy(
 # shape: [N, C, H, W] for multi-band, [N, H, W] for single-band
 ```
 
-### Point sampling
-
-```python
-from shapely.geometry import Point
-
-samples = collection.sample_points(
-    points=[Point(77.56, 13.03), Point(77.57, 13.04)],
-    bands=["B04", "B08"],
-    geometry_crs=4326,
-)
-# PyArrow Table — one row per (point, band, record)
-```
-
-Reads only the tiles containing your points. Works with Shapely points,
-or pass a PyArrow table with coordinate columns for millions of points.
-No extras needed — available in the base install.
-
 <details>
 <summary><strong>Going further</strong></summary>
 
@@ -215,7 +196,6 @@ No extras needed — available in the base install.
 |---|---|
 | Datasets not in the catalog | [`build_from_stac()`](https://terrafloww.github.io/rasteret/how-to/collection-management/) |
 | Parquet with COG URLs (Source Cooperative, STAC GeoParquet, custom) | [`build_from_table(path, name=...)`](https://terrafloww.github.io/rasteret/how-to/build-from-parquet/) |
-| Sample values at many points (Arrow-native) | [`sample_points()`](https://terrafloww.github.io/rasteret/how-to/point-sampling-and-masking/) |
 | Multi-band COGs (AEF embeddings, etc.) | [AEF Embeddings guide](https://terrafloww.github.io/rasteret/how-to/aef-embeddings/) |
 | Authenticated sources (PC, requester-pays, Earthdata, etc.) | [Custom Cloud Provider](https://terrafloww.github.io/rasteret/how-to/custom-cloud-provider/) |
 | Share a Collection | `collection.export("path/")` then `rasteret.load("path/")` |
@@ -269,10 +249,7 @@ for full methodology.
 ![Processing time comparison](./assets/benchmark_results.png)
 ![Speedup breakdown](./assets/benchmark_breakdown.png)
 
-<details>
-<summary><strong>HF baseline (payload-Parquet patches)</strong></summary>
-
-### HF `datasets` baseline (Major TOM keyed patches)
+### HuggingFace Major-TOMCore 'images-in-parquet' vs Rasteret
 
 Baseline method: `datasets.load_dataset(..., streaming=True, filters=...)` with
 local GeoTIFF decode, compared against Rasteret prebuilt index reads.
@@ -300,7 +277,6 @@ Notebook: [`05_torchgeo_comparison.ipynb`](docs/tutorials/05_torchgeo_comparison
 > [GitHub Discussions](https://github.com/terrafloww/rasteret/discussions/categories/show-and-tell)
 > or [Discord](https://discord.gg/V5vvuEBc).
 
-</details>
 
 ---
 
