@@ -1,6 +1,6 @@
 # Rasteret
 
-Rasteret is a Python library for 20x faster reads of GeoTIFF than Rasterio/GDAL
+Rasteret is a Python library for 20x+ faster reads of GeoTIFF than Rasterio/GDAL
 ---
 
 !!! failure "The cold-start tax"

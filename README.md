@@ -4,7 +4,7 @@
   <strong>Made to beat cold starts.</strong><br>
 </p>
 <p align="center">
-Rasteret is a Python library for 20x faster reads of GeoTIFF than Rasterio/GDAL <br>
+Rasteret is a Python library for 20x+ faster reads of GeoTIFF than Rasterio/GDAL <br>
 It interops with STAC, GeoParquet, TorchGeo, xarray, NumPy and any Arrow compatible tool like DuckDB, Polars<br>
 </p>
 
