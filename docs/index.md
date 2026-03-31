@@ -1,6 +1,6 @@
 # Rasteret
 
-**Made to beat cold starts.** Rasteret is a Python library for fast reads of geospatial imagery. Upto 20x faster than Rasterio/GDAL<br>
+Rasteret is a Python library for 20x faster reads of GeoTIFF than Rasterio/GDAL
 ---
 
 !!! failure "The cold-start tax"
