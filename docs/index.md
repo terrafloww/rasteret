@@ -1,15 +1,14 @@
 # Rasteret
 
-**Made to beat cold starts.** Index-first access to cloud-native GeoTIFF collections for ML and geospatial analysis.
-
+**Made to beat cold starts.** Rasteret is a Python library for fast reads of geospatial imagery. Upto 20x faster than Rasterio/GDAL<br>
 ---
 
 !!! failure "The cold-start tax"
 
-    Your colleague read those Sentinel-2 scenes last Tuesday. The tools
-    re-parsed every file header over HTTP - per scene, per band. So did CI.
-    So did the intern's notebook. PyTorch respawns DataLoader workers every
-    epoch, so your own training run re-parses them hundreds of times over.
+    Your colleague read those Sentinel-2 scenes last Tuesday. Rasterio/GDAL
+    re-parsed every TIFF metadata - per scene, per band. Even in CI.
+    In the intern's notebook. PyTorch respawns DataLoader workers every
+    epoch, so your ML training run re-parses TIFF metadata hundreds of times over.
 
     A single project repeats **millions of redundant requests** across a
     team - zero pixels delivered.
@@ -21,10 +20,10 @@
 
     ```text
     STAC API / GeoParquet  -->  Parquet Index  -->  Tile-level byte reads
-           (once)                 (queryable)          (no GDAL, no headers)
+           (once)                 (queryable)          (no GDAL, custom I/O)
     ```
 
-!!! info "Category: index-first geospatial retrieval"
+!!! info "Category: index-first geospatial image retrieval"
 
     Rasteret treats Parquet as the **control plane** (scene metadata + COG
     header metadata + user-enriched columns), and COG object storage as the
