@@ -19,12 +19,12 @@ from rasteret.core.point_sample_helpers import (
     candidate_values_from_tile_cache,
     chebyshev_ring_offsets,
     nodata_mask,
-    plan_point_tile_groups,
     pixel_rect_distance_sq,
+    plan_point_tile_groups,
     ring_candidate_grid,
     square_neighborhood_offsets,
-    tile_request_specs_for_pairs,
     tile_grid_shape,
+    tile_request_specs_for_pairs,
     unique_tile_pairs_for_candidates,
 )
 from rasteret.core.utils import normalize_transform
@@ -531,7 +531,12 @@ class RasterAccessor:
                         return
 
                     extra_requests: list[COGTileRequest] = []
-                    for tile_row, tile_col, offset, size in tile_request_specs_for_pairs(
+                    for (
+                        tile_row,
+                        tile_col,
+                        offset,
+                        size,
+                    ) in tile_request_specs_for_pairs(
                         unique_tile_pairs,
                         source_meta.tile_offsets,
                         source_meta.tile_byte_counts,
@@ -556,7 +561,11 @@ class RasterAccessor:
                         return
 
                     extra_map = await shared_reader.read_merged_tiles(extra_requests)
-                    for (tile_row, tile_col, band_index), tile_data in extra_map.items():
+                    for (
+                        tile_row,
+                        tile_col,
+                        band_index,
+                    ), tile_data in extra_map.items():
                         if band_index != source_band_index:
                             continue
                         tile_cache[(tile_row, tile_col)] = tile_data
@@ -590,7 +599,12 @@ class RasterAccessor:
                             tile_height=int(source_meta.tile_height),
                         )
 
-                        for tile_row, tile_col, offset, size in tile_request_specs_for_pairs(
+                        for (
+                            tile_row,
+                            tile_col,
+                            offset,
+                            size,
+                        ) in tile_request_specs_for_pairs(
                             batch,
                             tile_offsets,
                             tile_byte_counts,
@@ -627,7 +641,9 @@ class RasterAccessor:
                                 missing_band = True
                                 break
                             tile_arrays.append(tile_data)
-                            source_tile_cache[source_idx][(tile_row, tile_col)] = tile_data
+                            source_tile_cache[source_idx][(tile_row, tile_col)] = (
+                                tile_data
+                            )
                         if missing_band or not tile_arrays:
                             continue
 
@@ -699,13 +715,15 @@ class RasterAccessor:
                                 continue
 
                             unresolved_indices = np.nonzero(unresolved)[0]
-                            candidate_rows, candidate_cols, in_bounds = ring_candidate_grid(
-                                point_rows[unresolved_indices],
-                                point_cols[unresolved_indices],
-                                row_offsets,
-                                col_offsets,
-                                raster_height=raster_height,
-                                raster_width=raster_width,
+                            candidate_rows, candidate_cols, in_bounds = (
+                                ring_candidate_grid(
+                                    point_rows[unresolved_indices],
+                                    point_cols[unresolved_indices],
+                                    row_offsets,
+                                    col_offsets,
+                                    raster_height=raster_height,
+                                    raster_width=raster_width,
+                                )
                             )
                             if not np.any(in_bounds):
                                 continue
@@ -721,14 +739,16 @@ class RasterAccessor:
                                 tiles_y=tiles_y,
                             )
 
-                            candidate_values, candidate_sampled = candidate_values_from_tile_cache(
-                                candidate_rows,
-                                candidate_cols,
-                                in_bounds,
-                                tile_cache=tile_cache,
-                                tile_height=tile_height,
-                                tile_width=tile_width,
-                                tiles_x=tiles_x,
+                            candidate_values, candidate_sampled = (
+                                candidate_values_from_tile_cache(
+                                    candidate_rows,
+                                    candidate_cols,
+                                    in_bounds,
+                                    tile_cache=tile_cache,
+                                    tile_height=tile_height,
+                                    tile_width=tile_width,
+                                    tiles_x=tiles_x,
+                                )
                             )
                             valid_candidates = candidate_sampled & ~nodata_mask(
                                 candidate_values, nodata_value
@@ -744,7 +764,9 @@ class RasterAccessor:
                                 pixel_width=pixel_width,
                                 pixel_height=pixel_height,
                             )
-                            distance_sq = np.where(valid_candidates, distance_sq, np.inf)
+                            distance_sq = np.where(
+                                valid_candidates, distance_sq, np.inf
+                            )
                             best_offset = np.argmin(distance_sq, axis=1)
                             best_distance_sq = distance_sq[
                                 np.arange(unresolved_indices.size),
@@ -756,17 +778,21 @@ class RasterAccessor:
 
                             accepted_indices = unresolved_indices[resolved_here]
                             accepted_offsets = best_offset[resolved_here]
-                            source_values[source_idx][accepted_indices] = candidate_values[
-                                resolved_here,
-                                accepted_offsets,
-                            ]
+                            source_values[source_idx][accepted_indices] = (
+                                candidate_values[
+                                    resolved_here,
+                                    accepted_offsets,
+                                ]
+                            )
                             unresolved[accepted_indices] = False
 
                 if return_neighbourhood:
                     assert neighborhood_row_offsets is not None
                     assert neighborhood_col_offsets is not None
                     for source_idx, source in enumerate(source_group):
-                        local_point_indices = np.nonzero(source_sampled_masks[source_idx])[0]
+                        local_point_indices = np.nonzero(
+                            source_sampled_masks[source_idx]
+                        )[0]
                         if local_point_indices.size == 0:
                             continue
 
@@ -825,7 +851,9 @@ class RasterAccessor:
 
                 # Phase 4: build Arrow record batches: one row per (point, band).
                 for source_idx, source in enumerate(source_group):
-                    local_point_indices = np.nonzero(source_sampled_masks[source_idx])[0]
+                    local_point_indices = np.nonzero(source_sampled_masks[source_idx])[
+                        0
+                    ]
                     if local_point_indices.size == 0:
                         continue
                     output_point_indices = (
@@ -847,7 +875,9 @@ class RasterAccessor:
                     )
                     point_crs_arr = _constant_int32_array(point_crs_value, row_count)
                     record_id_arr = _constant_string_array(str(self.id), row_count)
-                    datetime_arr = _constant_timestamp_array(record_datetime_us, row_count)
+                    datetime_arr = _constant_timestamp_array(
+                        record_datetime_us, row_count
+                    )
                     collection_arr = _constant_string_array(
                         str(self.collection), row_count
                     )
