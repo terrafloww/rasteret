@@ -109,6 +109,11 @@ def get_collection_point_samples(
             TypeError,
             pa.ArrowException,
         )
+        empty_samples = (
+            empty_point_samples_neighborhood_table
+            if return_neighbourhood
+            else empty_point_samples_table
+        )
 
         point_array = ensure_point_geoarrow(
             points,
@@ -125,7 +130,7 @@ def get_collection_point_samples(
         if point_bbox is not None:
             intersected_bbox = intersect_bbox(sample_filters.get("bbox"), point_bbox)
             if sample_filters.get("bbox") is not None and intersected_bbox is None:
-                return empty_point_samples_table()
+                return empty_samples()
             sample_filters["bbox"] = intersected_bbox or point_bbox
 
         selected_collection = (
@@ -272,7 +277,7 @@ def get_collection_point_samples(
                         break
 
             if not winners:
-                return empty_point_samples_table()
+                return empty_samples()
 
             points_by_raster: dict[int, set[int]] = {}
             bands_by_raster: dict[int, set[str]] = {}
@@ -299,7 +304,7 @@ def get_collection_point_samples(
             ) -> pa.Table:
                 subset = _subset_points(point_indices_needed)
                 if subset is None:
-                    return empty_point_samples_table()
+                    return empty_samples()
                 raster_points, point_indices = subset
                 sampled = _ensure_point_samples_table(
                     await raster.sample_points(

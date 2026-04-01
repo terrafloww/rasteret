@@ -421,7 +421,7 @@ def pixel_rect_distance_sq(
 def nodata_mask(values: np.ndarray, nodata: float | int | None) -> np.ndarray:
     """Return True where *values* should be treated as nodata."""
     if nodata is None:
-        return np.zeros(values.shape, dtype=bool)
+        return np.isnan(values)
     if isinstance(nodata, float) and np.isnan(nodata):
         return np.isnan(values)
-    return values == float(nodata)
+    return np.isnan(values) | (values == float(nodata))

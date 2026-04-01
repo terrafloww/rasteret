@@ -28,6 +28,7 @@ from rasteret.core.execution import (
 from rasteret.core.geometry import ensure_point_geoarrow as _ensure_point_geoarrow
 from rasteret.core.point_sampling import get_collection_point_samples
 from rasteret.core.utils import infer_data_source, run_sync
+from rasteret.types import POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
 
 
 class TestRunSync:
@@ -1132,6 +1133,77 @@ class TestRasterAccessorPointSampling:
         assert reader.calls == 1
 
     @pytest.mark.asyncio
+    async def test_sample_points_nan_fallback_without_nodata_metadata(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls += 1
+                tile = np.full((10, 10), np.nan, dtype=np.float32)
+                tile[5, 4] = 77.0
+                return {(req.row, req.col, req.band_index): tile for req in requests}
+
+        info = RasterInfo(
+            id="r-fallback-nan-no-nodata",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(5.5, 4.5))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("float32"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            nodata=None,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+                max_distance_pixels=1,
+            )
+
+        assert rows.num_rows == 1
+        assert rows.column("value").to_pylist() == [77.0]
+        assert reader.calls == 1
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("max_distance_pixels", "expected_value"),
         [(0, -9999.0), (1, -9999.0), (2, 42.0)],
@@ -1922,3 +1994,16 @@ class TestPointSampling:
         assert table.num_rows == 0
         assert "point_index" in table.schema.names
         assert "value" in table.schema.names
+
+    def test_get_collection_point_samples_empty_neighbourhood_preserves_schema(self):
+        collection = self._DummyCollection([])
+        table = get_collection_point_samples(
+            collection=collection,
+            points=pa.table({"lon": [1.0], "lat": [2.0]}),
+            bands=["B04"],
+            bbox=(100.0, 100.0, 101.0, 101.0),
+            return_neighbourhood=True,
+        )
+
+        assert table.num_rows == 0
+        assert table.schema == POINT_SAMPLES_NEIGHBORHOOD_SCHEMA

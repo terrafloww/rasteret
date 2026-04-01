@@ -41,18 +41,17 @@ POINT_SAMPLES_NEIGHBORHOOD_SCHEMA = POINT_SAMPLES_SCHEMA.append(
 
 def empty_point_samples_table() -> pa.Table:
     """Return an empty point-sampling table with stable schema."""
-    return pa.table(
-        {field.name: pa.array([], type=field.type) for field in POINT_SAMPLES_SCHEMA}
+    return pa.Table.from_arrays(
+        [pa.array([], type=field.type) for field in POINT_SAMPLES_SCHEMA],
+        schema=POINT_SAMPLES_SCHEMA,
     )
 
 
 def empty_point_samples_neighborhood_table() -> pa.Table:
     """Return an empty point-sampling table with neighborhood schema."""
-    return pa.table(
-        {
-            field.name: pa.array([], type=field.type)
-            for field in POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
-        }
+    return pa.Table.from_arrays(
+        [pa.array([], type=field.type) for field in POINT_SAMPLES_NEIGHBORHOOD_SCHEMA],
+        schema=POINT_SAMPLES_NEIGHBORHOOD_SCHEMA,
     )
 
 

@@ -679,8 +679,6 @@ class RasterAccessor:
                         source_meta = source["metadata"]
                         source_band_index = source["band_index"]
                         nodata_value = getattr(source_meta, "nodata", None)
-                        if nodata_value is None:
-                            continue
                         if (
                             source_meta.tile_offsets is None
                             or source_meta.tile_byte_counts is None
