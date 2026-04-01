@@ -13,47 +13,65 @@ import pyarrow.compute as pc
 from tqdm.asyncio import tqdm
 
 from rasteret.core.geometry import (
-    candidate_point_indices_for_raster,
     ensure_point_geoarrow,
     intersect_bbox,
+)
+from rasteret.core.point_sample_helpers import (
+    candidate_point_indices_for_raster,
     point_bounds_4326,
 )
 from rasteret.core.utils import infer_data_source, run_sync
 from rasteret.fetch.cog import COGReader
-from rasteret.types import POINT_SAMPLES_SCHEMA, empty_point_samples_table
+from rasteret.types import (
+    POINT_SAMPLES_NEIGHBORHOOD_SCHEMA,
+    POINT_SAMPLES_SCHEMA,
+    empty_point_samples_neighborhood_table,
+    empty_point_samples_table,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_point_samples_table(sampled: Any) -> pa.Table:
+def _ensure_point_samples_table(
+    sampled: Any, *, return_neighbourhood: bool = False
+) -> pa.Table:
     """Normalize internal point-sample results to a typed Arrow table."""
+    schema = (
+        POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
+        if return_neighbourhood
+        else POINT_SAMPLES_SCHEMA
+    )
+    empty_table = (
+        empty_point_samples_neighborhood_table
+        if return_neighbourhood
+        else empty_point_samples_table
+    )
+
     table: pa.Table
     if isinstance(sampled, pa.Table):
         table = sampled
     elif sampled is None:
-        return empty_point_samples_table()
+        return empty_table()
     elif isinstance(sampled, list):
         if not sampled:
-            return empty_point_samples_table()
+            return empty_table()
         table = pa.Table.from_pylist(sampled)
     else:
         raise TypeError(f"Unsupported point sample result type: {type(sampled)!r}")
 
     if table.num_rows == 0:
-        return empty_point_samples_table()
-    if table.schema == POINT_SAMPLES_SCHEMA:
+        return empty_table()
+    if table.schema == schema:
         return table
 
-    missing = [
-        name for name in POINT_SAMPLES_SCHEMA.names if name not in table.schema.names
-    ]
+    missing = [name for name in schema.names if name not in table.schema.names]
     if missing:
         raise ValueError(
             "Point sample table is missing required columns: "
             + ", ".join(sorted(missing))
         )
-    aligned = table.select(POINT_SAMPLES_SCHEMA.names)
-    return aligned.cast(POINT_SAMPLES_SCHEMA, safe=False)
+    aligned = table.select(schema.names)
+    return aligned.cast(schema, safe=False)
 
 
 def get_collection_point_samples(
@@ -70,6 +88,8 @@ def get_collection_point_samples(
     backend: object | None = None,
     geometry_crs: int | None = 4326,
     match: Literal["all", "latest"] = "all",
+    max_distance_pixels: int = 0,
+    return_neighbourhood: bool = False,
     **filters: Any,
 ) -> pa.Table:
     """Sample point values across matching records.
@@ -78,6 +98,8 @@ def get_collection_point_samples(
     """
     if match not in {"all", "latest"}:
         raise ValueError("match must be either 'all' or 'latest'")
+    if max_distance_pixels < 0:
+        raise ValueError("max_distance_pixels must be >= 0")
 
     async def _async_sample() -> pa.Table:
         expected_sample_errors: tuple[type[Exception], ...] = (
@@ -287,13 +309,20 @@ def get_collection_point_samples(
                         max_concurrent=max_concurrent,
                         reader=shared_reader,
                         geometry_crs=geometry_crs,
-                    )
+                        max_distance_pixels=max_distance_pixels,
+                        return_neighbourhood=return_neighbourhood,
+                    ),
+                    return_neighbourhood=return_neighbourhood,
                 )
                 if sampled.num_rows == 0:
                     return sampled
                 winner_keys = winner_keys_by_raster.get(raster_idx)
                 if winner_keys is None or len(winner_keys) == 0:
-                    return empty_point_samples_table()
+                    return (
+                        empty_point_samples_neighborhood_table()
+                        if return_neighbourhood
+                        else empty_point_samples_table()
+                    )
                 sampled_keys = pc.binary_join_element_wise(
                     pc.cast(sampled.column("point_index"), pa.string()),
                     sampled.column("band"),
@@ -416,7 +445,10 @@ def get_collection_point_samples(
                                     max_concurrent=max_concurrent,
                                     reader=shared_reader,
                                     geometry_crs=geometry_crs,
-                                )
+                                    max_distance_pixels=max_distance_pixels,
+                                    return_neighbourhood=return_neighbourhood,
+                                ),
+                                return_neighbourhood=return_neighbourhood,
                             )
                             _append_sample_table(sampled)
                         except expected_sample_errors as exc:
@@ -444,7 +476,10 @@ def get_collection_point_samples(
                                     max_concurrent=max_concurrent,
                                     reader=shared_reader,
                                     geometry_crs=geometry_crs,
-                                )
+                                    max_distance_pixels=max_distance_pixels,
+                                    return_neighbourhood=return_neighbourhood,
+                                ),
+                                return_neighbourhood=return_neighbourhood,
                             )
                             _append_sample_table(sampled)
                         except expected_sample_errors as exc:
@@ -473,8 +508,17 @@ def get_collection_point_samples(
                     f"'{record_id}': {first}"
                 )
                 raise ValueError(msg) from first
-            return empty_point_samples_table()
+            return (
+                empty_point_samples_neighborhood_table()
+                if return_neighbourhood
+                else empty_point_samples_table()
+            )
 
-        return pa.Table.from_batches(sample_batches, schema=POINT_SAMPLES_SCHEMA)
+        schema = (
+            POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
+            if return_neighbourhood
+            else POINT_SAMPLES_SCHEMA
+        )
+        return pa.Table.from_batches(sample_batches, schema=schema)
 
     return run_sync(_async_sample())

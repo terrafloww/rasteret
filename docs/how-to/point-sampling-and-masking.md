@@ -109,6 +109,7 @@ with `geometry_column="..."` (no conversion step required). For DuckDB, use
 - `point_index`, `point_x`, `point_y`, `point_crs`
 - `record_id`, `datetime`, `collection`, `cloud_cover`
 - `band`, `value`, `raster_crs`
+- optional `neighborhood_values` when `return_neighbourhood=True`
 
 This is intentionally Arrow-first, so you can keep processing in PyArrow, DuckDB, Polars, SedonaDB and geopandas.
 
@@ -116,6 +117,50 @@ This is intentionally Arrow-first, so you can keep processing in PyArrow, DuckDB
 
 - `match="all"`: keep all matching records per point/band (time series style).
 - `match="latest"`: keep only the latest datetime per `(point_index, band)`.
+
+### Nodata fallback (`max_distance_pixels`)
+
+By default, `sample_points()` returns the pixel under the point as-is:
+
+- If the nearest pixel under the point is valid, Rasteret returns it.
+- If the nearest pixel is nodata/NaN, Rasteret returns that nodata value unless
+  you opt into a fallback search.
+- With `max_distance_pixels > 0`, Rasteret searches outward in **square rings**
+  up to `max_distance_pixels` (measured in **Chebyshev distance**, i.e. ring 1 is
+  the 8-neighborhood around the center pixel).
+- Within the first ring that contains valid candidates, Rasteret picks the
+  candidate with minimum exact distance from the point to the candidate pixel
+  rectangle (map-space distance via pixel width/height).
+
+Set `max_distance_pixels=0` to disable fallback and return the nearest pixel
+value as-is (even if it is nodata).
+
+```python
+samples = collection.sample_points(
+    points=tbl,
+    x_column="lon",
+    y_column="lat",
+    bands=["B04"],
+    geometry_crs=4326,
+    max_distance_pixels=0,  # strict nearest-pixel value, no nodata search
+)
+```
+
+If you also want the searched neighborhood window itself, set
+`return_neighbourhood=True`. Rasteret will include a `neighborhood_values` list
+column in row-major order, centered on the base pixel under the point.
+
+```python
+samples = collection.sample_points(
+    points=tbl,
+    x_column="lon",
+    y_column="lat",
+    bands=["B04"],
+    geometry_crs=4326,
+    max_distance_pixels=1,   # 3x3 neighborhood
+    return_neighbourhood=True,
+)
+```
 
 ## Convenience inputs (quick scripts)
 

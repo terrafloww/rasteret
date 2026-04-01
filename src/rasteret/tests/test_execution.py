@@ -1059,6 +1059,471 @@ class TestRasterAccessorPointSampling:
         assert rows.column("value").to_pylist() == [11.0, 22.0]
 
     @pytest.mark.asyncio
+    async def test_sample_points_nodata_fallback_same_tile(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        nodata = -9999
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls += 1
+                tile = np.full((10, 10), nodata, dtype=np.int16)
+                tile[5, 4] = 77
+                return {(req.row, req.col, req.band_index): tile for req in requests}
+
+        info = RasterInfo(
+            id="r-fallback-same-tile",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(5.5, 4.5))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("int16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            nodata=nodata,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+                max_distance_pixels=1,
+            )
+
+        assert rows.num_rows == 1
+        assert rows.column("value").to_pylist() == [77.0]
+        assert reader.calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("max_distance_pixels", "expected_value"),
+        [(0, -9999.0), (1, -9999.0), (2, 42.0)],
+    )
+    async def test_sample_points_nodata_fallback_honors_max_distance_pixels(
+        self, max_distance_pixels: int, expected_value: float
+    ):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        nodata = -9999
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls += 1
+                tile = np.full((10, 10), nodata, dtype=np.int16)
+                # Candidate point lands at row=5,col=5; nearest non-nodata is 2 px away.
+                tile[5, 3] = 42
+                return {(req.row, req.col, req.band_index): tile for req in requests}
+
+        info = RasterInfo(
+            id="r-fallback-radius",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(5.5, 4.5))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("int16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            nodata=nodata,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+                max_distance_pixels=max_distance_pixels,
+            )
+
+        assert rows.num_rows == 1
+        assert rows.column("value").to_pylist() == [expected_value]
+        assert reader.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_sample_points_nodata_fallback_uses_exact_point_distance_within_ring(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        nodata = -9999
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls += 1
+                tile = np.full((10, 10), nodata, dtype=np.int16)
+                tile[4, 5] = 11
+                tile[5, 6] = 22
+                return {(req.row, req.col, req.band_index): tile for req in requests}
+
+        info = RasterInfo(
+            id="r-fallback-exact-distance",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(5.99, 4.01))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("int16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            nodata=nodata,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+                max_distance_pixels=1,
+            )
+
+        assert rows.num_rows == 1
+        assert rows.column("value").to_pylist() == [22.0]
+        assert reader.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_sample_points_nearest_keeps_nodata_value(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        nodata = -9999
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls += 1
+                tile = np.full((10, 10), nodata, dtype=np.int16)
+                tile[5, 4] = 77
+                return {(req.row, req.col, req.band_index): tile for req in requests}
+
+        info = RasterInfo(
+            id="r-as-is",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(5.5, 4.5))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("int16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            nodata=nodata,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+                max_distance_pixels=0,
+            )
+
+        assert rows.num_rows == 1
+        assert rows.column("value").to_pylist() == [float(nodata)]
+        assert reader.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_sample_points_nodata_fallback_across_tile_boundary(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        nodata = -9999
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls.append(requests)
+                out = {}
+                for req in requests:
+                    tile = np.full((10, 10), nodata, dtype=np.int16)
+                    if req.row == 0 and req.col == 1:
+                        tile[5, 0] = 55
+                    out[(req.row, req.col, req.band_index)] = tile
+                return out
+
+        info = RasterInfo(
+            id="r-fallback-cross-tile",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 20.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(9.5, 4.5))
+
+        meta = CogMetadata(
+            width=20,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("int16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0, 100],
+            tile_byte_counts=[1, 1],
+            nodata=nodata,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+                max_distance_pixels=1,
+            )
+
+        assert rows.num_rows == 1
+        assert rows.column("value").to_pylist() == [55.0]
+        assert len(reader.calls) == 2
+        assert any(req.col == 1 for req in reader.calls[1])
+
+    @pytest.mark.asyncio
+    async def test_sample_points_return_neighbourhood_returns_row_major_window(self):
+        from shapely.geometry import Point
+
+        from rasteret.core.geometry import coerce_to_geoarrow
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        nodata = -9999
+
+        class _DummyReader:
+            def __init__(self):
+                self.calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def read_merged_tiles(self, requests, debug=False):
+                self.calls += 1
+                tile = np.full((10, 10), nodata, dtype=np.int16)
+                tile[5, 4] = 77
+                return {(req.row, req.col, req.band_index): tile for req in requests}
+
+        info = RasterInfo(
+            id="r-neighborhood-window",
+            datetime=np.datetime64("2024-01-01T00:00:00", "ns"),
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "https://example.com/x.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        points = coerce_to_geoarrow(Point(5.5, 4.5))
+
+        meta = CogMetadata(
+            width=10,
+            height=10,
+            tile_width=10,
+            tile_height=10,
+            dtype=np.dtype("int16"),
+            crs=4326,
+            transform=[1.0, 0.0, 0.0, 0.0, -1.0, 10.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+            nodata=nodata,
+        )
+        reader = _DummyReader()
+
+        with (
+            patch("rasteret.fetch.cog.COGReader", return_value=reader),
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "https://example.com/x.tif", 0),
+            ),
+        ):
+            rows = await accessor.sample_points(
+                points=points,
+                band_codes=["B04"],
+                max_concurrent=5,
+                max_distance_pixels=1,
+                return_neighbourhood=True,
+            )
+
+        assert rows.num_rows == 1
+        assert rows.column("value").to_pylist() == [77.0]
+        assert rows.column("neighborhood_values").to_pylist() == [
+            [
+                float(nodata),
+                float(nodata),
+                float(nodata),
+                77.0,
+                float(nodata),
+                float(nodata),
+                float(nodata),
+                float(nodata),
+                float(nodata),
+            ]
+        ]
+        assert reader.calls == 1
+
+    @pytest.mark.asyncio
     async def test_sample_points_rejects_non_point_geometry(self):
         from shapely.geometry import box
 
@@ -1236,6 +1701,27 @@ class TestPointSampling:
         points = pa.table({"lon": [1.0, 2.0], "lat": [3.0, 4.0]})
         arr = _ensure_point_geoarrow(points)
         assert "geoarrow.point" in getattr(arr.type, "extension_name", "")
+
+    def test_ensure_point_geoarrow_arrow_table_xy_decimal_columns(self):
+        from decimal import Decimal
+
+        import geoarrow.pyarrow as ga
+
+        points = pa.table(
+            {
+                "lon": pa.array(
+                    [Decimal("1.00"), Decimal("2.00")], type=pa.decimal128(3, 2)
+                ),
+                "lat": pa.array(
+                    [Decimal("3.00"), Decimal("4.00")], type=pa.decimal128(3, 2)
+                ),
+            }
+        )
+        arr = _ensure_point_geoarrow(points)
+        xs, ys = ga.point_coords(arr)
+        assert "geoarrow.point" in getattr(arr.type, "extension_name", "")
+        assert xs.to_pylist() == [1.0, 2.0]
+        assert ys.to_pylist() == [3.0, 4.0]
 
     def test_ensure_point_geoarrow_arrow_table_wkb_column(self):
         wkb_points = pa.array(

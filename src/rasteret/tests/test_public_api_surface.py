@@ -116,6 +116,28 @@ def test_get_numpy_forwards_all_touched_flag() -> None:
     assert mocked_numpy.call_args.kwargs["all_touched"] is True
 
 
+def test_sample_points_forwards_nodata_fallback_params() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        dataset_path = Path(tmp_dir) / "example_stac"
+        _write_minimal_partitioned_collection(dataset_path)
+        collection = Collection._load_cached(dataset_path)
+
+    with patch(
+        "rasteret.core.collection.get_collection_point_samples",
+        return_value=pa.table({"value": pa.array([], type=pa.float64())}),
+    ) as mocked_points:
+        _ = collection.sample_points(
+            points=[],
+            bands=["B04"],
+            max_distance_pixels=2,
+            return_neighbourhood=True,
+        )
+
+    assert mocked_points.call_count == 1
+    assert mocked_points.call_args.kwargs["max_distance_pixels"] == 2
+    assert mocked_points.call_args.kwargs["return_neighbourhood"] is True
+
+
 def test_public_api_surface_is_collection_first() -> None:
     exported = set(dir(rasteret))
     assert "build_from_stac" in exported

@@ -15,12 +15,26 @@ from affine import Affine
 from tqdm.asyncio import tqdm
 
 from rasteret.constants import BandRegistry
+from rasteret.core.point_sample_helpers import (
+    candidate_values_from_tile_cache,
+    chebyshev_ring_offsets,
+    nodata_mask,
+    plan_point_tile_groups,
+    pixel_rect_distance_sq,
+    ring_candidate_grid,
+    square_neighborhood_offsets,
+    tile_request_specs_for_pairs,
+    tile_grid_shape,
+    unique_tile_pairs_for_candidates,
+)
 from rasteret.core.utils import normalize_transform
 from rasteret.fetch.cog import read_cog
 from rasteret.types import (
+    POINT_SAMPLES_NEIGHBORHOOD_SCHEMA,
     POINT_SAMPLES_SCHEMA,
     CogMetadata,
     RasterInfo,
+    empty_point_samples_neighborhood_table,
     empty_point_samples_table,
 )
 
@@ -252,6 +266,8 @@ class RasterAccessor:
         reader: object | None = None,
         geometry_crs: int | None = 4326,
         method: str = "nearest",
+        max_distance_pixels: int = 0,
+        return_neighbourhood: bool = False,
     ) -> pa.Table:
         """Sample point values for this record.
 
@@ -275,6 +291,18 @@ class RasterAccessor:
             CRS EPSG code of input points. Defaults to EPSG:4326.
         method : str
             Sampling method. Only ``"nearest"`` is currently supported.
+        max_distance_pixels : int
+            Maximum pixel distance for nodata fallback search, measured in
+            Chebyshev distance (square rings). When the nearest pixel is nodata
+            and this is > 0, Rasteret searches outward in square rings up to
+            this distance and picks the closest candidate by exact
+            point-to-pixel-rectangle distance. ``0`` disables fallback and
+            returns the nearest pixel value as-is.
+        return_neighbourhood : bool
+            If ``True``, include a ``neighborhood_values`` column with the full
+            square neighborhood centered on the base pixel under each point.
+            The list is row-major and has length
+            ``(2 * max_distance_pixels + 1) ** 2``.
 
         Returns
         -------
@@ -283,6 +311,14 @@ class RasterAccessor:
         """
         if method != "nearest":
             raise ValueError("Only nearest point sampling is supported currently.")
+        if max_distance_pixels < 0:
+            raise ValueError("max_distance_pixels must be >= 0")
+
+        output_schema = (
+            POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
+            if return_neighbourhood
+            else POINT_SAMPLES_SCHEMA
+        )
 
         type_name = getattr(points.type, "extension_name", "") or ""
         if "geoarrow.point" not in type_name:
@@ -403,91 +439,169 @@ class RasterAccessor:
                 }
             )
 
-        def _tile_window(
-            metadata: CogMetadata,
-            *,
-            tile_row: int,
-            tile_col: int,
-        ) -> tuple[int, int, int, int]:
-            row_start = tile_row * int(metadata.tile_height)
-            col_start = tile_col * int(metadata.tile_width)
-            window_height = min(
-                int(metadata.tile_height), int(metadata.height) - row_start
-            )
-            window_width = min(
-                int(metadata.tile_width), int(metadata.width) - col_start
-            )
-            return row_start, col_start, window_height, window_width
-
         async def _sample_with_reader(shared_reader: COGReader) -> pa.Table:
             record_batches: list[pa.RecordBatch] = []
             grouped_sources: dict[object, list[dict[str, object]]] = {}
             for source in band_sources:
                 grouped_sources.setdefault(source["group_key"], []).append(source)
 
+            neighborhood_row_offsets: np.ndarray | None = None
+            neighborhood_col_offsets: np.ndarray | None = None
+            neighborhood_size = 0
+            if return_neighbourhood:
+                neighborhood_row_offsets, neighborhood_col_offsets = (
+                    square_neighborhood_offsets(max_distance_pixels)
+                )
+                neighborhood_size = int(neighborhood_row_offsets.size)
+
             for source_group in grouped_sources.values():
+                # Phase 1: map -> pixel -> tile grouping.
+                # This is the key point-sampling-specific planning step that lets us
+                # fetch each tile once and then do fast local indexing.
                 first_source = source_group[0]
                 cog_meta = first_source["metadata"]
                 url = str(first_source["url"])
                 src_transform = first_source["transform"]
 
-                tile_groups: dict[tuple[int, int], list[tuple[int, int, int]]] = {}
-                for point_index in range(len(point_xs)):
-                    sample_x = float(sample_xs[point_index])
-                    sample_y = float(sample_ys[point_index])
-                    col_f, row_f = (~src_transform) * (sample_x, sample_y)
-                    col = int(np.floor(col_f))
-                    row = int(np.floor(row_f))
-                    if (
-                        row < 0
-                        or col < 0
-                        or row >= int(cog_meta.height)
-                        or col >= int(cog_meta.width)
-                    ):
-                        continue
+                (
+                    point_rows,
+                    point_cols,
+                    point_row_fs,
+                    point_col_fs,
+                    tile_groups,
+                    tiles,
+                ) = plan_point_tile_groups(
+                    np.asarray(sample_xs, dtype=np.float64),
+                    np.asarray(sample_ys, dtype=np.float64),
+                    scale_x=float(src_transform.a),
+                    translate_x=float(src_transform.c),
+                    scale_y=float(src_transform.e),
+                    translate_y=float(src_transform.f),
+                    raster_height=int(cog_meta.height),
+                    raster_width=int(cog_meta.width),
+                    tile_height=int(cog_meta.tile_height),
+                    tile_width=int(cog_meta.tile_width),
+                )
+                if not tiles:
+                    continue
 
-                    tile_row = row // int(cog_meta.tile_height)
-                    tile_col = col // int(cog_meta.tile_width)
-                    tile_groups.setdefault((tile_row, tile_col), []).append(
-                        (point_index, row, col)
+                # Phase 2: fetch base tiles and sample nearest pixel per point.
+                source_values: list[np.ndarray] = [
+                    np.full(len(point_xs), np.nan, dtype=np.float64)
+                    for _ in source_group
+                ]
+                source_sampled_masks: list[np.ndarray] = [
+                    np.zeros(len(point_xs), dtype=bool) for _ in source_group
+                ]
+                source_tile_cache: list[dict[tuple[int, int], np.ndarray]] = [
+                    {} for _ in source_group
+                ]
+                source_neighborhood_values: list[np.ndarray | None] = [
+                    (
+                        np.full(
+                            (len(point_xs), neighborhood_size),
+                            np.nan,
+                            dtype=np.float64,
+                        )
+                        if return_neighbourhood
+                        else None
                     )
+                    for _ in source_group
+                ]
 
-                tiles = list(tile_groups.keys())
+                async def _cache_candidate_tiles(
+                    *,
+                    candidate_rows: np.ndarray,
+                    candidate_cols: np.ndarray,
+                    in_bounds: np.ndarray,
+                    tile_cache: dict[tuple[int, int], np.ndarray],
+                    source_meta: CogMetadata,
+                    source_band_index: int,
+                    tiles_x: int,
+                    tiles_y: int,
+                ) -> None:
+                    unique_tile_pairs = unique_tile_pairs_for_candidates(
+                        candidate_rows,
+                        candidate_cols,
+                        in_bounds,
+                        tile_height=int(source_meta.tile_height),
+                        tile_width=int(source_meta.tile_width),
+                    )
+                    if not unique_tile_pairs.size:
+                        return
 
-                tile_batch_size = 128
-                for start in range(0, len(tiles), tile_batch_size):
-                    batch = tiles[start : start + tile_batch_size]
+                    extra_requests: list[COGTileRequest] = []
+                    for tile_row, tile_col, offset, size in tile_request_specs_for_pairs(
+                        unique_tile_pairs,
+                        source_meta.tile_offsets,
+                        source_meta.tile_byte_counts,
+                        tiles_x=tiles_x,
+                        tiles_y=tiles_y,
+                    ):
+                        if (tile_row, tile_col) in tile_cache:
+                            continue
+                        extra_requests.append(
+                            COGTileRequest(
+                                url=url,
+                                offset=offset,
+                                size=size,
+                                row=tile_row,
+                                col=tile_col,
+                                metadata=source_meta,
+                                band_index=source_band_index,
+                            )
+                        )
+
+                    if not extra_requests:
+                        return
+
+                    extra_map = await shared_reader.read_merged_tiles(extra_requests)
+                    for (tile_row, tile_col, band_index), tile_data in extra_map.items():
+                        if band_index != source_band_index:
+                            continue
+                        tile_cache[(tile_row, tile_col)] = tile_data
+
+                # Batch tile reads to keep request lists bounded. `read_merged_tiles()`
+                # works on (tile-offset, byte-count) ranges and materializes whole
+                # tiles, so the main limiter here is the size of the request list,
+                # not per-pixel reads.
+                #
+                # Use `max_concurrent` as a proxy for how much outstanding I/O we
+                # can efficiently schedule, and cap to avoid huge batches that
+                # increase range-merging overhead.
+                requests_per_tile = max(1, len(source_group))
+                max_requests_per_batch = max(64, min(4096, int(max_concurrent) * 8))
+                tiles_per_batch = max(1, max_requests_per_batch // requests_per_tile)
+                for start in range(0, len(tiles), tiles_per_batch):
+                    batch = tiles[start : start + tiles_per_batch]
                     sample_requests: list[COGTileRequest] = []
-                    for tile_row, tile_col in batch:
-                        for source in source_group:
-                            source_meta = source["metadata"]
-                            source_band_index = source["band_index"]
+                    for source in source_group:
+                        source_meta = source["metadata"]
+                        source_band_index = source["band_index"]
+                        tile_offsets = source_meta.tile_offsets
+                        tile_byte_counts = source_meta.tile_byte_counts
+                        if tile_offsets is None or tile_byte_counts is None:
+                            continue
 
-                            tiles_x = (
-                                int(source_meta.width) + int(source_meta.tile_width) - 1
-                            ) // int(source_meta.tile_width)
-                            tiles_y = (
-                                int(source_meta.height)
-                                + int(source_meta.tile_height)
-                                - 1
-                            ) // int(source_meta.tile_height)
-                            if (
-                                tile_row < 0
-                                or tile_col < 0
-                                or tile_row >= tiles_y
-                                or tile_col >= tiles_x
-                            ):
-                                continue
+                        tiles_x, tiles_y = tile_grid_shape(
+                            raster_width=int(source_meta.width),
+                            raster_height=int(source_meta.height),
+                            tile_width=int(source_meta.tile_width),
+                            tile_height=int(source_meta.tile_height),
+                        )
 
-                            tile_idx = tile_row * tiles_x + tile_col
-                            if tile_idx >= len(source_meta.tile_offsets):
-                                continue
-
+                        for tile_row, tile_col, offset, size in tile_request_specs_for_pairs(
+                            batch,
+                            tile_offsets,
+                            tile_byte_counts,
+                            tiles_x=tiles_x,
+                            tiles_y=tiles_y,
+                        ):
                             sample_requests.append(
                                 COGTileRequest(
                                     url=url,
-                                    offset=int(source_meta.tile_offsets[tile_idx]),
-                                    size=int(source_meta.tile_byte_counts[tile_idx]),
+                                    offset=offset,
+                                    size=size,
                                     row=tile_row,
                                     col=tile_col,
                                     metadata=source_meta,
@@ -502,9 +616,9 @@ class RasterAccessor:
                     )
 
                     for tile_row, tile_col in batch:
-                        tile_arrays = []
+                        tile_arrays: list[np.ndarray] = []
                         missing_band = False
-                        for source in source_group:
+                        for source_idx, source in enumerate(source_group):
                             band_index = source["band_index"]
                             tile_data = tile_arrays_map.get(
                                 (tile_row, tile_col, band_index)
@@ -513,119 +627,273 @@ class RasterAccessor:
                                 missing_band = True
                                 break
                             tile_arrays.append(tile_data)
+                            source_tile_cache[source_idx][(tile_row, tile_col)] = tile_data
                         if missing_band or not tile_arrays:
                             continue
 
-                        samples = tile_groups.get((tile_row, tile_col), [])
-                        if not samples:
+                        sample_matrix = tile_groups.get((tile_row, tile_col))
+                        if sample_matrix is None or sample_matrix.size == 0:
                             continue
-
-                        row_start, col_start, window_height, window_width = (
-                            _tile_window(
-                                metadata=cog_meta,
-                                tile_row=tile_row,
-                                tile_col=tile_col,
-                            )
-                        )
-
-                        sample_matrix = np.asarray(samples, dtype=np.int64)
-                        if sample_matrix.size == 0:
-                            continue
+                        row_start = tile_row * int(cog_meta.tile_height)
+                        col_start = tile_col * int(cog_meta.tile_width)
 
                         local_point_indices = sample_matrix[:, 0]
                         local_rows = sample_matrix[:, 1] - row_start
                         local_cols = sample_matrix[:, 2] - col_start
-                        in_window = (
-                            (local_rows >= 0)
-                            & (local_cols >= 0)
-                            & (local_rows < window_height)
-                            & (local_cols < window_width)
-                        )
-                        if not np.any(in_window):
+
+                        for source_idx, tile_data in enumerate(tile_arrays):
+                            values = np.asarray(
+                                tile_data[local_rows, local_cols], dtype=np.float64
+                            )
+                            source_values[source_idx][local_point_indices] = values
+                            source_sampled_masks[source_idx][local_point_indices] = True
+
+                if max_distance_pixels > 0:
+                    # Phase 3: optional nodata fallback (nearest non-nodata pixel).
+                    # For points whose nearest sample is nodata, search outward in
+                    # Chebyshev rings up to `max_distance_pixels`. Within the first ring
+                    # that yields valid candidates, pick the candidate with minimum
+                    # exact distance from the query point to the candidate pixel
+                    # footprint (scaled by pixel width/height).
+                    #
+                    # This mirrors PostGIS' ST_NearestValue behavior (perimeter scan
+                    # of expanding extents + minimum point-to-pixel distance), but
+                    # we cap the search radius to avoid unbounded remote I/O.
+                    for source_idx, source in enumerate(source_group):
+                        source_meta = source["metadata"]
+                        source_band_index = source["band_index"]
+                        nodata_value = getattr(source_meta, "nodata", None)
+                        if nodata_value is None:
+                            continue
+                        if (
+                            source_meta.tile_offsets is None
+                            or source_meta.tile_byte_counts is None
+                        ):
                             continue
 
-                        local_point_indices = local_point_indices[in_window]
-                        local_rows = local_rows[in_window]
-                        local_cols = local_cols[in_window]
+                        unresolved = source_sampled_masks[source_idx] & nodata_mask(
+                            source_values[source_idx], nodata_value
+                        )
+                        if not np.any(unresolved):
+                            continue
 
-                        output_point_indices = (
-                            point_indices_arr[local_point_indices]
-                            if point_indices_arr is not None
-                            else local_point_indices
+                        tile_height = int(source_meta.tile_height)
+                        tile_width = int(source_meta.tile_width)
+                        raster_height = int(source_meta.height)
+                        raster_width = int(source_meta.width)
+                        pixel_width = float(src_transform.a)
+                        pixel_height = float(src_transform.e)
+                        tiles_x, tiles_y = tile_grid_shape(
+                            raster_width=raster_width,
+                            raster_height=raster_height,
+                            tile_width=tile_width,
+                            tile_height=tile_height,
                         )
-                        point_x_values = point_xs[local_point_indices]
-                        point_y_values = point_ys[local_point_indices]
-                        row_count = int(local_point_indices.size)
-                        point_index_arr = pa.array(
-                            output_point_indices, type=pa.int64()
-                        )
-                        point_x_arr = pa.array(
-                            np.asarray(point_x_values, dtype=np.float64),
-                            type=pa.float64(),
-                        )
-                        point_y_arr = pa.array(
-                            np.asarray(point_y_values, dtype=np.float64),
-                            type=pa.float64(),
-                        )
-                        point_crs_arr = _constant_int32_array(
-                            point_crs_value, row_count
-                        )
-                        record_id_arr = _constant_string_array(str(self.id), row_count)
-                        datetime_arr = _constant_timestamp_array(
-                            record_datetime_us, row_count
-                        )
-                        collection_arr = _constant_string_array(
-                            str(self.collection), row_count
-                        )
-                        cloud_cover_arr = _constant_float64_array(
-                            cloud_cover_value, row_count
-                        )
-                        raster_crs_arr = _constant_int32_array(
-                            raster_crs_value, row_count
-                        )
+                        tile_cache = source_tile_cache[source_idx]
 
-                        if len(tile_arrays) != len(source_group):
-                            raise RuntimeError(
-                                "Internal point-sampling mismatch: tile arrays "
-                                f"({len(tile_arrays)}) do not match source bands "
-                                f"({len(source_group)}) for record '{self.id}'."
+                        for radius in range(1, max_distance_pixels + 1):
+                            if not np.any(unresolved):
+                                break
+                            row_offsets, col_offsets = chebyshev_ring_offsets(radius)
+                            if row_offsets.size == 0:
+                                continue
+
+                            unresolved_indices = np.nonzero(unresolved)[0]
+                            candidate_rows, candidate_cols, in_bounds = ring_candidate_grid(
+                                point_rows[unresolved_indices],
+                                point_cols[unresolved_indices],
+                                row_offsets,
+                                col_offsets,
+                                raster_height=raster_height,
+                                raster_width=raster_width,
+                            )
+                            if not np.any(in_bounds):
+                                continue
+
+                            await _cache_candidate_tiles(
+                                candidate_rows=candidate_rows,
+                                candidate_cols=candidate_cols,
+                                in_bounds=in_bounds,
+                                tile_cache=tile_cache,
+                                source_meta=source_meta,
+                                source_band_index=source_band_index,
+                                tiles_x=tiles_x,
+                                tiles_y=tiles_y,
                             )
 
-                        for source, tile_data in zip(
-                            source_group, tile_arrays, strict=True
+                            candidate_values, candidate_sampled = candidate_values_from_tile_cache(
+                                candidate_rows,
+                                candidate_cols,
+                                in_bounds,
+                                tile_cache=tile_cache,
+                                tile_height=tile_height,
+                                tile_width=tile_width,
+                                tiles_x=tiles_x,
+                            )
+                            valid_candidates = candidate_sampled & ~nodata_mask(
+                                candidate_values, nodata_value
+                            )
+                            if not np.any(valid_candidates):
+                                continue
+
+                            distance_sq = pixel_rect_distance_sq(
+                                point_row_fs[unresolved_indices],
+                                point_col_fs[unresolved_indices],
+                                candidate_rows,
+                                candidate_cols,
+                                pixel_width=pixel_width,
+                                pixel_height=pixel_height,
+                            )
+                            distance_sq = np.where(valid_candidates, distance_sq, np.inf)
+                            best_offset = np.argmin(distance_sq, axis=1)
+                            best_distance_sq = distance_sq[
+                                np.arange(unresolved_indices.size),
+                                best_offset,
+                            ]
+                            resolved_here = np.isfinite(best_distance_sq)
+                            if not np.any(resolved_here):
+                                continue
+
+                            accepted_indices = unresolved_indices[resolved_here]
+                            accepted_offsets = best_offset[resolved_here]
+                            source_values[source_idx][accepted_indices] = candidate_values[
+                                resolved_here,
+                                accepted_offsets,
+                            ]
+                            unresolved[accepted_indices] = False
+
+                if return_neighbourhood:
+                    assert neighborhood_row_offsets is not None
+                    assert neighborhood_col_offsets is not None
+                    for source_idx, source in enumerate(source_group):
+                        local_point_indices = np.nonzero(source_sampled_masks[source_idx])[0]
+                        if local_point_indices.size == 0:
+                            continue
+
+                        source_meta = source["metadata"]
+                        source_band_index = source["band_index"]
+                        if (
+                            source_meta.tile_offsets is None
+                            or source_meta.tile_byte_counts is None
                         ):
-                            values = np.asarray(
-                                tile_data[local_rows, local_cols],
-                                dtype=np.float64,
-                            )
-                            batch_columns = {
-                                "point_index": point_index_arr,
-                                "point_x": point_x_arr,
-                                "point_y": point_y_arr,
-                                "point_crs": point_crs_arr,
-                                "record_id": record_id_arr,
-                                "datetime": datetime_arr,
-                                "collection": collection_arr,
-                                "cloud_cover": cloud_cover_arr,
-                                "band": _constant_string_array(
-                                    str(source["band_code"]), row_count
-                                ),
-                                "value": pa.array(values, type=pa.float64()),
-                                "raster_crs": raster_crs_arr,
-                            }
-                            record_batches.append(
-                                pa.record_batch(
-                                    [
-                                        batch_columns[field.name]
-                                        for field in POINT_SAMPLES_SCHEMA
-                                    ],
-                                    schema=POINT_SAMPLES_SCHEMA,
-                                )
-                            )
+                            continue
+
+                        tile_height = int(source_meta.tile_height)
+                        tile_width = int(source_meta.tile_width)
+                        raster_height = int(source_meta.height)
+                        raster_width = int(source_meta.width)
+                        tiles_x, tiles_y = tile_grid_shape(
+                            raster_width=raster_width,
+                            raster_height=raster_height,
+                            tile_width=tile_width,
+                            tile_height=tile_height,
+                        )
+                        tile_cache = source_tile_cache[source_idx]
+
+                        candidate_rows, candidate_cols, in_bounds = ring_candidate_grid(
+                            point_rows[local_point_indices],
+                            point_cols[local_point_indices],
+                            neighborhood_row_offsets,
+                            neighborhood_col_offsets,
+                            raster_height=raster_height,
+                            raster_width=raster_width,
+                        )
+
+                        await _cache_candidate_tiles(
+                            candidate_rows=candidate_rows,
+                            candidate_cols=candidate_cols,
+                            in_bounds=in_bounds,
+                            tile_cache=tile_cache,
+                            source_meta=source_meta,
+                            source_band_index=source_band_index,
+                            tiles_x=tiles_x,
+                            tiles_y=tiles_y,
+                        )
+
+                        neighborhood_values, _ = candidate_values_from_tile_cache(
+                            candidate_rows,
+                            candidate_cols,
+                            in_bounds,
+                            tile_cache=tile_cache,
+                            tile_height=tile_height,
+                            tile_width=tile_width,
+                            tiles_x=tiles_x,
+                        )
+                        neighborhood_store = source_neighborhood_values[source_idx]
+                        assert neighborhood_store is not None
+                        neighborhood_store[local_point_indices] = neighborhood_values
+
+                # Phase 4: build Arrow record batches: one row per (point, band).
+                for source_idx, source in enumerate(source_group):
+                    local_point_indices = np.nonzero(source_sampled_masks[source_idx])[0]
+                    if local_point_indices.size == 0:
+                        continue
+                    output_point_indices = (
+                        point_indices_arr[local_point_indices]
+                        if point_indices_arr is not None
+                        else local_point_indices
+                    )
+                    point_x_values = point_xs[local_point_indices]
+                    point_y_values = point_ys[local_point_indices]
+                    row_count = int(local_point_indices.size)
+                    point_index_arr = pa.array(output_point_indices, type=pa.int64())
+                    point_x_arr = pa.array(
+                        np.asarray(point_x_values, dtype=np.float64),
+                        type=pa.float64(),
+                    )
+                    point_y_arr = pa.array(
+                        np.asarray(point_y_values, dtype=np.float64),
+                        type=pa.float64(),
+                    )
+                    point_crs_arr = _constant_int32_array(point_crs_value, row_count)
+                    record_id_arr = _constant_string_array(str(self.id), row_count)
+                    datetime_arr = _constant_timestamp_array(record_datetime_us, row_count)
+                    collection_arr = _constant_string_array(
+                        str(self.collection), row_count
+                    )
+                    cloud_cover_arr = _constant_float64_array(
+                        cloud_cover_value, row_count
+                    )
+                    raster_crs_arr = _constant_int32_array(raster_crs_value, row_count)
+                    batch_columns = {
+                        "point_index": point_index_arr,
+                        "point_x": point_x_arr,
+                        "point_y": point_y_arr,
+                        "point_crs": point_crs_arr,
+                        "record_id": record_id_arr,
+                        "datetime": datetime_arr,
+                        "collection": collection_arr,
+                        "cloud_cover": cloud_cover_arr,
+                        "band": _constant_string_array(
+                            str(source["band_code"]), row_count
+                        ),
+                        "value": pa.array(
+                            source_values[source_idx][local_point_indices],
+                            type=pa.float64(),
+                        ),
+                        "raster_crs": raster_crs_arr,
+                    }
+                    if return_neighbourhood:
+                        neighborhood_store = source_neighborhood_values[source_idx]
+                        assert neighborhood_store is not None
+                        batch_columns["neighborhood_values"] = pa.array(
+                            neighborhood_store[local_point_indices].tolist(),
+                            type=pa.list_(pa.float64()),
+                        )
+                    record_batches.append(
+                        pa.record_batch(
+                            [batch_columns[field.name] for field in output_schema],
+                            schema=output_schema,
+                        )
+                    )
 
             if not record_batches:
-                return empty_point_samples_table()
-            return pa.Table.from_batches(record_batches, schema=POINT_SAMPLES_SCHEMA)
+                return (
+                    empty_point_samples_neighborhood_table()
+                    if return_neighbourhood
+                    else empty_point_samples_table()
+                )
+            return pa.Table.from_batches(record_batches, schema=output_schema)
 
         if reader is not None:
             return await _sample_with_reader(reader)

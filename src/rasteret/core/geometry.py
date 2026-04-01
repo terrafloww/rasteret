@@ -20,6 +20,7 @@ from typing import Any
 
 import geoarrow.pyarrow as ga
 import pyarrow as pa
+import pyarrow.compute as pc
 
 Bbox = tuple[float, float, float, float]
 logger = logging.getLogger(__name__)
@@ -403,7 +404,9 @@ def ensure_point_geoarrow(
         xy = resolve_xy_columns(names, x_column, y_column)
         if xy is not None:
             x_name, y_name = xy
-            return ga.make_point(points.column(x_name), points.column(y_name))
+            x_values = pc.cast(points.column(x_name), pa.float64(), safe=False)
+            y_values = pc.cast(points.column(y_name), pa.float64(), safe=False)
+            return ga.make_point(x_values, y_values)
         raise TypeError(
             "Unsupported table input for point sampling. Provide geometry_column "
             "(WKB/GeoArrow point column) or x_column/y_column."
@@ -553,52 +556,3 @@ def intersect_bbox(
     if minx > maxx or miny > maxy:
         return None
     return (minx, miny, maxx, maxy)
-
-
-def point_bounds_4326(
-    points: pa.Array,
-    *,
-    geometry_crs: int | None,
-):
-    """Return point lon/lat coordinates and overall bbox in EPSG:4326."""
-    import numpy as np
-
-    if len(points) == 0:
-        return None, None, None
-
-    point_xs, point_ys = transform_point_coords(
-        points,
-        geometry_crs=geometry_crs,
-        target_crs=4326,
-    )
-    bbox = (
-        float(np.min(point_xs)),
-        float(np.min(point_ys)),
-        float(np.max(point_xs)),
-        float(np.max(point_ys)),
-    )
-    return point_xs, point_ys, bbox
-
-
-def candidate_point_indices_for_raster(
-    *,
-    raster_bbox: Any,
-    point_xs,
-    point_ys,
-) -> list[int] | None:
-    """Return absolute point indices whose lon/lat falls in *raster_bbox*."""
-    import numpy as np
-
-    if point_xs is None or point_ys is None:
-        return None
-    if raster_bbox is None or len(raster_bbox) != 4:
-        return None
-
-    minx, miny, maxx, maxy = raster_bbox
-    mask = (
-        (point_xs >= float(minx))
-        & (point_xs <= float(maxx))
-        & (point_ys >= float(miny))
-        & (point_ys <= float(maxy))
-    )
-    return np.nonzero(mask)[0].astype(int).tolist()
