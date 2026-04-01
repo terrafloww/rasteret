@@ -1212,7 +1212,9 @@ class TestRasterAccessorPointSampling:
         assert reader.calls == 1
 
     @pytest.mark.asyncio
-    async def test_sample_points_nodata_fallback_uses_exact_point_distance_within_ring(self):
+    async def test_sample_points_nodata_fallback_uses_exact_point_distance_within_ring(
+        self,
+    ):
         from shapely.geometry import Point
 
         from rasteret.core.geometry import coerce_to_geoarrow
