@@ -2509,7 +2509,7 @@ class Collection:
             point-to-pixel-rectangle distance. ``0`` disables fallback and
             returns the nearest pixel value as-is.
         return_neighbourhood : bool
-            If ``True``, include a ``neighborhood_values`` column containing the
+            If ``True``, include a ``neighbourhood_values`` column containing the
             full square neighborhood centered on the base pixel under each point.
             The returned list is row-major and has length
             ``(2 * max_distance_pixels + 1) ** 2``.

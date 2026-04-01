@@ -35,7 +35,7 @@ POINT_SAMPLES_SCHEMA = pa.schema(
 # This keeps the scalar sample (the `value` column) while also returning the
 # full pixel neighborhood around each point as a 1D list in row-major order.
 POINT_SAMPLES_NEIGHBORHOOD_SCHEMA = POINT_SAMPLES_SCHEMA.append(
-    pa.field("neighborhood_values", pa.list_(pa.float64()), nullable=False)
+    pa.field("neighbourhood_values", pa.list_(pa.float64()), nullable=False)
 )
 
 

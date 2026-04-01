@@ -1582,7 +1582,7 @@ class TestRasterAccessorPointSampling:
 
         assert rows.num_rows == 1
         assert rows.column("value").to_pylist() == [77.0]
-        assert rows.column("neighborhood_values").to_pylist() == [
+        assert rows.column("neighbourhood_values").to_pylist() == [
             [
                 float(nodata),
                 float(nodata),

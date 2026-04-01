@@ -299,7 +299,7 @@ class RasterAccessor:
             point-to-pixel-rectangle distance. ``0`` disables fallback and
             returns the nearest pixel value as-is.
         return_neighbourhood : bool
-            If ``True``, include a ``neighborhood_values`` column with the full
+            If ``True``, include a ``neighbourhood_values`` column with the full
             square neighborhood centered on the base pixel under each point.
             The list is row-major and has length
             ``(2 * max_distance_pixels + 1) ** 2``.
@@ -904,7 +904,7 @@ class RasterAccessor:
                     if return_neighbourhood:
                         neighborhood_store = source_neighborhood_values[source_idx]
                         assert neighborhood_store is not None
-                        batch_columns["neighborhood_values"] = pa.array(
+                        batch_columns["neighbourhood_values"] = pa.array(
                             neighborhood_store[local_point_indices].tolist(),
                             type=pa.list_(pa.float64()),
                         )

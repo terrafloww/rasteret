@@ -109,7 +109,7 @@ with `geometry_column="..."` (no conversion step required). For DuckDB, use
 - `point_index`, `point_x`, `point_y`, `point_crs`
 - `record_id`, `datetime`, `collection`, `cloud_cover`
 - `band`, `value`, `raster_crs`
-- optional `neighborhood_values` when `return_neighbourhood=True`
+- optional `neighbourhood_values` when `return_neighbourhood=True`
 
 This is intentionally Arrow-first, so you can keep processing in PyArrow, DuckDB, Polars, SedonaDB and geopandas.
 
@@ -147,7 +147,7 @@ samples = collection.sample_points(
 ```
 
 If you also want the searched neighborhood window itself, set
-`return_neighbourhood=True`. Rasteret will include a `neighborhood_values` list
+`return_neighbourhood=True`. Rasteret will include a `neighbourhood_values` list
 column in row-major order, centered on the base pixel under the point.
 
 ```python
