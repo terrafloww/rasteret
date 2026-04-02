@@ -2467,6 +2467,8 @@ class Collection:
         backend: Any = None,
         geometry_crs: int | None = 4326,
         match: str = "all",
+        max_distance_pixels: int = 0,
+        return_neighbourhood: bool = False,
         **filters: Any,
     ) -> pa.Table:
         """Sample point values into an Arrow table.
@@ -2499,6 +2501,18 @@ class Collection:
         match : {"all", "latest"}
             ``"all"`` returns every matching record for each point.
             ``"latest"`` returns one row per ``(point_index, band)``.
+        max_distance_pixels : int
+            Maximum pixel distance for nodata fallback search, measured in
+            Chebyshev distance (square rings). When the nearest pixel is nodata
+            and this is > 0, Rasteret searches outward in square rings up to
+            this distance and picks the closest candidate by exact
+            point-to-pixel-rectangle distance. ``0`` disables fallback and
+            returns the nearest pixel value as-is.
+        return_neighbourhood : bool
+            If ``True``, include a ``neighbourhood_values`` column containing the
+            full square neighborhood centered on the base pixel under each point.
+            The returned list is row-major and has length
+            ``(2 * max_distance_pixels + 1) ** 2``.
         filters : kwargs
             Additional keyword arguments passed to :meth:`subset`.
 
@@ -2527,6 +2541,8 @@ class Collection:
             backend=backend,
             geometry_crs=geometry_crs,
             match=match,
+            max_distance_pixels=max_distance_pixels,
+            return_neighbourhood=return_neighbourhood,
             **filters,
         )
 

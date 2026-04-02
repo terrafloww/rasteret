@@ -230,6 +230,8 @@ Pick whichever output fits your workflow:
         bands=["B04", "B08"],
         geometry_crs=4326,
         match="latest",
+        # max_distance_pixels=1,  # opt into 3x3 nodata fallback search
+        # return_neighbourhood=True,  # include the searched neighborhood window
     )
     ```
 

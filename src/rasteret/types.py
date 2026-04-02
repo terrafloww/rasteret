@@ -31,10 +31,27 @@ POINT_SAMPLES_SCHEMA = pa.schema(
 )
 
 
+# Optional extension schema used by `sample_points(return_neighbourhood=True)`.
+# This keeps the scalar sample (the `value` column) while also returning the
+# full pixel neighborhood around each point as a 1D list in row-major order.
+POINT_SAMPLES_NEIGHBORHOOD_SCHEMA = POINT_SAMPLES_SCHEMA.append(
+    pa.field("neighbourhood_values", pa.list_(pa.float64()), nullable=False)
+)
+
+
 def empty_point_samples_table() -> pa.Table:
     """Return an empty point-sampling table with stable schema."""
-    return pa.table(
-        {field.name: pa.array([], type=field.type) for field in POINT_SAMPLES_SCHEMA}
+    return pa.Table.from_arrays(
+        [pa.array([], type=field.type) for field in POINT_SAMPLES_SCHEMA],
+        schema=POINT_SAMPLES_SCHEMA,
+    )
+
+
+def empty_point_samples_neighborhood_table() -> pa.Table:
+    """Return an empty point-sampling table with neighborhood schema."""
+    return pa.Table.from_arrays(
+        [pa.array([], type=field.type) for field in POINT_SAMPLES_NEIGHBORHOOD_SCHEMA],
+        schema=POINT_SAMPLES_NEIGHBORHOOD_SCHEMA,
     )
 
 

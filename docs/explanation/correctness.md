@@ -81,6 +81,12 @@ To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
 
 - `Collection.sample_points(...)` uses nearest-pixel semantics aligned with
   `rasterio.sample(...)`.
+- When the nearest pixel is nodata/NaN, Rasteret can search neighboring pixels
+  out to a bounded Chebyshev distance via `max_distance_pixels` (square rings)
+  and choose the closest candidate by exact point-to-pixel-rectangle distance.
+- When `return_neighbourhood=True`, Rasteret also returns the full searched square
+  neighborhood window in row-major order so downstream tools can compute their
+  own stats without extra raster reads.
 - Point outputs are tabular (`pyarrow.Table`) with explicit CRS columns
   (`point_crs`, `raster_crs`) for downstream joins and multi-CRS workflows.
 
