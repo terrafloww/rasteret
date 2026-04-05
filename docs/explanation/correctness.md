@@ -79,9 +79,9 @@ To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
 
 ## Point sampling semantics
 
-- `Collection.sample_points(...)` uses nearest-pixel semantics aligned with
-  `rasterio.sample(...)`.
-- When the nearest pixel is nodata/NaN, Rasteret can search neighboring pixels
+- `Collection.sample_points(...)` samples the pixel containing the point first,
+  aligned with `rasterio.sample(...)` nearest sampling semantics.
+- When that base pixel is nodata/NaN, Rasteret can search neighboring pixels
   out to a bounded Chebyshev distance via `max_distance_pixels` (square rings)
   and choose the closest candidate by exact point-to-pixel-rectangle distance.
 - When `return_neighbourhood!="off"`, Rasteret also returns a neighbourhood

@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.3.6
+
+### Added
+
+- **Bounded nodata fallback for `sample_points()`**: point sampling can now
+  search outward from the base pixel under the input point using
+  `max_distance_pixels`, measured in Chebyshev distance (square rings).
+- **Neighbourhood window output for `sample_points()`**:
+  `return_neighbourhood` now supports:
+  - `"off"`: no neighbourhood column
+  - `"always"`: always return the full searched window
+  - `"if_center_nodata"`: return the window only when the base pixel is
+    nodata/NaN
+
+### Changed
+
+- **Point sampling semantics are now explicit and bounded**:
+  `sample_points()` still samples the pixel containing the point first, but
+  when that base pixel is nodata/NaN and `max_distance_pixels > 0`, Rasteret
+  searches outward ring by ring and chooses the closest valid candidate by
+  exact point-to-pixel-rectangle distance.
+- **Neighbourhood output schema**: when `return_neighbourhood != "off"`,
+  `sample_points()` returns a nullable `neighbourhood_values` list column in
+  row-major order. With `"if_center_nodata"`, rows whose base pixel is valid
+  keep `neighbourhood_values = NULL`.
+- **Neighbourhood mode validation**: neighbourhood output now requires
+  `max_distance_pixels > 0` so the requested window size is always explicit.
+
+### Tested
+
+- Expanded `test_execution` for bounded nodata fallback, exact-distance winner
+  selection, cross-tile fallback, neighbourhood window output, NULL-window
+  behavior for `"if_center_nodata"`, and empty-result schema stability.
+- Expanded `test_public_api_surface` for the new `sample_points()` arguments.
+
 ## v0.3.5
 
 ### Added
