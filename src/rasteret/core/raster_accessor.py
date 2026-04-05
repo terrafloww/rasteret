@@ -294,11 +294,12 @@ class RasterAccessor:
             Sampling method. Only ``"nearest"`` is currently supported.
         max_distance_pixels : int
             Maximum pixel distance for nodata fallback search, measured in
-            Chebyshev distance (square rings). When the nearest pixel is nodata
-            and this is > 0, Rasteret searches outward in square rings up to
-            this distance and picks the closest candidate by exact
+            Chebyshev distance (square rings). Rasteret samples the base pixel
+            containing the point first; when that pixel is nodata and this is
+            > 0, Rasteret searches outward in square rings up to this distance
+            and picks the closest candidate by exact
             point-to-pixel-rectangle distance. ``0`` disables fallback and
-            returns the nearest pixel value as-is.
+            returns the base pixel value as-is.
         return_neighbourhood : {"off", "always", "if_center_nodata"}
             Controls whether a neighbourhood window is returned:
             ``"off"`` omits the window column.

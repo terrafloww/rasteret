@@ -102,6 +102,10 @@ def get_collection_point_samples(
     """Sample point values across matching records.
 
     This is the public entrypoint used by ``Collection.sample_points``.
+    It validates point-sampling options, normalizes geometry input to a
+    GeoArrow point array, applies collection-level filtering, and returns a
+    schema-stable Arrow table for either scalar-only or neighbourhood-aware
+    point samples.
     """
     if match not in {"all", "latest"}:
         raise ValueError("match must be either 'all' or 'latest'")

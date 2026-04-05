@@ -111,7 +111,16 @@ with `geometry_column="..."` (no conversion step required). For DuckDB, use
 - `band`, `value`, `raster_crs`
 - optional `neighbourhood_values` when `return_neighbourhood!="off"`
 
-This is intentionally Arrow-first, so you can keep processing in PyArrow, DuckDB, Polars, SedonaDB and geopandas.
+Notes:
+
+- `cloud_cover` may be `NULL` when the source collection does not provide it.
+- `neighbourhood_values` is a 1D row-major list with length `(2r + 1)^2`,
+  where `r = max_distance_pixels`.
+- With `return_neighbourhood="if_center_nodata"`, rows whose base pixel is
+  valid return `neighbourhood_values = NULL`.
+
+This is intentionally Arrow-first, so you can keep processing in PyArrow,
+DuckDB, Polars, SedonaDB and geopandas.
 
 ### `match="all"` vs `match="latest"`
 
@@ -120,10 +129,10 @@ This is intentionally Arrow-first, so you can keep processing in PyArrow, DuckDB
 
 ### Nodata fallback (`max_distance_pixels`)
 
-By default, `sample_points()` returns the pixel under the point as-is:
+By default, `sample_points()` returns the base pixel containing the point as-is:
 
-- If the nearest pixel under the point is valid, Rasteret returns it.
-- If the nearest pixel is nodata/NaN, Rasteret returns that nodata value unless
+- If the base pixel is valid, Rasteret returns it.
+- If the base pixel is nodata/NaN, Rasteret returns that nodata value unless
   you opt into a fallback search.
 - With `max_distance_pixels > 0`, Rasteret searches outward in **square rings**
   up to `max_distance_pixels` (measured in **Chebyshev distance**, i.e. ring 1 is
@@ -161,6 +170,24 @@ samples = collection.sample_points(
     return_neighbourhood="always",
 )
 ```
+
+If you only want the neighbourhood window for rows where the base pixel is
+nodata/NaN, use `return_neighbourhood="if_center_nodata"`:
+
+```python
+samples = collection.sample_points(
+    points=tbl,
+    x_column="lon",
+    y_column="lat",
+    bands=["B04"],
+    geometry_crs=4326,
+    max_distance_pixels=2,  # 5x5 neighborhood
+    return_neighbourhood="if_center_nodata",
+)
+```
+
+Use this mode when you want fallback context for nodata rows without paying the
+Arrow column size cost for rows whose base pixel is already valid.
 
 ## Convenience inputs (quick scripts)
 
