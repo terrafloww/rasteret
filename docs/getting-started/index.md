@@ -231,7 +231,7 @@ Pick whichever output fits your workflow:
         geometry_crs=4326,
         match="latest",
         # max_distance_pixels=1,  # opt into 3x3 nodata fallback search
-        # return_neighbourhood=True,  # include the searched neighborhood window
+        # return_neighbourhood="always",  # include the searched neighbourhood window
     )
     ```
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import warnings
+from typing import Literal
 
 import geopandas as gpd
 import numpy as np
@@ -267,7 +268,7 @@ class RasterAccessor:
         geometry_crs: int | None = 4326,
         method: str = "nearest",
         max_distance_pixels: int = 0,
-        return_neighbourhood: bool = False,
+        return_neighbourhood: Literal["off", "always", "if_center_nodata"] = "off",
     ) -> pa.Table:
         """Sample point values for this record.
 
@@ -298,11 +299,12 @@ class RasterAccessor:
             this distance and picks the closest candidate by exact
             point-to-pixel-rectangle distance. ``0`` disables fallback and
             returns the nearest pixel value as-is.
-        return_neighbourhood : bool
-            If ``True``, include a ``neighbourhood_values`` column with the full
-            square neighborhood centered on the base pixel under each point.
-            The list is row-major and has length
-            ``(2 * max_distance_pixels + 1) ** 2``.
+        return_neighbourhood : {"off", "always", "if_center_nodata"}
+            Controls whether a neighbourhood window is returned:
+            ``"off"`` omits the window column.
+            ``"always"`` returns the full window for every sampled row.
+            ``"if_center_nodata"`` returns the full window only when the center
+            pixel is nodata/NaN; other rows have a NULL window.
 
         Returns
         -------
@@ -313,10 +315,22 @@ class RasterAccessor:
             raise ValueError("Only nearest point sampling is supported currently.")
         if max_distance_pixels < 0:
             raise ValueError("max_distance_pixels must be >= 0")
+        if return_neighbourhood not in {"off", "always", "if_center_nodata"}:
+            raise ValueError(
+                "return_neighbourhood must be one of: 'off', 'always', 'if_center_nodata'"
+            )
+        if return_neighbourhood != "off" and max_distance_pixels <= 0:
+            raise ValueError(
+                "max_distance_pixels must be > 0 when return_neighbourhood is enabled"
+            )
+
+        include_neighbourhood = return_neighbourhood != "off"
+        neighbourhood_always = return_neighbourhood == "always"
+        neighbourhood_if_center_nodata = return_neighbourhood == "if_center_nodata"
 
         output_schema = (
             POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
-            if return_neighbourhood
+            if include_neighbourhood
             else POINT_SAMPLES_SCHEMA
         )
 
@@ -448,7 +462,7 @@ class RasterAccessor:
             neighborhood_row_offsets: np.ndarray | None = None
             neighborhood_col_offsets: np.ndarray | None = None
             neighborhood_size = 0
-            if return_neighbourhood:
+            if include_neighbourhood:
                 neighborhood_row_offsets, neighborhood_col_offsets = (
                     square_neighborhood_offsets(max_distance_pixels)
                 )
@@ -503,9 +517,24 @@ class RasterAccessor:
                             np.nan,
                             dtype=np.float64,
                         )
-                        if return_neighbourhood
+                        if include_neighbourhood
                         else None
                     )
+                    for _ in source_group
+                ]
+                source_neighborhood_computed: list[np.ndarray | None] = [
+                    (
+                        np.zeros(len(point_xs), dtype=bool)
+                        if include_neighbourhood
+                        else None
+                    )
+                    for _ in source_group
+                ]
+                # When `return_neighbourhood="if_center_nodata"`, we must key off the
+                # original center-pixel sample, not the post-fallback value. The
+                # fallback path mutates `source_values` for unresolved points.
+                source_center_invalid_masks: list[np.ndarray | None] = [
+                    (None if neighbourhood_if_center_nodata else None)
                     for _ in source_group
                 ]
 
@@ -685,9 +714,15 @@ class RasterAccessor:
                         ):
                             continue
 
-                        unresolved = source_sampled_masks[source_idx] & nodata_mask(
+                        center_invalid = source_sampled_masks[source_idx] & nodata_mask(
                             source_values[source_idx], nodata_value
                         )
+                        if neighbourhood_if_center_nodata:
+                            source_center_invalid_masks[source_idx] = (
+                                center_invalid.copy()
+                            )
+
+                        unresolved = center_invalid.copy()
                         if not np.any(unresolved):
                             continue
 
@@ -784,13 +819,25 @@ class RasterAccessor:
                             )
                             unresolved[accepted_indices] = False
 
-                if return_neighbourhood:
+                if include_neighbourhood:
                     assert neighborhood_row_offsets is not None
                     assert neighborhood_col_offsets is not None
                     for source_idx, source in enumerate(source_group):
-                        local_point_indices = np.nonzero(
-                            source_sampled_masks[source_idx]
-                        )[0]
+                        if neighbourhood_always:
+                            local_point_indices = np.nonzero(
+                                source_sampled_masks[source_idx]
+                            )[0]
+                        elif neighbourhood_if_center_nodata:
+                            center_invalid = source_center_invalid_masks[source_idx]
+                            if center_invalid is None:
+                                source_meta = source["metadata"]
+                                nodata_value = getattr(source_meta, "nodata", None)
+                                center_invalid = source_sampled_masks[
+                                    source_idx
+                                ] & nodata_mask(source_values[source_idx], nodata_value)
+                            local_point_indices = np.nonzero(center_invalid)[0]
+                        else:
+                            local_point_indices = np.empty(0, dtype=np.int64)
                         if local_point_indices.size == 0:
                             continue
 
@@ -846,6 +893,9 @@ class RasterAccessor:
                         neighborhood_store = source_neighborhood_values[source_idx]
                         assert neighborhood_store is not None
                         neighborhood_store[local_point_indices] = neighborhood_values
+                        computed_store = source_neighborhood_computed[source_idx]
+                        assert computed_store is not None
+                        computed_store[local_point_indices] = True
 
                 # Phase 4: build Arrow record batches: one row per (point, band).
                 for source_idx, source in enumerate(source_group):
@@ -901,11 +951,18 @@ class RasterAccessor:
                         ),
                         "raster_crs": raster_crs_arr,
                     }
-                    if return_neighbourhood:
+                    if include_neighbourhood:
                         neighborhood_store = source_neighborhood_values[source_idx]
                         assert neighborhood_store is not None
+                        computed_store = source_neighborhood_computed[source_idx]
+                        assert computed_store is not None
                         batch_columns["neighbourhood_values"] = pa.array(
-                            neighborhood_store[local_point_indices].tolist(),
+                            [
+                                neighborhood_store[i].tolist()
+                                if bool(computed_store[i])
+                                else None
+                                for i in local_point_indices.tolist()
+                            ],
                             type=pa.list_(pa.float64()),
                         )
                     record_batches.append(
@@ -918,7 +975,7 @@ class RasterAccessor:
             if not record_batches:
                 return (
                     empty_point_samples_neighborhood_table()
-                    if return_neighbourhood
+                    if include_neighbourhood
                     else empty_point_samples_table()
                 )
             return pa.Table.from_batches(record_batches, schema=output_schema)

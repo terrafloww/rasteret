@@ -84,9 +84,10 @@ To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
 - When the nearest pixel is nodata/NaN, Rasteret can search neighboring pixels
   out to a bounded Chebyshev distance via `max_distance_pixels` (square rings)
   and choose the closest candidate by exact point-to-pixel-rectangle distance.
-- When `return_neighbourhood=True`, Rasteret also returns the full searched square
-  neighborhood window in row-major order so downstream tools can compute their
-  own stats without extra raster reads.
+- When `return_neighbourhood!="off"`, Rasteret also returns a neighbourhood
+  window in row-major order so downstream tools can compute their own stats
+  without extra raster reads. With `return_neighbourhood="if_center_nodata"`,
+  rows with a valid center pixel have a NULL window.
 - Point outputs are tabular (`pyarrow.Table`) with explicit CRS columns
   (`point_crs`, `raster_crs`) for downstream joins and multi-CRS workflows.
 

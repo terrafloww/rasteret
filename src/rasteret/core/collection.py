@@ -12,7 +12,7 @@ import threading
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Literal
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -2468,7 +2468,7 @@ class Collection:
         geometry_crs: int | None = 4326,
         match: str = "all",
         max_distance_pixels: int = 0,
-        return_neighbourhood: bool = False,
+        return_neighbourhood: Literal["off", "always", "if_center_nodata"] = "off",
         **filters: Any,
     ) -> pa.Table:
         """Sample point values into an Arrow table.
@@ -2508,11 +2508,12 @@ class Collection:
             this distance and picks the closest candidate by exact
             point-to-pixel-rectangle distance. ``0`` disables fallback and
             returns the nearest pixel value as-is.
-        return_neighbourhood : bool
-            If ``True``, include a ``neighbourhood_values`` column containing the
-            full square neighborhood centered on the base pixel under each point.
-            The returned list is row-major and has length
-            ``(2 * max_distance_pixels + 1) ** 2``.
+        return_neighbourhood : {"off", "always", "if_center_nodata"}
+            Controls whether a neighbourhood window is returned:
+            ``"off"`` omits the window column.
+            ``"always"`` returns the full window for every sampled row.
+            ``"if_center_nodata"`` returns the full window only when the center
+            pixel is nodata/NaN; other rows have a NULL window.
         filters : kwargs
             Additional keyword arguments passed to :meth:`subset`.
 
@@ -2528,6 +2529,10 @@ class Collection:
             from rasteret.options import get_options
 
             progress = get_options().progress
+        if return_neighbourhood != "off" and max_distance_pixels <= 0:
+            raise ValueError(
+                "max_distance_pixels must be > 0 when return_neighbourhood is enabled"
+            )
         return get_collection_point_samples(
             collection=self,
             points=points,

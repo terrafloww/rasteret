@@ -130,12 +130,12 @@ def test_sample_points_forwards_nodata_fallback_params() -> None:
             points=[],
             bands=["B04"],
             max_distance_pixels=2,
-            return_neighbourhood=True,
+            return_neighbourhood="always",
         )
 
     assert mocked_points.call_count == 1
     assert mocked_points.call_args.kwargs["max_distance_pixels"] == 2
-    assert mocked_points.call_args.kwargs["return_neighbourhood"] is True
+    assert mocked_points.call_args.kwargs["return_neighbourhood"] == "always"
 
 
 def test_public_api_surface_is_collection_first() -> None:

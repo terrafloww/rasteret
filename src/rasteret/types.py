@@ -31,11 +31,13 @@ POINT_SAMPLES_SCHEMA = pa.schema(
 )
 
 
-# Optional extension schema used by `sample_points(return_neighbourhood=True)`.
+# Optional extension schema used by `sample_points(return_neighbourhood=...)`.
 # This keeps the scalar sample (the `value` column) while also returning the
 # full pixel neighborhood around each point as a 1D list in row-major order.
 POINT_SAMPLES_NEIGHBORHOOD_SCHEMA = POINT_SAMPLES_SCHEMA.append(
-    pa.field("neighbourhood_values", pa.list_(pa.float64()), nullable=False)
+    # Nullable to support `return_neighbourhood="if_center_nodata"` where rows with a
+    # valid center pixel omit the window (NULL) for efficiency.
+    pa.field("neighbourhood_values", pa.list_(pa.float64()), nullable=True)
 )
 
 
