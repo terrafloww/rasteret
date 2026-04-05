@@ -2003,6 +2003,7 @@ class TestPointSampling:
             bands=["B04"],
             bbox=(100.0, 100.0, 101.0, 101.0),
             return_neighbourhood="always",
+            max_distance_pixels=1,
         )
 
         assert table.num_rows == 0
