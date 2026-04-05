@@ -33,17 +33,24 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_point_samples_table(
-    sampled: Any, *, return_neighbourhood: bool = False
+    sampled: Any,
+    *,
+    return_neighbourhood: Literal["off", "always", "if_center_nodata"] = "off",
 ) -> pa.Table:
     """Normalize internal point-sample results to a typed Arrow table."""
+    if return_neighbourhood not in {"off", "always", "if_center_nodata"}:
+        raise ValueError(
+            "return_neighbourhood must be one of: 'off', 'always', 'if_center_nodata'"
+        )
+    include_neighbourhood = return_neighbourhood != "off"
     schema = (
         POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
-        if return_neighbourhood
+        if include_neighbourhood
         else POINT_SAMPLES_SCHEMA
     )
     empty_table = (
         empty_point_samples_neighborhood_table
-        if return_neighbourhood
+        if include_neighbourhood
         else empty_point_samples_table
     )
 
@@ -89,7 +96,7 @@ def get_collection_point_samples(
     geometry_crs: int | None = 4326,
     match: Literal["all", "latest"] = "all",
     max_distance_pixels: int = 0,
-    return_neighbourhood: bool = False,
+    return_neighbourhood: Literal["off", "always", "if_center_nodata"] = "off",
     **filters: Any,
 ) -> pa.Table:
     """Sample point values across matching records.
@@ -100,6 +107,14 @@ def get_collection_point_samples(
         raise ValueError("match must be either 'all' or 'latest'")
     if max_distance_pixels < 0:
         raise ValueError("max_distance_pixels must be >= 0")
+    if return_neighbourhood not in {"off", "always", "if_center_nodata"}:
+        raise ValueError(
+            "return_neighbourhood must be one of: 'off', 'always', 'if_center_nodata'"
+        )
+    if return_neighbourhood != "off" and max_distance_pixels <= 0:
+        raise ValueError(
+            "max_distance_pixels must be > 0 when return_neighbourhood is enabled"
+        )
 
     async def _async_sample() -> pa.Table:
         expected_sample_errors: tuple[type[Exception], ...] = (
@@ -109,9 +124,10 @@ def get_collection_point_samples(
             TypeError,
             pa.ArrowException,
         )
+        include_neighbourhood = return_neighbourhood != "off"
         empty_samples = (
             empty_point_samples_neighborhood_table
-            if return_neighbourhood
+            if include_neighbourhood
             else empty_point_samples_table
         )
 
@@ -325,7 +341,7 @@ def get_collection_point_samples(
                 if winner_keys is None or len(winner_keys) == 0:
                     return (
                         empty_point_samples_neighborhood_table()
-                        if return_neighbourhood
+                        if include_neighbourhood
                         else empty_point_samples_table()
                     )
                 sampled_keys = pc.binary_join_element_wise(
@@ -515,13 +531,13 @@ def get_collection_point_samples(
                 raise ValueError(msg) from first
             return (
                 empty_point_samples_neighborhood_table()
-                if return_neighbourhood
+                if include_neighbourhood
                 else empty_point_samples_table()
             )
 
         schema = (
             POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
-            if return_neighbourhood
+            if include_neighbourhood
             else POINT_SAMPLES_SCHEMA
         )
         return pa.Table.from_batches(sample_batches, schema=schema)

@@ -118,7 +118,7 @@ pc/usda-cdl                 USDA Cropland Data Layer                   conus    
 
 ## Use your own datasets
 - Use `build_from_stac()` for any STAC API you want to query and cache as Rasteret Collection
-- Use `build_from_table()` for Parquet files that already contain GeoTIFF/COG URLs inside them, see [tutorial](https://terrafloww.github.io/rasteret/tutorials/06_non_stac_cog_collections/) 
+- Use `build_from_table()` for Parquet files that already contain GeoTIFF/COG URLs inside them, see [tutorial](https://terrafloww.github.io/rasteret/tutorials/06_non_stac_cog_collections/)
 
 You can also build collections using CLI `rasteret collections build` read more details [here](https://terrafloww.github.io/rasteret/how-to/collection-management/)
 
@@ -151,7 +151,7 @@ filtered = collection.subset(cloud_cover_lt=15, date_range=("2024-03-01", "2024-
 ```
 
 `subset()` accepts `cloud_cover_lt`, `date_range`, `bbox`, `geometries`,
-`split`, and `split_column` 
+`split`, and `split_column`
 
 ### ML training (TorchGeo)
 
@@ -228,7 +228,7 @@ for full methodology.
 
 There have been attempts to put 'patches' of geotiff imagery inside Parquet files instead of using COGs, and in ML training or Inference read these Parquet files at runtime, one such popular dataset is 'MajorTOM SentinelL2A' in HuggingFace.
 
-Rasteret and its parquet based Collection metadata means you can create such patches in the parquet and use Rasteret's I/O to read those patches as needed. 
+Rasteret and its parquet based Collection metadata means you can create such patches in the parquet and use Rasteret's I/O to read those patches as needed.
 You can create H3 or A5 indices based cell patches, or regular grids as you wish. All before touching pixels in COGs, and not having to actually move images inside Parquet.
 
 Rasteret beats reading 'images-inside-parquet' datasets while giving you freedom to create any kind of patching you wish at metadata level.
