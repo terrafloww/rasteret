@@ -310,7 +310,7 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             label_field : str, optional
                 Column name in the collection table to use as a label.
                 In ``time_series=True`` mode the label is taken from the
-                **first** (earliest) timestep only.
+                first selected timestep in query order.
             geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict, optional
                 Spatial filter: only scenes intersecting these geometries are included.
                 Accepts ``(minx, miny, maxx, maxy)`` bbox tuples, Arrow arrays
@@ -358,7 +358,6 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             self._backend = backend
             self._pool: _AsyncCOGReaderPool | None = None
             self._pool_pid: int | None = None
-            self._warned_ts_temporal_skip = False
             self._warned_image_dtype_casts: set[tuple[str, str]] = set()
             self._warned_cog_read_failures = False
 
@@ -942,6 +941,59 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 self._warn_image_dtype_cast_once(src_dtype, dst_dtype)
             return tensor
 
+        @staticmethod
+        def _valid_data_mask(
+            band_array: np.ndarray, nodata: float | int | None
+        ) -> np.ndarray:
+            """Return a boolean mask of valid (non-nodata) pixels."""
+            if nodata is None:
+                if np.issubdtype(band_array.dtype, np.floating):
+                    return np.isfinite(band_array)
+                return np.ones(band_array.shape, dtype=bool)
+
+            if isinstance(nodata, float) and np.isnan(nodata):
+                return ~np.isnan(band_array)
+            return band_array != nodata
+
+        def _mosaic_query_grid_records(
+            self,
+            records: list[np.ndarray],
+            nodata_values: list[list[float | int | None]],
+        ) -> np.ndarray:
+            """Mosaic records with first-record precedence (TorchGeo merge style).
+
+            Records are expected in query order and must all be ``[C, H, W]`` arrays
+            on the same query grid.
+            """
+            if not records:
+                raise ValueError("No records available for mosaicking")
+            if len(records) != len(nodata_values):
+                raise ValueError("records and nodata_values length mismatch")
+
+            out = np.zeros_like(records[0])
+            filled = np.zeros_like(out, dtype=bool)
+            n_bands = out.shape[0]
+
+            for record, record_nodata in zip(records, nodata_values):
+                if record.shape != out.shape:
+                    raise ValueError(
+                        f"Mosaic shape mismatch: expected {out.shape}, got {record.shape}"
+                    )
+                if len(record_nodata) != n_bands:
+                    raise ValueError(
+                        f"Mosaic nodata mismatch: expected {n_bands}, got {len(record_nodata)}"
+                    )
+                for band_idx in range(n_bands):
+                    valid = self._valid_data_mask(
+                        record[band_idx], record_nodata[band_idx]
+                    )
+                    write_mask = valid & ~filled[band_idx]
+                    if np.any(write_mask):
+                        out[band_idx, write_mask] = record[band_idx, write_mask]
+                        filled[band_idx, write_mask] = True
+
+            return out
+
         def __getitem__(self, index: GeoSlice) -> Sample:
             """Return a sample dict for the given spatio-temporal slice.
 
@@ -960,29 +1012,13 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             """
             x, y, t = self._disambiguate_slice(index)
 
+            # Match TorchGeo RasterDataset row selection:
+            # 1) temporal overlap filter, 2) temporal step, 3) spatial bbox filter.
             t_step = 1 if t.step is None else int(t.step)
-            if self.time_series:
-                # time_series=True stacks ALL spatially overlapping records
-                # regardless of the sampler's time slice.  Rasteret stores
-                # precise per-scene dates from STAC, so applying the sampler's
-                # narrow time window would miss most scenes.  Users control
-                # date range upstream via build(date_range=...) or
-                # collection.subset().
-                if not self._warned_ts_temporal_skip:
-                    self._warned_ts_temporal_skip = True
-                    logger.info(
-                        "time_series=True: sampler time slices are ignored; "
-                        "all spatially overlapping records are stacked. "
-                        "Use collection.subset(date_range=...) to limit the "
-                        "temporal range before creating the dataset."
-                    )
-                df = self.index.cx[x.start : x.stop, y.start : y.stop]
-                df = df.iloc[::t_step]
-            else:
-                interval = pd.Interval(t.start, t.stop, closed="both")
-                df = self.index.iloc[self.index.index.overlaps(interval)]
-                df = df.iloc[::t_step]
-                df = df.cx[x.start : x.stop, y.start : y.stop]
+            interval = pd.Interval(t.start, t.stop)
+            df = self.index.iloc[self.index.index.overlaps(interval)]
+            df = df.iloc[::t_step]
+            df = df.cx[x.start : x.stop, y.start : y.stop]
 
             df = self._filter_positive_overlap(df, x, y)
 
@@ -1013,10 +1049,8 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             label_rid: int | None = None
 
             if self.time_series:
-                # Sort chronologically so T dimension is time-ordered.
                 if "__rasteret_overlap_area__" in df.columns:
                     df = df.drop(columns=["__rasteret_overlap_area__"])
-                df = df.sort_index()
                 if not df.empty:
                     label_rid = int(df.iloc[0]["rid"])
 
@@ -1092,23 +1126,11 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                 image = self._image_tensor_from_numpy(image_np)  # [T, C, H, W]
 
             else:
-                # Minimal TorchGeo adapter behavior: select a single record for this
-                # spatiotemporal slice. (TorchGeo's RasterDataset mosaics multiple
-                # overlapping files, but Rasteret avoids reimplementing merge
-                # semantics here.)
                 if "__rasteret_overlap_area__" in df.columns:
-                    df = df.sort_values(
-                        "__rasteret_overlap_area__", ascending=False, kind="mergesort"
-                    )
-                if len(df) > 1:
-                    logger.warning(
-                        "TorchGeo slice overlaps %d records; selecting the record with "
-                        "the largest spatial overlap (set time_series=True to stack "
-                        "multiple timesteps).",
-                        len(df),
-                    )
+                    df = df.drop(columns=["__rasteret_overlap_area__"])
                 last_error: BaseException | None = None
-                image: torch.Tensor | None = None
+                per_record_arrays: list[np.ndarray] = []
+                per_record_nodata: list[list[float | int | None]] = []
                 for _, candidate in df.iterrows():
                     rid = int(candidate["rid"])
                     row = self._payload_row(rid)
@@ -1124,6 +1146,11 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                         last_error = exc
                         continue
                     if not fetch_results:
+                        continue
+                    if len(fetch_results) != n_bands:
+                        last_error = ValueError(
+                            f"Expected {n_bands} bands, got {len(fetch_results)}"
+                        )
                         continue
 
                     try:
@@ -1155,18 +1182,23 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                                     )
                                 )
 
-                        # np.stack -> [C, H, W] (1 alloc), then torch view/cast.
-                        image_np = np.stack(arrays, axis=0)
-                        image = self._image_tensor_from_numpy(image_np)  # [C, H, W]
-                        label_rid = rid
-                        break
+                        per_record_arrays.append(np.stack(arrays, axis=0))
+                        per_record_nodata.append(
+                            [meta.nodata for _r, meta in fetch_results]
+                        )
+                        if label_rid is None:
+                            label_rid = rid
                     except ValueError as exc:
                         last_error = exc
                         continue
-                if image is None:
+                if not per_record_arrays:
                     raise ValueError(
                         "No readable records were available for the requested chip."
                     ) from last_error
+                image_np = self._mosaic_query_grid_records(
+                    per_record_arrays, per_record_nodata
+                )
+                image = self._image_tensor_from_numpy(image_np)  # [C, H, W]
 
             transform = torch.tensor(
                 [x.step, 0.0, x.start, 0.0, -y.step, y.stop], dtype=torch.float32
@@ -1187,9 +1219,8 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                     # [C, H, W] -> [H, W] when C==1
                     sample["mask"] = image.squeeze(0)
             if self.label_field is not None:
-                # Use the first (earliest) record's label.  For time_series
-                # this means the label is NOT per-timestep - it represents
-                # the scene-level label of the earliest observation.
+                # Use the first selected record's label. For time_series this
+                # remains a scene-level label (not per timestep).
                 label_value = None
                 if label_rid is not None:
                     label_row = self._payload_row(label_rid)
