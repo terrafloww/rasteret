@@ -59,7 +59,7 @@ constructor parameters are Rasteret-specific.
 | Feature | What it does | Interop impact |
 |---|---|---|
 | `label_field` | Adds `sample["label"]` from a metadata column | None: extra key, ignored by TorchGeo trainers |
-| `time_series=True` | Stacks all spatially overlapping records into `[T, C, H, W]` | None: standard tensor shape, works with TorchGeo transforms |
+| `time_series=True` | Stacks records that overlap the sampler/query spatiotemporal slice into `[T, C, H, W]` | None: standard tensor shape, works with TorchGeo transforms |
 | `target_crs=` | Reprojects scenes from different CRS zones on the fly | None: result has uniform CRS, transparent to samplers |
 | `cloud_config=` | Configures authenticated cloud reads (requester-pays, signed URLs) | None: constructor-level, transparent to samplers |
 | `allow_resample=True` | Resamples bands with different native resolutions onto a common grid | None: output tensor has uniform resolution |

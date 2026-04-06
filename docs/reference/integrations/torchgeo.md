@@ -51,7 +51,8 @@ TorchGeo dataset composition behavior (`dataset1 & dataset2`, `dataset1 | datase
 ## Notes / limitations
 
 - When `chip_size` is set, Rasteret guarantees fixed chip output shape even when floating point bounds would otherwise cause off-by-one rounding.
-- When `time_series=False` and the requested slice overlaps multiple records, Rasteret selects the first record and logs a warning (it does not mosaic/merge overlapping scenes in the adapter).
+- `time_series=True` follows TorchGeo query semantics: temporal overlap is filtered from the sampler/query `GeoSlice`, then records are stacked into `[T, C, H, W]`.
+- `time_series=False` follows TorchGeo merge semantics: overlapping records for the requested slice are mosaicked on the query grid with first-record precedence.
 - Rasteret requires all requested bands to share the same resolution for TorchGeo sampling. To opt into resampling bands onto a common grid, pass `allow_resample=True` to `Collection.to_torchgeo_dataset(...)`.
 
 For train/val/test splits, see [ML Training with Splits](../../how-to/ml-training-splits.md).
