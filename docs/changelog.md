@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.7
+
+### Changed
+
+- **TorchGeo adapter semantic alignment**: `Collection.to_torchgeo_dataset(...)`
+  now follows TorchGeo `RasterDataset` query behavior more closely.
+  - `time_series=True`: applies temporal overlap from the sampler/query slice,
+    then stacks selected records into `[T, C, H, W]`.
+  - `time_series=False`: mosaics overlapping records on the query grid with
+    first-record precedence and nodata-aware filling.
+- **TorchGeo docs clarity**: interop and reference docs now describe the
+  updated time-series and non-time-series slice behavior.
+
+### Tested
+
+- Expanded `test_torchgeo_error_propagation` with semantic coverage for:
+  - query-temporal filtering in `time_series=True`
+  - overlapping-record mosaicking in `time_series=False`
+- Updated `test_torchgeo_network` wording to match the query-slice semantics.
+
 ## v0.3.6
 
 ### Added
