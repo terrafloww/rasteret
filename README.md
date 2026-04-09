@@ -45,8 +45,8 @@ import rasteret
 # 1. Load or Build your collection (Index is local, metadata is relational)
 collection = rasteret.load("my_s2_experiment")
 
-# 2. Query like a database: "Give me the maize scenes with <10% clouds"
-filtered = collection.where((pc.field("crop") == "maize") & (pc.field("eo:cloud_cover") < 10))
+# 2. Query like a Table: "Give me the training scenes with <10% clouds"
+filtered = collection.subset(split="train", cloud_cover_lt=10)
 
 # 3. Batch Read: "Fetch aligned pixels for these 1000 polygons"
 data = filtered.get_numpy(geometries=my_polygons, bands=["B04", "B08"])
