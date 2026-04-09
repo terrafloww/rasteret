@@ -61,7 +61,7 @@ data = filtered.get_numpy(geometries=my_polygons, bands=["B04", "B08"])
 - **🧬 Relational Imagery**: Store your labels, `train/val/test` splits, and custom metadata directly in the imagery index. No more separate CSVs.
 - **🛠️ Zero-Config Throughput**: Automatic cloud storage presigning with `Obstore`, and custom async I/O handles the networking so you don't have to.
 
-## The Evidence: Verifiable Performance
+## Performance
 
 Rasteret's claims are backed by rigorous, reproducible benchmarks. We measure across three dimensions: cold-start latency, cloud-native scale, and comparison against legacy "data-inside-parquet" patterns.
 
@@ -98,6 +98,8 @@ Recent "images-inside-Parquet" approaches (like MajorTOM) try to store image byt
 
 ![HF vs Rasteret speedup](./assets/benchmark_hf_speedup.png)
 
+*All numbers measured on AWS us-west-2 4CPU machine (same region as data) vs. cold-start GDAL.*
+
 ---
 
 ## Technical Deep Dives
@@ -105,7 +107,7 @@ Recent "images-inside-Parquet" approaches (like MajorTOM) try to store image byt
 For the full architectural rationale, methodology, and reproducibility scripts, see:
 
 - [**Full Benchmarks Guide**](https://terrafloww.github.io/rasteret/explanation/benchmark/): Methodology and results.
-- [**Design Decisions**](https://terrafloww.github.io/rasteret/explanation/design-decisions.md): Why we chose Parquet over Zarr or SQL.
+- [**Design Decisions**](https://terrafloww.github.io/rasteret/explanation/design-decisions.md): Why we chose Parquet + COGs
 - [**Schema Contract**](https://terrafloww.github.io/rasteret/explanation/schema-contract/): The internal anatomy of a Collection.
 
 ```text
@@ -150,17 +152,6 @@ ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
 
 ---
 
-## Performance
-
-| Scenario | rasterio/GDAL | Rasteret | Speedup |
-|---|---|---|---|
-| Single AOI, 15 scenes | 9.08 s | 1.14 s | **8x** |
-| Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **19x** |
-| Cross-CRS boundary | 12.47 s | 0.59 s | **21x** |
-
-*Measured on AWS us-west-2 (same region as data) vs. cold-start GDAL.*
-
----
 
 ## Documentation
 
