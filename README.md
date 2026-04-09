@@ -61,15 +61,52 @@ data = filtered.get_numpy(geometries=my_polygons, bands=["B04", "B08"])
 - **🧬 Relational Imagery**: Store your labels, `train/val/test` splits, and custom metadata directly in the imagery index. No more separate CSVs.
 - **🛠️ Zero-Config Throughput**: Automatic cloud storage presigning with `Obstore`, and custom async I/O handles the networking so you don't have to.
 
+## The Evidence: Verifiable Performance
+
+Rasteret's claims are backed by rigorous, reproducible benchmarks. We measure across three dimensions: cold-start latency, cloud-native scale, and comparison against legacy "data-inside-parquet" patterns.
+
+### 1. Cold-start comparison with TorchGeo
+Same AOIs, same scenes, same sampler, same DataLoader. Rasteret eliminates the "cold start tax" by caching IFD headers in the local Parquet index.
+
+| Scenario | rasterio/GDAL (Standard) | Rasteret (Index-First) | Speedup |
+|---|---|---|---|
+| Single AOI, 15 scenes | 9.08 s | 1.14 s | **8x** |
+| Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **19x** |
+| Cross-CRS boundary | 12.47 s | 0.59 s | **21x** |
+
+![Processing time comparison](./assets/benchmark_results.png)
+![Speedup breakdown](./assets/benchmark_breakdown.png)
+
+### 2. The Cloud vs. Edge Comparison
+How does Rasteret stack up against **Google Earth Engine (GEE)** or a highly parallelized Rasterio setup for time-series extraction?
+
+| Library | First Run (Cold) | Subsequent Runs (Hot) |
+|---------|-----------------|-----------------------|
+| **Rasterio** + ThreadPool | 32 s | 24 s |
+| **Google Earth Engine** | 10–30 s | 3–5 s |
+| **Rasteret** | **3 s** | **3 s** |
+
+![Single request performance](./assets/single_timeseries_request.png)
+
+### 3. HuggingFace `MajorTOM` vs. Rasteret
+Recent "images-inside-Parquet" approaches (like MajorTOM) try to store image bytes in Parquet files. Rasteret keeps imagery in cloud COGs while using Parquet as a high-performance index—delivering better throughput without the data movement overhead.
+
+| Patches | HF `datasets` (streaming) | Rasteret index+COGs | Speedup |
+|---:|---:|---:|---:|
+| 120 | 46.83 s | 12.09 s | **3.88x** |
+| 1000 | 771.59 s | 118.69 s | **6.50x** |
+
+![HF vs Rasteret speedup](./assets/benchmark_hf_speedup.png)
+
 ---
 
 ## Technical Deep Dives
 
-Rasteret's claims are backed by rigorous benchmarks and targeted architectural decisions. For the "How" and "Why," see:
+For the full architectural rationale, methodology, and reproducibility scripts, see:
 
-- [**Benchmarks**](https://terrafloww.github.io/rasteret/explanation/benchmark/): Detailed comparisons vs. **GDAL cold starts** and **HuggingFace MajorTOM** (images-inside-parquet).
-- [**Design Decisions**](https://terrafloww.github.io/rasteret/explanation/design-decisions.md): Why we chose Parquet over Zarr, JSON, or SQLite.
-- [**Schema Contract**](https://terrafloww.github.io/rasteret/explanation/schema-contract/): The internal anatomy of a Rasteret index.
+- [**Full Benchmarks Guide**](https://terrafloww.github.io/rasteret/explanation/benchmark/): Methodology and results.
+- [**Design Decisions**](https://terrafloww.github.io/rasteret/explanation/design-decisions.md): Why we chose Parquet over Zarr or SQL.
+- [**Schema Contract**](https://terrafloww.github.io/rasteret/explanation/schema-contract/): The internal anatomy of a Collection.
 
 ```text
 STAC API / GeoParquet  -->  Parquet Collection  -->  Tile-level byte reads
