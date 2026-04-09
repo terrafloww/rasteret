@@ -877,7 +877,14 @@ DatasetRegistry.register(
             "s3://us-west-2.opendata.source.coop/"
             "terrafloww/aef-v1-annual-rasteret/index.parquet"
         ),
-        collection_uri="s3://us-west-2.opendata.source.coop/terrafloww/aef-v1-annual-rasteret/data",
+        # AEF runtime access must stay index-first. The notebook and public
+        # alias should reopen the published index parquet, not the wide data
+        # collection root, otherwise downstream reads can materialize far more
+        # metadata and data than older releases.
+        collection_uri=(
+            "s3://us-west-2.opendata.source.coop/"
+            "terrafloww/aef-v1-annual-rasteret/index.parquet"
+        ),
         field_roles={
             "id": "fid",
             "geometry": "geom",

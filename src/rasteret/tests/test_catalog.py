@@ -124,6 +124,13 @@ class TestDatasetRegistry:
         assert d is not None
         assert d.requires_auth is True
 
+    def test_builtin_aef_runtime_stays_index_first(self):
+        d = DatasetRegistry.get("aef/v1-annual")
+        assert d is not None
+        assert d.index_uri is not None
+        assert d.collection_uri == d.index_uri
+        assert d.collection_uri.endswith("index.parquet")
+
     def test_get_missing_returns_none(self):
         assert DatasetRegistry.get("nonexistent/dataset") is None
 
