@@ -144,16 +144,25 @@ sampler = RandomGeoSampler(dataset, size=256, length=100)
 loader  = DataLoader(dataset, sampler=sampler, batch_size=4)
 ```
 
-### 3. Clean Analysis (xarray)
+### 3. Fast Xarray creation
 ```python
 ds = collection.get_xarray(geometries=my_aoi, bands=["B04", "B08"])
 ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
 ```
 
+## Key Entry Points
+
+Rasteret is built for flexibility. Choose the output format that fits your existing workflow:
+
+| Method | Output | Purpose |
+|---|---|---|
+| [**`to_torchgeo_dataset()`**](https://terrafloww.github.io/rasteret/reference/integrations/torchgeo/) | `RasteretGeoDataset` | Drop-in high-performance backend for **TorchGeo** training. |
+| [**`get_xarray()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.get_xarray) | `xarray.Dataset` | Quick create Xarray for analysis. |
+| [**`get_numpy()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.get_numpy) | `numpy.ndarray` | Raw pixel arrays (`[N, C, H, W]`) directly. |
+| [**`get_gdf()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.get_gdf) | `GeoDataFrame` | Metadata and pixel arrays as a standard geopandas dataframe. |
+| [**`sample_points()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.sample_points) | `DataFrame` | Exact pixel values at points geometries with intuitive configurable fallback for nodata pixels |
+
 ---
-
-
-## Documentation
 
 Full documentation at **[terrafloww.github.io/rasteret](https://terrafloww.github.io/rasteret)**:
 
