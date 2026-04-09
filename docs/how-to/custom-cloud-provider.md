@@ -1,21 +1,8 @@
-# Custom Cloud Provider & Authentication
+# Invisible Connectivity: Multi-Cloud Auth
 
-## Do you need this page?
+In Rasteret, connectivity is designed to be invisible. Our I/O engine automatically routes your requests to the correct cloud store (S3, GCS, Azure) based on the URL pattern and handles standard public access without any configuration.
 
-Most datasets work **without any authentication or configuration**. Rasteret's
-IO layer automatically routes URLs to native cloud stores (S3, Azure Blob, GCS),
-and public data like Sentinel-2 on Earth Search is read anonymously.
-
-| Data source | Auth needed | What to do |
-|---|---|---|
-| **Public S3** (Earth Search Sentinel-2, etc.) | None | Just call `build()`, no configuration needed |
-| **Requester-pays S3** (Landsat, NAIP) | Standard AWS credentials | Install `rasteret[aws]` and set AWS credentials (env vars or `~/.aws/credentials`) |
-| **Planetary Computer** (`pc/*`) | Built-in: works via `build()` | Install `rasteret[azure]` for SAS signing. For long-lived caches, see `create_backend()` below. |
-| **Earthdata / DAAC endpoints** (temporary S3 credentials) | Advanced | Install `rasteret[earthdata]` and create a backend with an Earthdata credential provider (details below) |
-| **Private buckets with custom URL patterns** | `CloudConfig.register()` | Your CDN remaps URLs, or you need requester-pays signing; see [below](#register-a-cloud-config) |
-
-If your data is on Earth Search or any public S3/GCS/HTTP endpoint, **stop here
-and go back to [Getting Started](../getting-started/index.md)**.
+This guide covers what to do in the cases where you **do** need to manage connectivity: custom requester-pays buckets, private buckets, and custom credential providers.
 
 ---
 

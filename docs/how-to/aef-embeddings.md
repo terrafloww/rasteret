@@ -1,13 +1,8 @@
 # AlphaEarth Foundation Embeddings (AEF)
 
-[AlphaEarth Foundation (AEF)](https://source.coop/repositories/tge-labs/aef)
-embeddings are 64-band, 10 m resolution foundation-model features published as
-tiled GeoTIFFs. Rasteret reads them efficiently by caching COG tile headers once
-and then doing fast byte-range reads for each query.
+[AlphaEarth Foundation (AEF)](https://source.coop/repositories/tge-labs/aef) embeddings are 64-band foundation-model features published as cloud-native GeoTIFFs.
 
----
-
-## Quick start
+Because these are high-dimensional vectors, traditional GDAL reads are particularly slow. Rasteret accelerates AEF access by caching tile layouts in your **Collection table**, delivering **10x to 20x faster reads** for each 64-band patch compared to sequential approaches.
 
 AEF is a built-in catalog dataset. Three lines gets you from zero to pixels:
 

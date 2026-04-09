@@ -1,7 +1,9 @@
-# Benchmarks
+# Benchmarks: Proving the Flow
 
-Apples-to-apples time-series comparison using
-`docs/tutorials/05_torchgeo_comparison.ipynb`.
+> [!TIP]
+> **Key Finding**: Rasteret is a **high-performance rasterio/GDAL alternative** that delivers **10x to 20x faster reads** from remote COGs by eliminating the "Cold Start Tax" of remote header parsing.
+
+This page provides an apples-to-apples performance comparison using the workflow found in `docs/tutorials/05_torchgeo_comparison.ipynb`.
 
 **Environment:** Ubuntu Linux, Python 3.13, us-west-2 EC2 instance.
 
@@ -72,7 +74,7 @@ before pixel reads begin.
 
 ## HF `datasets` baseline (Major TOM keyed patches)
 
-Separate benchmark against Hugging Face payload-Parquet workflows using
+Separate benchmark against Hugging Face "images-inside-Parquet" workflows using
 `datasets.load_dataset(..., streaming=True, filters=...)` (PyArrow-backed predicate pushdown):
 
 | Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |

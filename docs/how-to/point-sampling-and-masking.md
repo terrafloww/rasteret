@@ -1,9 +1,10 @@
-# Point Sampling and Masking
+# Neighborhood-Aware Sampling & Masking
 
-Use this guide when you need either:
+This guide covers how to extract pixel values for specific GPS coordinates, and more importantly, how to handle the common problem of **Nodata gaps** (e.g., when your coordinate lands on a cloud or a missing tile).
 
-- per-point values (tabular output), or
-- polygon/bbox chip reads with explicit mask behavior.
+## The Challenge: GPS vs. Clouds
+
+In traditional point sampling, if your ground-truth coordinate lands on a `nodata` pixel, your script simply returns `NaN`, and your training batch loses a sample. **Rasteret solves this with Smart Fallback.**
 
 ## Sample values at points (standard Arrow-native workflow)
 
@@ -25,6 +26,20 @@ Why `points=`?
 `sample_points()` is a point-value query API, so it uses `points=...`.
 Area/chip read APIs (`get_xarray()`, `get_numpy()`, `get_gdf()`) use
 `geometries=...`.
+
+### pandas -> Rasteret
+
+```python
+import pandas as pd
+df = pd.read_parquet("points.parquet", columns=["lon", "lat"])
+samples = collection.sample_points(
+    points=df,
+    x_column="lon",
+    y_column="lat",
+    bands=["B04"],
+    geometry_crs=4326,
+)
+```
 
 ### DuckDB -> Rasteret
 
@@ -60,34 +75,6 @@ ctx.create_data_frame(
 tbl = ctx.sql("SELECT lon, lat FROM pts").to_arrow_table()
 samples = collection.sample_points(
     points=tbl,
-    x_column="lon",
-    y_column="lat",
-    bands=["B04"],
-    geometry_crs=4326,
-)
-```
-
-### Polars -> Rasteret
-
-```python
-import polars as pl
-df = pl.read_parquet("points.parquet").select(["lon", "lat"])
-samples = collection.sample_points(
-    points=df,
-    x_column="lon",
-    y_column="lat",
-    bands=["B04"],
-    geometry_crs=4326,
-)
-```
-
-### pandas -> Rasteret
-
-```python
-import pandas as pd
-df = pd.read_parquet("points.parquet", columns=["lon", "lat"])
-samples = collection.sample_points(
-    points=df,
     x_column="lon",
     y_column="lat",
     bands=["B04"],

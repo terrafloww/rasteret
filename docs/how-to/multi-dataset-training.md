@@ -1,9 +1,8 @@
-# Multi-Dataset Training
+# Data Fusion: Multi-Dataset Training
 
-Rasteret Collections produce standard TorchGeo `GeoDataset` objects, so
-TorchGeo's dataset composition operators (`&`, `|`) work directly.
+In Rasteret, **Data Fusion** isn't a complex engineering task—it’s a relational join. Because every Collection produces standard TorchGeo `GeoDataset` objects, you can combine disparate sources of imagery, masks, and embeddings using simple Python operators (`&`, `|`).
 
----
+This guide shows how to fuse multiple high-performance "Blueprints" into a single unified training flow.
 
 ## Combining datasets with `&` (intersection)
 

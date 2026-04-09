@@ -2,14 +2,14 @@
 
 This page explains how Rasteret's components work together.
 
-## Category framing
+## The Index-First Architecture
 
-Rasteret uses an **index-first geospatial retrieval** architecture:
+Rasteret is built on a **Control Plane vs. Data Plane** separation that treats satellite imagery like a tables.
 
-- **Control plane (tables/Parquet)**: dataset discovery, filtering, train/val/test splits, patch metadata, and cached COG metadata.
-- **Data plane (COG object storage)**: on-demand TIFF byte reads from source GeoTIFF/COG assets.
+- **Control plane**: A local Parquet table for discovery, filtering, and experiment metadata. This is where you search, subset, and manage your Training/Val/Test splits.
+- **Data plane**: On-demand, high-throughput pixel streaming from source GeoTIFF/COG assets.
 
-This split keeps metadata workflows table-native while avoiding payload-in-Parquet duplication.
+For the detailed technical reasoning behind this split and how it eliminates the "Cold Start Tax," see [**Design Decisions**](design-decisions.md).
 
 ### Architecture
 
@@ -166,21 +166,20 @@ partition columns.
 
 ## Why Parquet indexes?
 
-Rasteret pre-parses COG headers at index time and stores them in a local
-Parquet dataset. Subsequent reads skip all header fetching and jump straight
-to pixel byte ranges, cutting latency by up to 20x.
+Traditional geospatial workflows pay a "Cold Start Tax" every time they open a remote COG. GDAL has to fetch the TIFF header (IFD) over HTTP just to know where the pixels are. For a 30-scene time series, that's 120+ blocking network round-trips before your model sees a single pixel.
 
-For a full discussion of why Parquet over Zarr manifests, JSON, or SQLite,
-see [Design Decisions](design-decisions.md#why-parquet-indexes).
+**Rasteret removes this tax by caching the header metadata in a local Parquet index.**
 
-## Concurrency model
+For a full discussion of why Parquet over Zarr manifests, JSON, or SQLite, see [Design Decisions](design-decisions.md#why-parquet-indexes).
 
-Rasteret uses Python `asyncio` for I/O concurrency:
+### High-Throughput I/O: Request Coalescing
 
-- **Record-level**: `asyncio.gather` across all rasters in a batch.
-- **Band-level**: `asyncio.gather` across all bands within a raster.
-- **Tile-level**: Merged byte-range reads with a `Semaphore` to cap concurrent HTTP.
-- **Decompression**: `run_in_executor` offloads CPU-bound tile decoding to threads.
+Rasteret's speed doesn't just come from skipping header parsing; it comes from **Request Coalescing**.
 
-This design is bandwidth-bound rather than CPU-bound, which is why the
-speedup grows with scene count (more I/O to overlap).
+When you request multiple bands or a large AOI, the I/O engine analyzes the underlying tile layout and merges nearby byte-range requests into a single, larger HTTP request. This drastically reduces the overhead of network round-trips for multi-spectral data.
+
+The concurrency model is built on Python `asyncio` and `obstore` (Rust):
+- **Record-level**: Concurrent reads across multiple rasters in a batch.
+- **Band-level**: Concurrent fetches for multiple bands within a single scene.
+- **Tile-level**: Coalesced byte-range reads with intelligent semaphores to cap network pressure.
+- **Decompression**: Thread-pool offloading for CPU-bound tile decoding.

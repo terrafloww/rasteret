@@ -1,17 +1,10 @@
-# Build a Collection from Parquet Files
+# Blueprint to Pixel: Ingesting your own Catalogs
 
-`build_from_table()` creates a Collection from **any Parquet file that
-contains GeoTIFF URLs**: STAC GeoParquet, Source Cooperative exports,
-or your own custom catalog. No STAC API needed.
+`build_from_table()` creates a Collection from **any Parquet table that contains GeoTIFF URLs**. Whether you have STAC GeoParquet from Source Cooperative or your own custom CSV-converted-to-Parquet, this is the "zero-friction" ingest path for your private data.
 
-PyArrow reads the file from local paths, `s3://`, or `gs://` URIs.
-Rasteret validates the schema, derives per-record bounding boxes from the
-GeoParquet `geometry` column, and produces a standard Collection backed by
-Arrow.
+Rasteret validates your schema, derives per-record bounding boxes, and parsing COG headers to create an accelerated local index.
 
-Use this path for **first-time ingest** of external Parquet. If your table
-already came from a Rasteret Collection and you only appended columns, use
-`rasteret.as_collection(...)` to re-wrap it without rebuilding.
+Use this path for **first-time ingest** of external data. If your table already came from a Rasteret Collection and you only appended columns, use [**as_collection()**](../reference/rasteret.md) to re-wrap it instantly.
 
 ---
 

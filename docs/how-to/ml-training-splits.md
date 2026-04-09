@@ -1,13 +1,8 @@
-# ML Training with Splits and Labels
+# Relational Training: Splits and Labels
 
-!!! note
-    Requires `rasteret[torchgeo]`.
+In traditional geospatial ML, datasets often ship with "black box" splits baked into the code. In Rasteret, splits and labels are **simple columns in your Parquet table**.
 
-In TorchGeo, datasets ship with pre-defined train/val/test splits baked
-into the dataset class. In Rasteret, splits and labels are **columns in
-the Parquet index**. You add them yourself, which gives you full control
-over partitioning strategy and makes the assignments reproducible and
-shareable.
+By managing your partitions as data (not code), you gain full control over your experimentation strategy. You can add, join, or update your training assignments using standard tools like **pandas** or **DuckDB**, ensuring your experiment is perfectly reproducible and shareable.
 
 ## 1. Build a collection
 

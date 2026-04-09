@@ -1,18 +1,8 @@
-# Enriched Parquet for Reproducible Experiments
+# Relational Geo: Enriched Parquet for Reproducible Experiments
 
-Rasteret's Parquet index is extensible. You can add columns (AOI polygons,
-train/val/test splits, labels, quality flags) and query them later with
-standard Arrow-compatible tools. Everything stays in one file, making
-experiments reproducible and shareable.
+In Rasteret, your metadata and your pixels are not just "linked", they live in the same row of the same table. This guide explains how to use **Enriched Parquet Workflows** to manage complex experiment metadata (AOI polygons, splits, labels, quality flags) directly within your high-performance index.
 
-The pattern (collection-centric):
-
-1. **Rasteret builds** the index (scene metadata + COG header cache)
-2. **You enrich** it with experiment-specific columns
-3. **Arrow tools filter** the enriched Parquet (DuckDB, PyArrow, GeoPandas)
-4. **Rasteret fetches** COG pixels for the filtered subset
-
-Core data flow stays Arrow-native through Collection operations.
+By treating geospatial data as a **Table**, you can use the entire Python data ecosystem (**DuckDB**, **Polars**, **GeoPandas**) to join, filter, and audit your datasets with zero friction.
 
 ## 1. Build and enrich
 

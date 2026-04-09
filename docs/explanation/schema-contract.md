@@ -1,34 +1,28 @@
 # Schema Contract
 
-## Why three tiers?
+## Why Parquet indexes?
 
-A Rasteret Parquet index serves two purposes at once: **I/O acceleration
-cache** and **experiment metadata store**. Most systems keep these separate
-(a manifest for discovery, a cache for byte offsets, a spreadsheet for
-labels). Rasteret unifies them in one file.
+Traditional geospatial workflows pay a "Cold Start Tax" every time they open a remote COG. GDAL has to fetch the TIFF header (IFD) over HTTP just to know where the pixels are. For a 30-scene time series, that's 120+ blocking network round-trips before your model sees a single pixel.
 
-This works because the schema has three tiers of columns, each with
-different guarantees:
+**Rasteret removes this Tax by caching the header metadata in a local Parquet index.**
 
-1. **Required columns** (4): the contract every ingest path must satisfy.
-   These are what make a Parquet file a valid Rasteret Collection.
-2. **COG acceleration columns** (per band): cached TIFF header data
-   that eliminates HTTP round-trips at read time. This is what makes
-   Rasteret fast.
-3. **User-extensible columns**: splits, labels, quality flags, custom
-   metadata. This is what makes the same Parquet file useful for
-   experiment tracking and reproducibility.
+We chose Parquet (over Zarr, JSON, or SQLite) for its specialized layout:
+- **Queryable**: Filter millions of scenes using Arrow predicate pushdown without reading the whole file.
+- **Ecosystem Native**: Your index is a standard table. You can open it in **DuckDB**, **Polars**, or **pandas** to perform complex joins between your ground-truth data and your imagery.
+- **Portable**: A 2MB Parquet index can describe 2TB of satellite data. It’s small enough to commit to Git or share via Slack.
 
-The three tiers are independent. A Collection without COG acceleration
-columns still works for filtering and metadata queries (just no fast
-tile reads). A Collection without user columns still works for reading
-pixels (just no split/label support). You can build a
-Collection in stages: ingest first, enrich with COG metadata later, add
-splits and labels when you need them.
+## The "Three Tier" Design
 
-### Why Parquet?
+A Rasteret Collection is more than just a list of files; it is a **unified index** that simplifies the researcher's mental model. Traditionally, you have to manage discovery metadata (search results), pixel offsets (for speed), and project-specific labels (for training) in separate places.
 
-Parquet is queryable, schema-evolvable, ecosystem-native, and portable.
+**Rasteret unifies these into three tiers of columns within a single Parquet file:**
+
+1. **Required columns**: The base contract. These make the file a valid Rasteret Collection.
+2. **COG acceleration columns**: Cached TIFF header metadata. This is what removes the "Cold Start" friction and makes Rasteret fast.
+3. **User-extensible columns**: Your splits, labels, and quality flags. This is what makes the Collection a reproducible experiment store.
+
+By unifying these, a single `.parquet` file becomes a complete, shareable record of your experiment. For the full technical specification, see the [Required Columns](#tier-1-required-columns) section below.
+
 For the full rationale (including alternatives considered), see
 [Design Decisions](design-decisions.md#why-parquet-indexes).
 

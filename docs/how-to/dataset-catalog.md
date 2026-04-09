@@ -1,10 +1,8 @@
-# Dataset Catalog
+# Zero-Friction Discovery: The Dataset Catalog
 
-Rasteret ships with a built-in **dataset catalog**: a registry of known
-datasets so you can build a Collection by ID without remembering endpoints
-or file paths. Each entry points to a STAC API, a GeoParquet file, or both.
-Most users only need the `build()` function shown below; the later sections
-cover browsing, local registration, and advanced customisation.
+Rasteret ships with a built-in **dataset catalog**: a registry of "Blueprints" that allow you to build a Collection by name without ever looking up a STAC endpoint, Parquet file with image urls, S3 bucket.
+
+Instead of hunting for endpoints, you simply use the **Dataset ID** (e.g., `earthsearch/sentinel-2-l2a`) directly in your code.
 
 The built-in catalog includes 12 entries across Earth Search, Planetary
 Computer, and AlphaEarth Foundation -- covering Sentinel-2, Landsat,
@@ -313,8 +311,8 @@ single column rather than a struct.
 
 ---
 
-## Catalog spec direction
+## Next Step: Managing your Experiment
 
-The underlying `DatasetDescriptor` class is intentionally **spec-aligned**: a
-pragmatic working format that can evolve into portable YAML/JSON. The goal is
-for catalog entries to be shareable across tools, not just Rasteret.
+Once you have discovered your data and built your first Collection, the next step is to move from **Metadata** to **Management**.
+
+👉 [**Enriched Parquet Workflows**](enriched-parquet-workflows.md)

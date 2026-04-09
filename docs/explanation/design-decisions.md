@@ -1,39 +1,26 @@
 # Design Decisions
 
-This page documents the key design choices behind Rasteret and the reasoning
-that drives them. It is aimed at contributors and advanced users who want to
-understand *why* things work the way they do.
+Rasteret is built on a simple conviction: **geospatial infrastructure should get out of the way of the science.** This page documents the key choices we made to reduce friction for AI practitioners.
 
-## Category framing
+## The Architecture: Control Plane vs. Data Plane
 
-Rasteret follows an **index-first geospatial retrieval** architecture:
+We follow an **index-first** retrieval architecture:
 
-- **Control plane (tables/Parquet)**: discovery, filtering, splits/labels, and cached COG header metadata.
-- **Data plane (COG object storage)**: on-demand tile byte reads from source GeoTIFFs.
+- **Control plane (The Index)**: A local Parquet table for discovery, filtering, and experiment metadata (splits/labels).
+- **Data plane (The Cloud)**: On-demand pixel streaming directly from source GeoTIFFs.
 
-This separation is intentional. It preserves table interoperability for metadata
-workflows while avoiding payload-in-Parquet duplication for routine pixel reads.
+This separation means you can manage 100,000 satellite scenes as easily as a table, while only touching the actual pixel bytes when your model is ready to train.
 
 ## Why Parquet indexes?
 
-Remote COGs require an HTTP HEAD + IFD range read per file just to discover
-tile offsets. For a 30-scene time series with 4 bands, that is 120 HTTP
-round-trips *before any pixel data is fetched*.
+Traditional geospatial workflows pay a **"Cold Start Tax"** every time they open a remote COG. GDAL has to fetch the TIFF header (IFD) over HTTP just to know where the pixels are. For a 30-scene time series, that's 120+ blocking network round-trips before your model sees a single pixel.
 
-Rasteret pre-parses COG headers at index time and stores everything in a local
-Parquet dataset. Subsequent reads skip all header fetching and jump straight to
-pixel byte ranges.
+**Rasteret removes this tax by caching the header metadata in a local Parquet index.**
 
-Why Parquet specifically (not Zarr manifests, JSON, or SQLite)?
-
-- **Queryable**: Arrow predicate/projection pushdown enables subsetting
-  without reading the full index.
-- **Schema evolution**: new columns can be added without breaking existing
-  files.
-- **Ecosystem native**: Parquet is readable by DuckDB, DataFusion, Polars,
-  pandas, Spark, and every major data tool.
-- **Portable**: a single file (or partitioned directory) that travels with
-  the data; no running service needed.
+We chose Parquet (over Zarr, JSON, or SQLite) for its specialized ecosystem support:
+- **Queryable**: Filter millions of scenes using Arrow predicate pushdown without reading the whole file.
+- **Ecosystem Native**: Your index is a standard table. You can open it in **DuckDB**, **Polars**, or **pandas** to perform complex joins between your ground-truth data and your imagery.
+- **Portable**: A 2MB Parquet index can describe 2TB of satellite data. It’s small enough to commit to Git or share via Slack.
 
 ## Why a custom COG reader?
 

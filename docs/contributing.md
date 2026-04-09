@@ -21,9 +21,6 @@ Optional extras for specific test suites:
 ```bash
 # TorchGeo adapter tests
 uv sync --extra dev --extra torchgeo
-
-# COG header parsing tests (requires async-tiff fixture data)
-export ASYNC_TIFF_FIXTURES=/path/to/async-tiff/fixtures/image-tiff
 ```
 
 ## Architecture overview

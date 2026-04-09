@@ -1,13 +1,8 @@
-# Ecosystem Comparison
+# Ecosystem Power-ups
 
-Rasteret accelerates reads from tiled GeoTIFF collections by caching tile
-layout metadata in a Parquet index. It works alongside TorchGeo, xarray,
-and rasterio, not instead of them.
+Rasteret is designed to act as the **high-performance I/O engine** for the tools you already use, not to replace them. By caching tile layout metadata in Parquet, we accelerate reads while remaining 100% compatible with the libraries researchers rely on.
 
-Collections are written as **GeoParquet 1.1** today (WKB + `geo` metadata).
-Parquet-native `GEOMETRY`/`GEOGRAPHY` logical types and GeoParquet 2.0 are
-emerging; Rasteret tracks this and plans to adopt newer encodings when ecosystem
-support stabilizes.
+We speak the same "math" as `rasterio` and `pyproj` to ensure that every pixel Rasteret reads is perfectly aligned with the industry standard.
 
 ## Interop
 

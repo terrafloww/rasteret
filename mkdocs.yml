@@ -129,7 +129,10 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started: getting-started/index.md
+  - Starting Out:
+    - The Mental Model: explanation/conceptual-roadmap.md
+    - Comparison (vs Rasterio/STAC): how-to/transitioning-from-rasterio.md
+    - Getting Started: getting-started/index.md
   - Tutorials:
     - tutorials/index.md
     - "Quickstart": tutorials/01_quickstart.ipynb
@@ -140,6 +143,7 @@ nav:
     - TorchGeo Benchmark: tutorials/05_torchgeo_comparison.ipynb
   - How-To Guides:
     - how-to/index.md
+    - Turbocharging TorchGeo: how-to/turbocharging-torchgeo.md
     - Build from Parquet: how-to/build-from-parquet.md
     - Point Sampling and Masking: how-to/point-sampling-and-masking.md
     - AEF Embeddings: how-to/aef-embeddings.md

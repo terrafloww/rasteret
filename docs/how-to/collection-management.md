@@ -1,17 +1,12 @@
-# Collection Management
+# Managing the Experiment Lifecycle
 
-Build, discover, filter, and manage Rasteret collections.
+In Rasteret, your work revolves around **Collections**: high-performance Parquet tables that pair your pixels with your metadata. This guide explains how to manage these tables across their entire lifecycle—from initial ingestion to sharing your results.
 
-Rasteret has two CLI groups: `rasteret collections` manages local Collections
-(build, import, inspect, delete); `rasteret datasets` manages the
-dataset catalog (list, search, build from registry). There is also a
-top-level `rasteret build` shortcut that mirrors the Python `build()` API.
+Rasteret provides two logical pathways:
+1.  **Direct CLI**: Quick-start paths for building and inspecting collections (`rasteret collections ...`).
+2.  **Procedural Python**: Deep control for automated pipelines and custom experiments.
 
-This page focuses on **Collections** and the local collection lifecycle.
-For dataset catalog usage, see
-[Dataset Catalog](dataset-catalog.md).
-
-If you are new, start with: `rasteret build` or `collections build` -> `collections list` -> `collections info`.
+If you are new, the fastest path is: `build` -> `list` -> `info`.
 
 ## CLI
 
