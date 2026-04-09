@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.8 - Hotfix
+
+- Fix catalog.py to use sourcecoop and HF AEF index.parquet instead of reading large collection parquets
+
 ## v0.3.7
 
 ### Changed
