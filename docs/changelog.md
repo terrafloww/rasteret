@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.3.9
+
+### Changed
+
+- **Filtered CRS auto-detection for xarray reads**: internal batch iteration
+  now respects active collection filters when scanning `proj:epsg` for
+  `get_xarray(...)` auto-CRS selection. This avoids unintended reprojection
+  on filtered subsets.
+- **Nodata-aware integer xarray merge path**: for
+  `xr_combine="combine_first"`, Rasteret now prefers an integer-preserving
+  merge path when `_FillValue` metadata is present and consistent across
+  overlapping datasets.
+- **Per-band nodata propagation into xarray assembly**: COG read nodata is
+  carried through RasterAccessor band results and attached as `_FillValue`
+  during xarray construction.
+
+### Fixed
+
+- **AEF `get_xarray` memory blow-up regression**: fixed a path where filtered
+  reads could trigger unnecessary reprojection and `float32` upcast, causing
+  significantly higher peak RAM than expected.
+- **TorchGeo instant-timestamp slice regression**:
+  `RasteretGeoDataset.__getitem__` now handles zero-length temporal slices
+  (`t.start == t.stop`) with a closed interval so overlap checks do not drop
+  valid records/chips.
+
+### Docs
+
+- Updated `notebooks/07_aef_similarity_search.ipynb` with explicit memory
+  notes for Franklin County / AEF 64-band runs:
+  - `get_xarray`: highest peak memory (~20-24 GB)
+  - `get_gdf`: medium peak memory (~3 GB)
+  - `to_torchgeo_dataset`: lower bounded-memory path (~3-5 GB)
+- Updated the notebook summary table to include these concrete memory ranges.
+
+### Tested
+
+- Verified `_detect_target_crs(...)` on filtered subsets now returns `None`
+  when all selected records are same-CRS.
+- Verified `sub.get_xarray(...)` on AEF Franklin subset preserves `int8`
+  dtype after merge.
+- Reproduced and fixed TorchGeo chip sampling regression:
+  from `used=0, skipped=16` to `used=16, skipped=0` on the same Franklin
+  sampler workload.
+
 ## v0.3.8 - Hotfix
 
 - Fix catalog.py to use sourcecoop and HF AEF index.parquet instead of reading large collection parquets
