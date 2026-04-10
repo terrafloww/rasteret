@@ -9,11 +9,9 @@ AEF is a built-in catalog dataset. Three lines gets you from zero to pixels:
 ```python
 import rasteret
 
-collection = rasteret.build(
+collection = rasteret.load(
     "aef/v1-annual",
     name="aef-demo",
-    bbox=(11.3, -0.002, 11.5, 0.001),
-    date_range=("2023-01-01", "2023-12-31"),
 )
 
 ds = collection.get_xarray(
@@ -22,10 +20,10 @@ ds = collection.get_xarray(
 )
 ```
 
-`build()` reads the published AEF GeoParquet index from Source Cooperative,
-filters by bbox and year, constructs the assets from each tile's COG URL,
-parses COG headers, and caches everything as a local Parquet index.
-Subsequent calls reuse the cache.
+`load()` opens the published AEF collection directory from Source Cooperative
+and keeps the narrow `index.parquet` in front for pushdown. You can call
+`collection.get_xarray(...)` or `collection.subset(...)` immediately; Rasteret
+uses the published index behind the scenes to avoid scanning unnecessary data.
 
 ---
 
