@@ -25,6 +25,11 @@
   `RasteretGeoDataset.__getitem__` now handles zero-length temporal slices
   (`t.start == t.stop`) with a closed interval so overlap checks do not drop
   valid records/chips.
+- **Collection export bbox collision**: `Collection.export()` now normalizes a
+  legacy list-style `bbox` column to the canonical struct form in-place,
+  preventing duplicate `bbox` field errors on export/reload workflows.
+- **`ml_training_with_splits.py` process hang**: training example now closes
+  TorchGeo dataset resources explicitly so the script exits cleanly.
 
 ### Docs
 
@@ -34,6 +39,11 @@
   - `get_gdf`: medium peak memory (~3 GB)
   - `to_torchgeo_dataset`: lower bounded-memory path (~3-5 GB)
 - Updated the notebook summary table to include these concrete memory ranges.
+- Updated AEF notebooks to clarify that the AEF collection is already prebuilt
+  for 2018–2024 (Source Cooperative + Hugging Face), and that
+  `rasteret.build()` can be skipped in these workflows.
+- Updated parquet how-to/examples to use **record table** terminology and a
+  first-run-friendly default SourceCoop Maxar record table.
 
 ### Tested
 
