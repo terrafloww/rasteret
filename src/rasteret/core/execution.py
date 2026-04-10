@@ -110,6 +110,41 @@ def _ensure_geoarrow(geometries: Any) -> pa.Array:
     return coerce_to_geoarrow(geometries)
 
 
+def _combine_first_int_with_fill(datasets: list[Any]) -> Any | None:
+    """Combine integer datasets via `_FillValue` without NA-driven upcast."""
+    try:
+        import numpy as np
+        import xarray as xr
+    except Exception:
+        return None
+
+    if not datasets:
+        return None
+
+    out: dict[str, Any] = {}
+    names = sorted({n for ds_obj in datasets for n in ds_obj.data_vars})
+    for name in names:
+        arrays = [ds_obj[name] for ds_obj in datasets if name in ds_obj.data_vars]
+        if not arrays or not all(np.issubdtype(a.dtype, np.integer) for a in arrays):
+            return None
+        fills = {
+            a.attrs.get("_FillValue")
+            for a in arrays
+            if a.attrs.get("_FillValue") is not None
+        }
+        if len(fills) != 1:
+            return None
+        fill_value = int(next(iter(fills)))
+        aligned = xr.align(*arrays, join="outer", copy=False, fill_value=fill_value)
+        merged = aligned[0]
+        for nxt in aligned[1:]:
+            merged = xr.where(merged == fill_value, nxt, merged)
+        merged.attrs.update(arrays[0].attrs)
+        out[name] = merged
+
+    return xr.Dataset(out) if out else None
+
+
 def _derive_query_bbox(
     geometries: Any,
     *,
@@ -479,9 +514,11 @@ def get_collection_xarray(
     def _merge(datasets):
         logger.info("Merging %s datasets", len(datasets))
         if xr_combine == "combine_first":
-            from functools import reduce
+            merged = _combine_first_int_with_fill(datasets)
+            if merged is None:
+                from functools import reduce
 
-            merged = reduce(lambda a, b: a.combine_first(b), datasets)
+                merged = reduce(lambda a, b: a.combine_first(b), datasets)
         elif xr_combine == "merge_override":
             merged = xr.merge(datasets, join="outer", compat="override")
         elif xr_combine == "merge":

@@ -753,7 +753,7 @@ class Collection:
         columns: list[str],
         batch_size: int = 1024,
     ):
-        dataset = self._data_dataset()
+        dataset = self._filtered_data_dataset()
         if dataset is not None:
             scanner = dataset.scanner(columns=columns, batch_size=batch_size)
             yield from scanner.to_batches()

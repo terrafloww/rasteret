@@ -254,7 +254,12 @@ class RasterAccessor:
         # Needs: opt-in flag (apply_scale_offset=False default),
         # nodata masking, and dtype promotion (uint16 -> float32).
 
-        return {"data": result.data, "transform": result.transform, "band": band_code}
+        return {
+            "data": result.data,
+            "transform": result.transform,
+            "band": band_code,
+            "nodata": result.fill_value_used,
+        }
 
     async def sample_points(
         self,
@@ -1035,6 +1040,7 @@ class RasterAccessor:
                     "data": reprojected_data,
                     "transform": dst_tf,
                     "band": r["band"],
+                    "nodata": r.get("nodata"),
                 }
             )
         return reprojected
@@ -1326,6 +1332,9 @@ class RasterAccessor:
                     },
                     name=band_result["band"],
                 )
+                nodata = band_result.get("nodata")
+                if nodata is not None:
+                    da.attrs["_FillValue"] = nodata
                 crs_out = target_crs if target_crs is not None else self.crs
                 da = self._write_crs_cf(da, crs_out, transform=transform)
                 geom_arrays.append(da)
