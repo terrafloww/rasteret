@@ -1507,15 +1507,20 @@ class Collection:
                     or pa.types.is_large_list(bbox_field.type)
                     or pa.types.is_fixed_size_list(bbox_field.type)
                 ):
-                    bbox_col = table.column(bbox_idx)
-                    bbox_struct = pc.make_struct(
+                    bbox_col = table.column(bbox_idx).combine_chunks()
+                    bbox_struct = pa.StructArray.from_arrays(
                         [
                             pc.list_element(bbox_col, 0),
                             pc.list_element(bbox_col, 1),
                             pc.list_element(bbox_col, 2),
                             pc.list_element(bbox_col, 3),
                         ],
-                        field_names=["xmin", "ymin", "xmax", "ymax"],
+                        fields=[
+                            pa.field("xmin", pa.float64()),
+                            pa.field("ymin", pa.float64()),
+                            pa.field("xmax", pa.float64()),
+                            pa.field("ymax", pa.float64()),
+                        ],
                     )
                     table = table.set_column(
                         bbox_idx,
