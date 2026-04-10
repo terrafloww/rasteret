@@ -1498,6 +1498,44 @@ class Collection:
             raise ValueError("No Pyarrow dataset provided")
 
         table = self.dataset.to_table()
+        if _bbox_struct_field(table.schema) is None:
+            bbox_idx = table.schema.get_field_index("bbox")
+            if bbox_idx >= 0:
+                bbox_field = table.schema.field(bbox_idx)
+                if (
+                    pa.types.is_list(bbox_field.type)
+                    or pa.types.is_large_list(bbox_field.type)
+                    or pa.types.is_fixed_size_list(bbox_field.type)
+                ):
+                    bbox_col = table.column(bbox_idx)
+                    bbox_struct = pc.make_struct(
+                        [
+                            pc.list_element(bbox_col, 0),
+                            pc.list_element(bbox_col, 1),
+                            pc.list_element(bbox_col, 2),
+                            pc.list_element(bbox_col, 3),
+                        ],
+                        field_names=["xmin", "ymin", "xmax", "ymax"],
+                    )
+                    table = table.set_column(
+                        bbox_idx,
+                        pa.field(
+                            "bbox",
+                            pa.struct(
+                                [
+                                    pa.field("xmin", pa.float64()),
+                                    pa.field("ymin", pa.float64()),
+                                    pa.field("xmax", pa.float64()),
+                                    pa.field("ymax", pa.float64()),
+                                ]
+                            ),
+                        ),
+                        bbox_struct,
+                    )
+            elif "geometry" in table.schema.names:
+                from rasteret.ingest.normalize import _add_bbox_struct
+
+                table = _add_bbox_struct(table)
 
         # Enhanced metadata with fallbacks
         custom_metadata = {
