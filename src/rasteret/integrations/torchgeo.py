@@ -1015,7 +1015,11 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
             # Match TorchGeo RasterDataset row selection:
             # 1) temporal overlap filter, 2) temporal step, 3) spatial bbox filter.
             t_step = 1 if t.step is None else int(t.step)
-            interval = pd.Interval(t.start, t.stop)
+            interval = (
+                pd.Interval(t.start, t.stop, closed="both")
+                if t.start == t.stop
+                else pd.Interval(t.start, t.stop)
+            )
             df = self.index.iloc[self.index.index.overlaps(interval)]
             df = df.iloc[::t_step]
             df = df.cx[x.start : x.stop, y.start : y.stop]
