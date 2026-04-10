@@ -208,3 +208,14 @@ rasteret collections import maxar-opendata \
 
 The full runnable script is at
 `examples/build_collection_from_parquet.py`.
+
+For first-time users, the script defaults to Source Cooperative Maxar OpenData,
+so this works out of the box:
+
+```bash
+uv run python examples/build_collection_from_parquet.py --name maxar-opendata
+```
+
+For custom non-STAC COG datasets in S3, create a Parquet record table with the
+4 required columns (`id`, `datetime`, `geometry`, `assets`) and pass it via
+`--record-table`.

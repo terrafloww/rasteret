@@ -7,33 +7,42 @@ Uses pyarrow.dataset scan APIs for:
 
 Example usage:
 
-    # Source Cooperative (public, no credentials)
-    AWS_NO_SIGN_REQUEST=YES python build_collection_from_parquet.py \\
-        --manifest-url s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet \\
-        --name maxar-opendata
+    # Source Cooperative Maxar demo (default record table, public bucket)
+    uv run python examples/build_collection_from_parquet.py --name maxar-opendata
 
     # Any S3/GCS/local Parquet
-    python build_collection_from_parquet.py \\
-        --manifest-url s3://my-bucket/items.parquet \\
+    uv run python examples/build_collection_from_parquet.py \\
+        --record-table s3://my-bucket/items.parquet \\
         --name my-collection --cloud-cover-lt 20
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Any
 
 import pyarrow.dataset as ds
 
 import rasteret
 
+DEFAULT_MAXAR_MANIFEST = (
+    "s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet"
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--record-table",
         "--manifest-url",
-        required=True,
-        help="Remote Parquet URL/path (e.g. s3://.../items.parquet)",
+        dest="record_table",
+        default=DEFAULT_MAXAR_MANIFEST,
+        help=(
+            "Remote Parquet record table URL/path (e.g. s3://.../items.parquet). "
+            "Defaults to Source Cooperative Maxar OpenData record table. "
+            "--manifest-url is accepted as a backward-compatible alias."
+        ),
     )
     parser.add_argument("--name", default="parquet_collection")
     parser.add_argument("--data-source", default="")
@@ -53,8 +62,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    record_table = args.record_table
+    if record_table.startswith("s3://us-west-2.opendata.source.coop/"):
+        os.environ.setdefault("AWS_NO_SIGN_REQUEST", "YES")
+        print("Using public Source Cooperative dataset (AWS_NO_SIGN_REQUEST=YES).")
 
-    remote_dataset = ds.dataset(args.manifest_url, format="parquet")
+    remote_dataset = ds.dataset(record_table, format="parquet")
     available = set(remote_dataset.schema.names)
     required = {"id", "datetime", "geometry", "assets"}
     missing = required - available
@@ -82,7 +95,7 @@ def main() -> None:
         filter_expr = ds.field("eo:cloud_cover") < args.cloud_cover_lt
 
     collection = rasteret.build_from_table(
-        args.manifest_url,
+        record_table,
         name=args.name,
         data_source=args.data_source,
         columns=projected_columns,
@@ -94,6 +107,11 @@ def main() -> None:
     print(f"Collection: {collection.name}")
     print(f"Rows: {count}")
     print(f"Columns: {collection.dataset.schema.names if collection.dataset else []}")
+    print("\nTip for custom datasets:")
+    print(
+        "Your record table only needs 4 required columns: "
+        "id, datetime, geometry, assets (with COG hrefs)."
+    )
 
 
 if __name__ == "__main__":

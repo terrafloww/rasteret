@@ -10,6 +10,7 @@ Demonstrates:
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pyarrow.dataset as ds
@@ -22,11 +23,15 @@ from rasteret.constants import BandRegistry
 # 1. Build a collection from STAC
 # ---------------------------------------------------------------------------
 
-workspace = Path.home() / "rasteret_workspace"
+workspace = (
+    Path.home() / "rasteret_workspace" / "examples" / "collection_management"
+).resolve()
+shutil.rmtree(workspace, ignore_errors=True)
+workspace.mkdir(parents=True, exist_ok=True)
 BBOX = (77.55, 13.01, 77.58, 13.08)
 
 collection = rasteret.build_from_stac(
-    name="bangalore",
+    name="bangalore-example",
     stac_api="https://earth-search.aws.element84.com/v1",
     collection="sentinel-2-l2a",
     bbox=BBOX,

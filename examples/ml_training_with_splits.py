@@ -140,12 +140,17 @@ def main() -> None:
         collate_fn=stack_samples,
     )
 
-    # Step 4: Training loop (placeholder, replace with your model)
-    for i, batch in enumerate(loader):
-        img = batch["image"]
-        print(f"  batch {i}: image={img.shape}, dtype={img.dtype}")
-        if i >= 2:
-            break
+    try:
+        # Step 4: Training loop (placeholder, replace with your model)
+        for i, batch in enumerate(loader):
+            img = batch["image"]
+            print(f"  batch {i}: image={img.shape}, dtype={img.dtype}")
+            if i >= 2:
+                break
+    finally:
+        # Ensure async reader resources are released so scripts exit cleanly.
+        if hasattr(train_ds, "close"):
+            train_ds.close()
 
     # Step 5: Validation set
     val_collection = collection.subset(split="val")

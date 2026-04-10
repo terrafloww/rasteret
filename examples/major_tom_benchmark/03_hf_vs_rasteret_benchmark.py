@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--collection-path",
         type=Path,
-        required=True,
+        default=None,
         help=(
             "Path to prebuilt Rasteret collection directory "
             "(must include major_tom_product_id and requested band metadata columns)."
@@ -780,6 +780,12 @@ def print_summary(name: str, stats: dict[str, float | int]) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.collection_path is None:
+        print(
+            "Skipping benchmark: --collection-path is required for this example. "
+            "Provide a prebuilt Major TOM Rasteret collection to run it."
+        )
+        return
     bands = _resolve_bands(args)
 
     # Benchmarks should be quiet by default.
