@@ -28,8 +28,9 @@
 - **Collection export bbox collision**: `Collection.export()` now normalizes a
   legacy list-style `bbox` column to the canonical struct form in-place,
   preventing duplicate `bbox` field errors on export/reload workflows.
-- **`ml_training_with_splits.py` process hang**: training example now closes
-  TorchGeo dataset resources explicitly so the script exits cleanly.
+- **Examples cleanup**: removed the older `ml_training_with_splits.py` script;
+  the split/label pattern remains documented in the ML training how-to and
+  TorchGeo tutorial notebooks.
 
 ### Docs
 
