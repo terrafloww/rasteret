@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.10
+
+### Changed
+
+- **AEF load alias routing**: `rasteret.load("aef/v1-annual")` now opens
+  the published Source Cooperative `/data` collection while keeping
+  `index.parquet` attached as the runtime sidecar index for pushdown.
+  The public `load()` implementation did not change; this is a catalog
+  descriptor routing fix.
+- **Examples cleanup**: removed the older `ml_training_with_splits.py` script;
+  the split/label pattern remains documented in the ML training how-to and
+  TorchGeo tutorial notebooks.
+
+### Fixed
+
+- **Collection export bbox normalization**: `Collection.export()` now
+  normalizes legacy list-style `bbox` columns through a chunk-safe struct
+  conversion, avoiding `ChunkedArray`/duplicate `bbox` failures on
+  export-reload workflows.
+
+
 ## v0.3.9
 
 ### Changed
@@ -25,12 +46,6 @@
   `RasteretGeoDataset.__getitem__` now handles zero-length temporal slices
   (`t.start == t.stop`) with a closed interval so overlap checks do not drop
   valid records/chips.
-- **Collection export bbox collision**: `Collection.export()` now normalizes a
-  legacy list-style `bbox` column to the canonical struct form in-place,
-  preventing duplicate `bbox` field errors on export/reload workflows.
-- **Examples cleanup**: removed the older `ml_training_with_splits.py` script;
-  the split/label pattern remains documented in the ML training how-to and
-  TorchGeo tutorial notebooks.
 
 ### Docs
 
