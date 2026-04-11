@@ -314,8 +314,9 @@ class TestPrepareTable:
         pq.write_table(table, str(path))
         builder = RecordTableBuilder(path)
         collection = builder.build()
-        out = collection.dataset.to_table(columns=["proj:epsg"])
+        out = collection.dataset.to_table(columns=["proj:epsg", "crs"])
         assert out.column("proj:epsg").to_pylist() == [32632]
+        assert out.column("crs").to_pylist() == ["EPSG:32632"]
 
     def test_missing_href_column_raises(self, tmp_path):
         table = pa.table(
@@ -365,8 +366,10 @@ class TestPrepareTable:
         assert pa.types.is_timestamp(out.schema.field("datetime").type)
         assert "assets" in out.schema.names
         assert "proj:epsg" in out.schema.names
+        assert "crs" in out.schema.names
         assert out.column("id").to_pylist() == ["42"]
         assert out.column("proj:epsg").to_pylist() == [32632]
+        assert out.column("crs").to_pylist() == ["EPSG:32632"]
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +711,66 @@ async def test_enrich_backfills_proj_epsg_when_missing(monkeypatch):
     enriched = await enrich_table_with_cog_metadata(table, url_index, ["A0"])
 
     assert "proj:epsg" in enriched.schema.names
+    assert "crs" in enriched.schema.names
     assert enriched.column("proj:epsg").to_pylist() == [32632]
+    assert enriched.column("crs").to_pylist() == ["EPSG:32632"]
+
+
+@pytest.mark.asyncio
+async def test_enrich_keeps_crs_sidecars_consistent_when_proj_epsg_exists(monkeypatch):
+    """If existing proj:epsg is preserved, crs should match that resolved value."""
+
+    class _Meta:
+        width = 128
+        height = 128
+        tile_width = 64
+        tile_height = 64
+        dtype = "uint16"
+        transform = (10.0, 0.0, 10.0, 0.0)
+        predictor = 1
+        compression = 8
+        tile_offsets = [100, 200, 300, 400]
+        tile_byte_counts = [10, 10, 10, 10]
+        pixel_scale = None
+        tiepoint = None
+        crs = 32632
+        nodata = None
+        samples_per_pixel = 1
+        planar_configuration = 1
+        photometric = None
+        extra_samples = None
+
+    class _Parser:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN001, ANN002, D401
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        async def process_cog_headers_batch(self, urls):  # noqa: ANN001
+            return [_Meta() for _ in urls]
+
+    monkeypatch.setattr("rasteret.ingest.enrich.AsyncCOGHeaderParser", _Parser)
+
+    table = pa.table(
+        {
+            "id": pa.array(["scene-1"]),
+            "datetime": pa.array([datetime(2024, 1, 1)], type=pa.timestamp("us")),
+            "geometry": pa.array([None], type=pa.null()),
+            "assets": pa.array([{"A0": {"href": "https://example.com/a.tif"}}]),
+            "proj:epsg": pa.array([32633], type=pa.int32()),
+            "crs": pa.array(["EPSG:32633"], type=pa.string()),
+        }
+    )
+
+    url_index = build_url_index_from_assets(table)
+    enriched = await enrich_table_with_cog_metadata(table, url_index, ["A0"])
+
+    assert enriched.column("proj:epsg").to_pylist() == [32633]
+    assert enriched.column("crs").to_pylist() == ["EPSG:32633"]
 
 
 class TestRecordTableBuilderEnrichCog:

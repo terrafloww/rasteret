@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import struct
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -716,6 +718,50 @@ def test_dual_surface_epsg_uses_index_without_opening_wide_dataset(monkeypatch) 
     assert sorted(epsg) == [32614, 32615]
 
 
+def test_dual_surface_crs_uses_index_without_opening_wide_dataset(monkeypatch) -> None:
+    with TemporaryDirectory() as tmp_dir:
+        index_path = Path(tmp_dir) / "aef-index.parquet"
+        data_root = Path(tmp_dir) / "aef-data"
+        _write_minimal_aef_index(index_path)
+        _write_partitioned_aef_collection(data_root)
+
+        descriptor = DatasetDescriptor(
+            id="demo/aef-crs-lazy",
+            name="Demo AEF CRS Lazy",
+            record_table_uri=str(index_path),
+            index_uri=str(index_path),
+            collection_uri=str(data_root),
+            field_roles={
+                "id": "fid",
+                "geometry": "geom",
+                "datetime": "year",
+                "bbox": "bbox",
+                "href": "path",
+                "proj:epsg": "crs",
+            },
+            band_index_map={"A00": 0},
+        )
+        DatasetRegistry.register(descriptor)
+
+        original_open = collection_module._open_parquet_dataset
+
+        def _fail_on_wide(path: str, *args, **kwargs):
+            if str(path) == str(data_root):
+                raise AssertionError("wide dataset should stay unopened for crs")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(
+            "rasteret.core.collection._open_parquet_dataset", _fail_on_wide
+        )
+        try:
+            collection = rasteret.load("demo/aef-crs-lazy")
+            crs = collection.crs
+        finally:
+            DatasetRegistry.unregister("demo/aef-crs-lazy")
+
+    assert crs == ["EPSG:32614", "EPSG:32615"]
+
+
 def test_dual_surface_subset_keeps_wide_filter_plan_without_opening_data() -> None:
     with TemporaryDirectory() as tmp_dir:
         index_path = Path(tmp_dir) / "aef-index.parquet"
@@ -1153,6 +1199,45 @@ def _minimal_read_ready_table() -> pa.Table:
     )
 
 
+def _point_wkb(x: float, y: float) -> bytes:
+    return struct.pack("<BIdd", 1, 1, x, y)
+
+
+def _minimal_wkb_read_ready_table(epsg_values: list[int]) -> pa.Table:
+    table = pa.concat_tables([_minimal_read_ready_table()] * len(epsg_values))
+    return (
+        table.set_column(
+            table.schema.get_field_index("geometry"),
+            "geometry",
+            pa.array(
+                [
+                    _point_wkb(float(idx), float(idx))
+                    for idx, _ in enumerate(epsg_values)
+                ],
+                type=pa.binary(),
+            ),
+        )
+        .append_column("proj:epsg", pa.array(epsg_values, type=pa.int32()))
+        .append_column(
+            "crs",
+            pa.array([f"EPSG:{value}" for value in epsg_values], type=pa.string()),
+        )
+    )
+
+
+def _geoarrow_field_metadata(field: pa.Field) -> tuple[str, dict]:
+    if field.metadata and b"ARROW:extension:name" in field.metadata:
+        extension_name = field.metadata[b"ARROW:extension:name"].decode()
+        extension_metadata = json.loads(
+            field.metadata.get(b"ARROW:extension:metadata", b"{}").decode()
+        )
+        return extension_name, extension_metadata
+
+    extension_name = getattr(field.type, "extension_name", "")
+    extension_metadata = json.loads(field.type.__arrow_ext_serialize__().decode())
+    return extension_name, extension_metadata
+
+
 def test_as_collection_wraps_read_ready_table() -> None:
     table = _minimal_read_ready_table()
     collection = rasteret.as_collection(table, name="wrapped")
@@ -1205,6 +1290,117 @@ def test_as_collection_wraps_arrow_capsule_array_object() -> None:
     assert collection.name == "wrapped-array"
     assert collection.dataset is not None
     assert collection.dataset.count_rows() == 1
+
+
+def test_collection_arrow_export_marks_wkb_geometry_as_geoarrow() -> None:
+    collection = rasteret.as_collection(
+        _minimal_wkb_read_ready_table([4326]), require_band_metadata=False
+    )
+
+    table = pa.table(collection)
+    geometry_field = table.schema.field("geometry")
+    extension_name, extension_metadata = _geoarrow_field_metadata(geometry_field)
+    assert extension_name == "geoarrow.wkb"
+    assert (
+        getattr(geometry_field.type, "storage_type", geometry_field.type) == pa.binary()
+    )
+    assert extension_metadata["crs"]["type"] == "GeographicCRS"
+    assert extension_metadata["crs"]["id"]["authority"] == "OGC"
+    assert extension_metadata["crs"]["id"]["code"] == "CRS84"
+    assert collection.crs == ["EPSG:4326"]
+
+
+def test_collection_crs_normalizes_integer_sidecar_values() -> None:
+    base = _minimal_wkb_read_ready_table([4326])
+    table = base.set_column(
+        base.schema.get_field_index("crs"),
+        "crs",
+        pa.array([4326], type=pa.int32()),
+    )
+    collection = rasteret.as_collection(table, require_band_metadata=False)
+
+    assert collection.crs == ["EPSG:4326"]
+    geometry_field = pa.table(collection).schema.field("geometry")
+    _, extension_metadata = _geoarrow_field_metadata(geometry_field)
+    assert extension_metadata["crs"]["id"]["authority"] == "OGC"
+    assert extension_metadata["crs"]["id"]["code"] == "CRS84"
+
+
+def test_collection_arrow_export_does_not_label_footprints_with_raster_crs() -> None:
+    collection = rasteret.as_collection(
+        _minimal_wkb_read_ready_table([32632]), require_band_metadata=False
+    )
+
+    geometry_field = pa.table(collection).schema.field("geometry")
+    _, extension_metadata = _geoarrow_field_metadata(geometry_field)
+
+    assert collection.crs == ["EPSG:32632"]
+    assert extension_metadata["crs"]["name"] == "WGS 84 (CRS84)"
+    assert extension_metadata["crs"]["id"]["authority"] == "OGC"
+    assert extension_metadata["crs"]["id"]["code"] == "CRS84"
+
+
+def test_collection_arrow_export_leaves_mixed_epsg_crs_unset() -> None:
+    collection = rasteret.as_collection(
+        _minimal_wkb_read_ready_table([32632, 32633]), require_band_metadata=False
+    )
+
+    table = pa.table(collection)
+    geometry_field = table.schema.field("geometry")
+    extension_name, extension_metadata = _geoarrow_field_metadata(geometry_field)
+    assert extension_name == "geoarrow.wkb"
+    assert extension_metadata["crs"]["id"]["authority"] == "OGC"
+    assert extension_metadata["crs"]["id"]["code"] == "CRS84"
+    assert table["proj:epsg"].to_pylist() == [32632, 32633]
+    assert table["crs"].to_pylist() == ["EPSG:32632", "EPSG:32633"]
+
+
+def test_geopandas_from_arrow_detects_collection_geometry_and_crs() -> None:
+    gpd = pytest.importorskip("geopandas")
+    collection = rasteret.as_collection(
+        _minimal_wkb_read_ready_table([4326]), require_band_metadata=False
+    )
+
+    gdf = gpd.GeoDataFrame.from_arrow(collection)
+
+    assert gdf.geometry.name == "geometry"
+    assert gdf.crs.to_authority() == ("OGC", "CRS84")
+    assert gdf.geometry.iloc[0].x == 0.0
+
+
+def test_arrow_stream_requested_schema_capsule_is_honored() -> None:
+    table = _minimal_wkb_read_ready_table([4326])
+    collection = rasteret.as_collection(table, require_band_metadata=False)
+    epsg_index = table.schema.get_field_index("proj:epsg")
+    requested_schema = table.schema.set(epsg_index, pa.field("proj:epsg", pa.int64()))
+
+    capsule = collection.__arrow_c_stream__(requested_schema.__arrow_c_schema__())
+    exported = pa.RecordBatchReader._import_from_c_capsule(capsule).read_all()
+
+    assert exported.schema == requested_schema
+    assert exported["proj:epsg"].to_pylist() == [4326]
+
+
+def test_arrow_stream_rejects_incompatible_requested_schema_capsule() -> None:
+    collection = rasteret.as_collection(
+        _minimal_wkb_read_ready_table([4326]), require_band_metadata=False
+    )
+    requested_schema = pa.schema([pa.field("id", pa.string())])
+
+    with pytest.raises(NotImplementedError):
+        collection.__arrow_c_stream__(requested_schema.__arrow_c_schema__())
+
+
+def test_arrow_array_capsule_handles_empty_non_empty_schema() -> None:
+    table = _minimal_wkb_read_ready_table([4326]).slice(0, 0)
+    collection = rasteret.as_collection(table, require_band_metadata=False)
+
+    schema_capsule, array_capsule = collection.__arrow_c_array__()
+    batch = pa.RecordBatch._import_from_c_capsule(schema_capsule, array_capsule)
+
+    assert batch.num_rows == 0
+    extension_name, _ = _geoarrow_field_metadata(batch.schema.field("geometry"))
+    assert extension_name == "geoarrow.wkb"
 
 
 def test_as_collection_requires_bbox() -> None:

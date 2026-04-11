@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import struct
 import sys
 import types
 from datetime import datetime
@@ -566,3 +567,46 @@ def test_hf_streaming_collection_describe_bounds_and_epsg(monkeypatch) -> None:
     describe = collection.describe()
     assert describe["records"] == "?"
     assert describe["bounds"] == (0.0, 1.0, 12.0, 13.0)
+
+
+def test_hf_streaming_collection_arrow_export_uses_streaming_batches(
+    monkeypatch,
+) -> None:
+    gpd = pytest.importorskip("geopandas")
+    point_wkb = struct.pack("<BIdd", 1, 1, 0.0, 0.0)
+    schema = pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("geometry", pa.binary()),
+            pa.field("proj:epsg", pa.int32()),
+        ]
+    )
+    source = HFStreamingSource(
+        path="hf://datasets/terrafloww/demo/data",
+        parquet_paths=("hf://datasets/terrafloww/demo/data/part-0001.parquet",),
+        schema=schema,
+    )
+    collection = Collection(hf_streaming=source)
+    table = pa.table(
+        {
+            "id": pa.array(["scene-1"]),
+            "geometry": pa.array([point_wkb], type=pa.binary()),
+            "proj:epsg": pa.array([4326], type=pa.int32()),
+        }
+    )
+
+    def _iter_tables(_source, *, columns, **_kwargs):
+        yield table.select(columns)
+
+    monkeypatch.setattr("rasteret.core.collection.iter_hf_arrow_tables", _iter_tables)
+
+    exported = pa.table(collection)
+    geometry_field = exported.schema.field("geometry")
+    assert geometry_field.type.extension_name == "geoarrow.wkb"
+    assert exported.column("id").to_pylist() == ["scene-1"]
+
+    exported_schema = pa.Schema._import_from_c_capsule(collection.__arrow_c_schema__())
+    assert exported_schema.field("geometry").type.extension_name == "geoarrow.wkb"
+
+    gdf = gpd.GeoDataFrame.from_arrow(collection)
+    assert gdf.crs.to_authority() == ("OGC", "CRS84")
