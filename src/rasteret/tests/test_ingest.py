@@ -393,6 +393,34 @@ class TestBuildFromTable:
         collection = rasteret.build_from_table(table)
         assert isinstance(collection, Collection)
 
+    def test_build_from_table_accepts_arrow_capsule_stream_object(self):
+        import rasteret
+
+        table = _minimal_table()
+
+        class _StreamObj:
+            def __arrow_c_stream__(self, requested_schema=None):
+                return table.to_reader().__arrow_c_stream__(requested_schema)
+
+        collection = rasteret.build_from_table(_StreamObj())
+        assert isinstance(collection, Collection)
+        assert collection.dataset is not None
+        assert collection.dataset.count_rows() == table.num_rows
+
+    def test_build_from_table_accepts_arrow_capsule_array_object(self):
+        import rasteret
+
+        batch = _minimal_table().to_batches()[0]
+
+        class _ArrayObj:
+            def __arrow_c_array__(self, requested_schema=None):
+                return batch.__arrow_c_array__(requested_schema)
+
+        collection = rasteret.build_from_table(_ArrayObj())
+        assert isinstance(collection, Collection)
+        assert collection.dataset is not None
+        assert collection.dataset.count_rows() == batch.num_rows
+
     def test_build_from_table_workspace_dir_persists(self, tmp_path):
         import rasteret
 

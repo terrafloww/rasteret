@@ -728,6 +728,53 @@ def _total_ram_bytes() -> int | None:
     return None
 
 
+def _arrow_object_to_dataset(table: Any):
+    """Return ``(dataset, materialized_table)`` for supported Arrow inputs."""
+    import pyarrow as pa
+    import pyarrow.dataset as pads
+
+    if isinstance(table, pads.Dataset):
+        return table, None
+    if isinstance(table, pa.Table):
+        return pads.dataset(table), table
+    if isinstance(table, pa.RecordBatch):
+        return pads.dataset(table), None
+    if isinstance(table, pa.RecordBatchReader):
+        return pads.dataset(table), None
+
+    stream_export = getattr(table, "__arrow_c_stream__", None)
+    if callable(stream_export):
+        try:
+            return pads.dataset(pa.RecordBatchReader.from_stream(table)), None
+        except Exception as exc:
+            raise TypeError(
+                "Could not consume the Arrow stream export from the provided object."
+            ) from exc
+
+    try:
+        materialized_table = pa.table(table)
+    except Exception as exc:
+        raise TypeError(
+            "Expected a pyarrow.dataset.Dataset, pyarrow.Table, pyarrow.RecordBatch, "
+            "pyarrow.RecordBatchReader, or an Arrow-compatible object implementing "
+            "the PyCapsule protocol."
+        ) from exc
+    return pads.dataset(materialized_table), materialized_table
+
+
+def _arrow_object_to_table(
+    table: Any,
+    *,
+    columns: list[str] | None = None,
+    filter_expr: Any | None = None,
+):
+    """Materialize a supported Arrow input as a pyarrow.Table."""
+    dataset, materialized_table = _arrow_object_to_dataset(table)
+    if materialized_table is not None and columns is None and filter_expr is None:
+        return materialized_table
+    return dataset.to_table(columns=columns, filter=filter_expr)
+
+
 def as_collection(
     table: Any,
     *,
@@ -782,43 +829,11 @@ def as_collection(
         present.
     """
     import pyarrow as pa
-    import pyarrow.dataset as pads
 
     from rasteret.core.collection import Collection
     from rasteret.core.utils import infer_data_source_from_dataset
 
-    materialized_table: pa.Table | None = None
-    if isinstance(table, pads.Dataset):
-        dataset = table
-    else:
-        if isinstance(table, pa.Table):
-            materialized_table = table
-            dataset = pads.dataset(materialized_table)
-        elif isinstance(table, pa.RecordBatch):
-            dataset = pads.dataset(table)
-        elif isinstance(table, pa.RecordBatchReader):
-            dataset = pads.dataset(table)
-        else:
-            stream_export = getattr(table, "__arrow_c_stream__", None)
-            if callable(stream_export):
-                try:
-                    dataset = pads.dataset(pa.RecordBatchReader.from_stream(table))
-                except Exception as exc:
-                    raise TypeError(
-                        "as_collection() could not consume the Arrow stream "
-                        "export from the provided object."
-                    ) from exc
-            else:
-                try:
-                    materialized_table = pa.table(table)
-                except Exception as exc:
-                    raise TypeError(
-                        "as_collection() expects a pyarrow.dataset.Dataset, "
-                        "pyarrow.Table, pyarrow.RecordBatch, "
-                        "pyarrow.RecordBatchReader, or an Arrow-compatible object "
-                        "implementing the PyCapsule protocol."
-                    ) from exc
-                dataset = pads.dataset(materialized_table)
+    dataset, materialized_table = _arrow_object_to_dataset(table)
 
     if materialized_table is not None:
         global _AS_COLLECTION_MEMORY_WARNING_EMITTED
@@ -953,7 +968,9 @@ def build_from_table(
     ----------
     path : str, Path, or pyarrow object
         Path/URI to a Parquet/GeoParquet file or dataset directory, **or**
-        an in-memory Arrow object (``pyarrow.Table`` or ``pyarrow.dataset.Dataset``).
+        an in-memory Arrow object (``pyarrow.Table``, ``pyarrow.dataset.Dataset``,
+        ``pyarrow.RecordBatch``, ``pyarrow.RecordBatchReader``, or an object
+        implementing the Arrow PyCapsule protocol).
         Hugging Face dataset URIs are supported via
         ``hf://datasets/<org>/<name>[/subpath]``.
     name : str
@@ -1036,19 +1053,14 @@ def build_from_table(
         if not _is_cloud_uri(rw_str) and Path(rw_str).exists() and not force:
             return Collection._load_cached(rw_str)
 
-    # Arrow-native path: accept an in-memory Arrow table / dataset.
-    import pyarrow as pa
-    import pyarrow.dataset as pads
-
-    if isinstance(path, (pa.Table, pads.Dataset)):
-        if isinstance(path, pads.Dataset):
-            table = path.to_table(columns=columns, filter=filter_expr)
-        else:
-            table = path
-            if columns or filter_expr:
-                dataset = pads.dataset(path)
-                table = dataset.to_table(columns=columns, filter=filter_expr)
-
+    # Arrow-native path: accept in-memory Arrow tables, datasets, readers, and
+    # PyCapsule protocol objects.
+    if not isinstance(path, (str, Path)):
+        table = _arrow_object_to_table(
+            path,
+            columns=columns,
+            filter_expr=filter_expr,
+        )
         table = _apply_column_map_aliases(table, column_map)
         table = prepare_record_table(
             table,
