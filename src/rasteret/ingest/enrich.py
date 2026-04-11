@@ -23,6 +23,7 @@ import pyarrow as pa
 from rasteret.cloud import StorageBackend
 from rasteret.constants import COG_BAND_METADATA_STRUCT
 from rasteret.fetch.header_parser import AsyncCOGHeaderParser
+from rasteret.ingest.normalize import crs_code_from_epsg
 
 logger = logging.getLogger(__name__)
 
@@ -387,35 +388,54 @@ async def enrich_table_with_cog_metadata(
             f"Common fixes: {joined}."
         )
 
-    # Ensure proj:epsg exists for read-time geometry transforms when possible.
+    # Ensure CRS sidecars exist for read-time transforms and Arrow interop.
     #
     # Many record tables omit per-record CRS, but Rasteret's read path needs a
     # record CRS to transform WGS84 query geometries into raster CRS. When the
-    # header parser extracted an EPSG code, we backfill it here for any
-    # null/missing proj:epsg values.
+    # header parser extracted an EPSG code, we backfill legacy ``proj:epsg`` and
+    # the Arrow-friendly row-level ``crs`` code for any null/missing values.
     if record_crs:
         ids = table.column("id").to_pylist()
-        existing = (
+        existing_epsg = (
             table.column("proj:epsg").to_pylist()
             if "proj:epsg" in table.schema.names
             else None
         )
-        values: list[int | None] = []
+        existing_crs = (
+            table.column("crs").to_pylist() if "crs" in table.schema.names else None
+        )
+        epsg_values: list[int | None] = []
+        crs_values: list[str | None] = []
         for i, record_id in enumerate(ids):
-            current = existing[i] if existing is not None else None
-            if current is None:
-                values.append(record_crs.get(record_id))
+            header_epsg = record_crs.get(record_id)
+            current_epsg = existing_epsg[i] if existing_epsg is not None else None
+            if current_epsg is None:
+                resolved_epsg = header_epsg
             else:
                 try:
-                    values.append(int(current))
+                    resolved_epsg = int(current_epsg)
                 except (TypeError, ValueError):
-                    values.append(record_crs.get(record_id))
+                    resolved_epsg = header_epsg
 
-        col = pa.array(values, type=pa.int32())
+            current_crs = existing_crs[i] if existing_crs is not None else None
+            epsg_values.append(resolved_epsg)
+            crs_values.append(
+                crs_code_from_epsg(resolved_epsg)
+                or (str(current_crs).strip() if current_crs is not None else None)
+            )
+
+        epsg_col = pa.array(epsg_values, type=pa.int32())
         if "proj:epsg" in table.schema.names:
             idx = table.schema.get_field_index("proj:epsg")
-            table = table.set_column(idx, "proj:epsg", col)
+            table = table.set_column(idx, "proj:epsg", epsg_col)
         else:
-            table = table.append_column("proj:epsg", col)
+            table = table.append_column("proj:epsg", epsg_col)
+
+        crs_col = pa.array(crs_values, type=pa.string())
+        if "crs" in table.schema.names:
+            idx = table.schema.get_field_index("crs")
+            table = table.set_column(idx, "crs", crs_col)
+        else:
+            table = table.append_column("crs", crs_col)
 
     return add_band_metadata_columns(table, band_codes, processed_items)

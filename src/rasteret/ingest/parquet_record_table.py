@@ -31,7 +31,11 @@ import pyarrow.dataset as ds
 
 from rasteret.cloud import StorageBackend
 from rasteret.ingest.base import CollectionBuilder
-from rasteret.ingest.normalize import build_collection_from_table, parse_epsg
+from rasteret.ingest.normalize import (
+    build_collection_from_table,
+    normalize_crs_code,
+    parse_epsg,
+)
 from rasteret.integrations.huggingface import is_hf_dataset_uri, load_hf_parquet_table
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -67,7 +71,7 @@ def prepare_record_table(
     1. Auto-coerce ``id``: integer -> string.
     2. Auto-coerce ``datetime``: integer year -> timestamp.
     3. Construct ``assets`` from *href_column* + *band_index_map*.
-    4. Derive ``proj:epsg`` from a ``crs`` column when present.
+    4. Derive legacy ``proj:epsg`` from a ``crs`` column when present.
     """
     names = set(table.schema.names)
     rewrites = url_rewrite_patterns or {}
@@ -129,7 +133,7 @@ def prepare_record_table(
             )
         table = table.append_column("assets", pa.array(assets_list))
 
-    # --- proj:epsg: derive from crs column ---
+    # --- crs/proj:epsg: normalize CRS sidecars ---
     if (
         "proj:epsg" not in names
         and "crs" in names
@@ -138,6 +142,14 @@ def prepare_record_table(
         crs_values = table.column("crs").to_pylist()
         epsg_array = pa.array([parse_epsg(v) for v in crs_values], type=pa.int32())
         table = table.append_column("proj:epsg", epsg_array)
+        names.add("proj:epsg")
+
+    if "crs" in names and (required is None or "crs" in required):
+        crs_values = table.column("crs").to_pylist()
+        crs_array = pa.array(
+            [normalize_crs_code(v) for v in crs_values], type=pa.string()
+        )
+        table = table.set_column(table.schema.get_field_index("crs"), "crs", crs_array)
 
     return table
 

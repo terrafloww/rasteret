@@ -9,7 +9,7 @@ import logging
 import re
 import struct
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal
@@ -197,6 +197,28 @@ def _geometry_types_from_wkb(col: pa.ChunkedArray) -> list[str]:
             if name:
                 seen.add(name)
     return sorted(seen)
+
+
+def _schema_from_arrow_capsule(schema: Any) -> pa.Schema:
+    if isinstance(schema, pa.Schema):
+        return schema
+    try:
+        return pa.Schema._import_from_c_capsule(schema)
+    except TypeError:
+        return pa.schema(schema)
+
+
+def _unique_crs_codes_from_array(column: pa.Array | pa.ChunkedArray) -> list[str]:
+    from rasteret.ingest.normalize import normalize_crs_code
+
+    codes: set[str] = set()
+    unique = pc.unique(pc.drop_null(column))
+    for value in unique:
+        if value.is_valid:
+            code = normalize_crs_code(value.as_py())
+            if code:
+                codes.add(code)
+    return sorted(codes)
 
 
 def _bbox_overlap_expr(
@@ -596,6 +618,14 @@ class Collection:
                 elif "assets" in self._open_record_index_dataset().schema.names:
                     raw_columns.add("assets")
                 continue
+            if column == "crs":
+                source = self._record_index_source_column("crs")
+                if source != "crs":
+                    raw_columns.add(source)
+                    continue
+                schema_names = self._open_record_index_dataset().schema.names
+                raw_columns.add("crs" if "crs" in schema_names else "proj:epsg")
+                continue
             if column == "proj:epsg":
                 raw_columns.add(self._record_index_source_column("proj:epsg"))
                 continue
@@ -661,6 +691,18 @@ class Collection:
             required_columns=columns,
         )
         if columns is not None:
+            if "crs" in columns and "crs" not in table.column_names:
+                if "proj:epsg" in table.column_names:
+                    table = table.append_column(
+                        "crs",
+                        pa.array(
+                            [
+                                f"EPSG:{int(value)}" if value is not None else None
+                                for value in table.column("proj:epsg").to_pylist()
+                            ],
+                            type=pa.string(),
+                        ),
+                    )
             keep = [column for column in columns if column in table.column_names]
             table = table.select(keep)
         return table
@@ -1777,6 +1819,264 @@ class Collection:
             return 0
         return self.dataset.count_rows()
 
+    def __iter__(self) -> Iterator[pa.RecordBatch]:
+        """Iterate the collection metadata as a stream of Arrow batches."""
+        return self.to_batches()
+
+    def to_table(self, columns: list[str] | None = None) -> pa.Table:
+        """Materialize the collection metadata as a :class:`pyarrow.Table`.
+
+        Parameters
+        ----------
+        columns : list of str, optional
+            Selected columns to include.
+
+        Returns
+        -------
+        pyarrow.Table
+        """
+        dataset = self._filtered_data_dataset()
+        if dataset is None:
+            schema = self._schema
+            if schema is None:
+                return pa.table([])
+            projected_schema = self._project_arrow_schema(schema, columns)
+            enriched_schema = self._get_enriched_arrow_schema(projected_schema)
+            batches = (
+                self._record_batch_with_schema(batch, enriched_schema)
+                for batch in self._iter_record_batches(columns=enriched_schema.names)
+            )
+            return pa.Table.from_batches(batches, schema=enriched_schema)
+        table = dataset.to_table(columns=columns)
+        return self._table_with_schema(
+            table, self._get_enriched_arrow_schema(table.schema)
+        )
+
+    def to_batches(self, columns: list[str] | None = None) -> Iterator[pa.RecordBatch]:
+        """Iterate the collection metadata as a stream of Arrow batches.
+
+        Parameters
+        ----------
+        columns : list of str, optional
+            Selected columns to include.
+
+        Returns
+        -------
+        Iterator[pyarrow.RecordBatch]
+        """
+        dataset = self._filtered_data_dataset()
+        if dataset is not None:
+            raw_reader = dataset.scanner(columns=columns).to_reader()
+            enriched_schema = self._get_enriched_arrow_schema(raw_reader.schema)
+            return (
+                self._record_batch_with_schema(batch, enriched_schema)
+                for batch in raw_reader
+            )
+
+        schema = self._schema
+        if schema is None:
+            return iter([])
+        projected_schema = self._project_arrow_schema(schema, columns)
+        enriched_schema = self._get_enriched_arrow_schema(projected_schema)
+        raw_batches = self._iter_record_batches(columns=enriched_schema.names)
+        return (
+            self._record_batch_with_schema(batch, enriched_schema)
+            for batch in raw_batches
+        )
+
+    @staticmethod
+    def _project_arrow_schema(
+        schema: pa.Schema, columns: list[str] | None
+    ) -> pa.Schema:
+        if columns is None:
+            return schema
+        return pa.schema(
+            [schema.field(name) for name in columns], metadata=schema.metadata
+        )
+
+    def _reader_from_batches(
+        self, columns: list[str] | None = None
+    ) -> pa.RecordBatchReader:
+        schema = self._schema
+        if schema is None:
+            return pa.RecordBatchReader.from_batches(pa.schema([]), [])
+        projected_schema = self._project_arrow_schema(schema, columns)
+        enriched_schema = self._get_enriched_arrow_schema(projected_schema)
+        batches = (
+            self._record_batch_with_schema(batch, enriched_schema)
+            for batch in self._iter_record_batches(columns=enriched_schema.names)
+        )
+        return pa.RecordBatchReader.from_batches(enriched_schema, batches)
+
+    def _reader_from_dataset(
+        self, dataset: ds.Dataset, columns: list[str] | None = None
+    ) -> pa.RecordBatchReader:
+        raw_reader = dataset.scanner(columns=columns).to_reader()
+        enriched_schema = self._get_enriched_arrow_schema(raw_reader.schema)
+        batches = (
+            self._record_batch_with_schema(batch, enriched_schema)
+            for batch in raw_reader
+        )
+        return pa.RecordBatchReader.from_batches(enriched_schema, batches)
+
+    def _get_enriched_arrow_schema(self, base_schema: pa.Schema) -> pa.Schema:
+        """Return *base_schema* with GeoArrow field metadata when applicable."""
+        if "geometry" not in base_schema.names:
+            return base_schema
+
+        geometry_field = base_schema.field("geometry")
+        if not pa.types.is_binary(geometry_field.type) and not pa.types.is_large_binary(
+            geometry_field.type
+        ):
+            return base_schema
+
+        metadata = dict(geometry_field.metadata or {})
+        if metadata.get(b"ARROW:extension:name", b"").startswith(b"geoarrow."):
+            return base_schema
+
+        from pyproj import CRS
+
+        # `geometry` is the footprint geometry, stored in lon/lat CRS84.
+        # Row-level `crs` / `proj:epsg` sidecars describe the native raster CRS.
+        extension_metadata: dict[str, Any] = {
+            "crs": CRS.from_user_input("OGC:CRS84").to_json_dict()
+        }
+
+        metadata[b"ARROW:extension:name"] = b"geoarrow.wkb"
+        metadata[b"ARROW:extension:metadata"] = json.dumps(
+            extension_metadata, separators=(",", ":")
+        ).encode()
+        enriched_geometry = geometry_field.with_metadata(metadata)
+
+        return pa.schema(
+            [
+                enriched_geometry if field.name == "geometry" else field
+                for field in base_schema
+            ],
+            metadata=base_schema.metadata,
+        )
+
+    @staticmethod
+    def _record_batch_with_schema(
+        batch: pa.RecordBatch, schema: pa.Schema
+    ) -> pa.RecordBatch:
+        if batch.schema.equals(schema, check_metadata=True):
+            return batch
+        return pa.RecordBatch.from_arrays(batch.columns, schema=schema)
+
+    @staticmethod
+    def _empty_record_batch(schema: pa.Schema) -> pa.RecordBatch:
+        return pa.RecordBatch.from_arrays(
+            [pa.array([], type=field.type) for field in schema],
+            schema=schema,
+        )
+
+    @staticmethod
+    def _table_with_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
+        if table.schema.equals(schema, check_metadata=True):
+            return table
+        return pa.Table.from_arrays(table.columns, schema=schema)
+
+    def to_reader(
+        self,
+        columns: list[str] | None = None,
+        requested_schema: pa.Schema | None = None,
+    ) -> pa.RecordBatchReader:
+        """Return a :class:`pyarrow.RecordBatchReader` for the collection metadata.
+
+        Parameters
+        ----------
+        columns : list of str, optional
+            Selected columns to include.
+        requested_schema : pyarrow.Schema, optional
+            If provided, attempt to cast the stream to this schema.
+
+        Returns
+        -------
+        pyarrow.RecordBatchReader
+        """
+        dataset = self._filtered_data_dataset()
+        if dataset is None:
+            reader = self._reader_from_batches(columns=columns)
+        else:
+            reader = self._reader_from_dataset(dataset, columns=columns)
+        if requested_schema is not None:
+            # Let PyArrow enforce requested-schema compatibility after Rasteret
+            # has added standards-level GeoArrow metadata.
+            return reader.cast(requested_schema)
+        return reader
+
+    def __arrow_c_stream__(self, requested_schema: Any = None) -> Any:
+        """Arrow PyCapsule protocol for zero-copy stream interchange.
+
+        Allows passing the Collection directly to standard Arrow-compatible
+        tools (e.g. ``gpd.GeoDataFrame.from_arrow(collection)``).
+        """
+        if requested_schema is not None:
+            try:
+                schema = _schema_from_arrow_capsule(requested_schema)
+                return self.to_reader(requested_schema=schema).__arrow_c_stream__()
+            except Exception:
+                raise NotImplementedError(
+                    "Rasteret Collection cannot fulfill the requested Arrow schema export."
+                )
+        return self.to_reader().__arrow_c_stream__()
+
+    def __arrow_c_array__(self, requested_schema: Any = None) -> Any:
+        """Arrow PyCapsule protocol for zero-copy single-batch interchange.
+
+        Materializes the collection metadata into a single Arrow RecordBatch
+        and exports it via the PyCapsule protocol.
+        """
+        table = self.to_table().combine_chunks()
+        schema = self._get_enriched_arrow_schema(table.schema)
+        batches = table.to_batches()
+        batch = (
+            self._record_batch_with_schema(batches[0], schema)
+            if batches
+            else self._empty_record_batch(schema)
+        )
+        if requested_schema is not None:
+            try:
+                requested = _schema_from_arrow_capsule(requested_schema)
+                return batch.cast(requested).__arrow_c_array__()
+            except Exception:
+                raise NotImplementedError(
+                    "Rasteret Collection cannot fulfill the requested Arrow schema export."
+                )
+        return batch.__arrow_c_array__()
+
+    def __arrow_c_schema__(self) -> Any:
+        """Arrow PyCapsule protocol for zero-copy schema interchange."""
+        dataset = self._filtered_data_dataset()
+        schema = dataset.schema if dataset is not None else self._schema
+        if schema is None:
+            return pa.schema([]).__arrow_c_schema__()
+        return self._get_enriched_arrow_schema(schema).__arrow_c_schema__()
+
+    @classmethod
+    def from_arrow(cls, data: Any, **kwargs: Any) -> Collection:
+        """Create a Collection from an Arrow-compatible object.
+
+        This is the official constructor for wrapping Arrow-native objects
+        (Tables, Datasets, Readers) as a Rasteret Collection.
+
+        Parameters
+        ----------
+        data : Arrow-compatible object
+            Object implementing the Arrow PyCapsule protocol or a native
+            PyArrow type.
+        **kwargs : Any
+            Forwarded to :func:`rasteret.as_collection`.
+
+        Returns
+        -------
+        Collection
+        """
+        from rasteret import as_collection
+
+        return as_collection(data, **kwargs)
+
     @property
     def bands(self) -> list[str]:
         """Available band codes in this collection."""
@@ -1836,6 +2136,29 @@ class Collection:
         if None in (minx, miny, maxx, maxy):
             return None
         return (float(minx), float(miny), float(maxx), float(maxy))
+
+    @property
+    def crs(self) -> list[str]:
+        """Unique row-level raster CRS codes in this collection."""
+        if self._has_record_index():
+            try:
+                table = self._prepare_record_index_table(columns=["crs"])
+            except Exception:
+                table = None
+            if table is not None and "crs" in table.column_names:
+                return _unique_crs_codes_from_array(table.column("crs"))
+
+        schema = self._schema
+        if schema is None:
+            return []
+        if "crs" in schema.names:
+            codes: set[str] = set()
+            for batch in self._iter_record_batches(columns=["crs"]):
+                col = batch.column(batch.schema.get_field_index("crs"))
+                codes.update(_unique_crs_codes_from_array(col))
+            return sorted(codes)
+
+        return [f"EPSG:{code}" for code in self.epsg]
 
     @property
     def epsg(self) -> list[int]:

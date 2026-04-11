@@ -55,6 +55,24 @@ def parse_epsg(crs_value: object) -> int | None:
     return None
 
 
+def crs_code_from_epsg(epsg: int | None) -> str | None:
+    """Return an authority-code CRS string for an EPSG integer."""
+    if epsg is None:
+        return None
+    return f"EPSG:{int(epsg)}"
+
+
+def normalize_crs_code(crs_value: object) -> str | None:
+    """Normalize supported CRS inputs into an authority-code string."""
+    epsg = parse_epsg(crs_value)
+    if epsg is not None:
+        return crs_code_from_epsg(epsg)
+    if isinstance(crs_value, str):
+        value = crs_value.strip()
+        return value or None
+    return None
+
+
 def _add_bbox_struct(table: pa.Table) -> pa.Table:
     """Derive ``bbox`` struct from the ``geometry`` column.
 
