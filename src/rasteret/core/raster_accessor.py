@@ -42,6 +42,33 @@ from rasteret.types import (
 logger = logging.getLogger(__name__)
 
 
+class BandResolutionError(ValueError):
+    """Raised when a requested band cannot be mapped to a readable COG asset."""
+
+
+def _cloud_access_hint(url: str | None) -> str:
+    if not url:
+        return ""
+    lower = str(url).lower()
+    if lower.startswith("s3://") or ".s3." in lower or "amazonaws.com" in lower:
+        return (
+            " If this is a requester-pays or private S3 bucket, check AWS "
+            "credentials, bucket region, requester-pays settings, or pass an "
+            "explicit backend/cloud_config."
+        )
+    if lower.startswith("gs://") or "storage.googleapis.com" in lower:
+        return (
+            " If this is a private or requester-pays GCS bucket, check GCP "
+            "credentials or pass an explicit backend/cloud_config."
+        )
+    if "blob.core.windows.net" in lower:
+        return (
+            " If this Azure Blob asset requires signing, check SAS/Planetary "
+            "Computer credentials or pass an explicit backend."
+        )
+    return ""
+
+
 class RasterAccessor:
     """Data-loading handle for a single Parquet record (row) in a Collection.
 
@@ -184,6 +211,51 @@ class RasterAccessor:
         except KeyError:
             return None, None, None
 
+    def _missing_band_error(self, band_code: str) -> BandResolutionError:
+        band_map = BandRegistry.get(self.data_source)
+        candidates: list[str] = [band_code]
+        forward = band_map.get(band_code)
+        if forward:
+            candidates.append(forward)
+        if band_map and band_code in band_map.values():
+            reverse = {v: k for k, v in band_map.items()}
+            back = reverse.get(band_code)
+            if back:
+                candidates.append(back)
+
+        available_assets = sorted(str(key) for key in self.assets)
+        available_metadata = sorted(str(key) for key in self.band_metadata)
+        if self.data_source:
+            source_hint = (
+                f"data_source={self.data_source!r}; registered band mappings: "
+                f"{band_map or '<none>'}."
+            )
+        else:
+            source_hint = (
+                "data_source is empty, so no BandRegistry mapping was applied. "
+                "If this table uses provider/STAC asset names, pass data_source=... "
+                "or register a BandRegistry mapping."
+            )
+        return BandResolutionError(
+            f"Could not resolve band '{band_code}' for record '{self.id}'. "
+            f"Tried asset keys: {candidates}. "
+            f"Available asset keys: {available_assets or '<none>'}. "
+            f"Available metadata keys: {available_metadata or '<none>'}. "
+            f"{source_hint}"
+        )
+
+    def _wrap_cog_read_error(
+        self,
+        *,
+        band_code: str,
+        url: str | None,
+        exc: Exception,
+    ) -> RuntimeError:
+        return RuntimeError(
+            f"COG read failed for band '{band_code}' in record '{self.id}' "
+            f"from {url!r}: {exc}.{_cloud_access_hint(url)}"
+        )
+
     def intersects(self, geometry) -> bool:
         """Return ``True`` if this record's bbox overlaps *geometry*'s bbox."""
         from rasteret.core.geometry import (
@@ -230,22 +302,26 @@ class RasterAccessor:
         """Load single band data for a geometry identified by index."""
         cog_meta, url, band_index = self.try_get_band_cog_metadata(band_code)
         if cog_meta is None or url is None:
-            raise ValueError(
-                f"Missing band metadata or href for band '{band_code}' "
-                f"in record '{self.id}'"
-            )
+            raise self._missing_band_error(band_code)
 
-        result = await read_cog(
-            url,
-            cog_meta,
-            band_index=band_index,
-            geom_array=geom_array,
-            geom_idx=geom_idx,
-            geometry_crs=geometry_crs,
-            max_concurrent=max_concurrent,
-            reader=reader,
-            all_touched=all_touched,
-        )
+        try:
+            result = await read_cog(
+                url,
+                cog_meta,
+                band_index=band_index,
+                geom_array=geom_array,
+                geom_idx=geom_idx,
+                geometry_crs=geometry_crs,
+                max_concurrent=max_concurrent,
+                reader=reader,
+                all_touched=all_touched,
+            )
+        except Exception as exc:
+            raise self._wrap_cog_read_error(
+                band_code=band_code,
+                url=url,
+                exc=exc,
+            ) from exc
         if result.data.size == 0:
             return None
 
@@ -418,10 +494,7 @@ class RasterAccessor:
         for band_code in band_codes:
             cog_meta, url, band_index = self.try_get_band_cog_metadata(band_code)
             if cog_meta is None or url is None or cog_meta.transform is None:
-                raise ValueError(
-                    f"Missing band metadata or href for band '{band_code}' "
-                    f"in record '{self.id}'"
-                )
+                raise self._missing_band_error(band_code)
 
             scale_x, trans_x, scale_y, trans_y = normalize_transform(cog_meta.transform)
             src_transform = Affine(

@@ -383,6 +383,84 @@ class TestGdfCrs:
 
 
 class TestGeometryErrors:
+    def test_missing_band_error_lists_available_assets_and_mapping_hint(self):
+        from rasteret.core.raster_accessor import BandResolutionError, RasterAccessor
+        from rasteret.types import RasterInfo
+
+        info = RasterInfo(
+            id="r-missing-band",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"red": {"href": "https://example.com/red.tif"}},
+            band_metadata={"red_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+
+        with pytest.raises(BandResolutionError) as excinfo:
+            raise accessor._missing_band_error("B04")
+
+        message = str(excinfo.value)
+        assert "B04" in message
+        assert "red" in message
+        assert "red_metadata" in message
+        assert "data_source is empty" in message
+
+    @pytest.mark.asyncio
+    async def test_cog_read_error_adds_cloud_access_hint(self):
+        from rasteret.core.raster_accessor import RasterAccessor
+        from rasteret.types import CogMetadata, RasterInfo
+
+        info = RasterInfo(
+            id="r-cloud",
+            datetime=datetime(2024, 1, 1),
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            footprint=None,
+            crs=4326,
+            cloud_cover=0.0,
+            assets={"B04": {"href": "s3://requester-pays-bucket/red.tif"}},
+            band_metadata={"B04_metadata": {}},
+            collection="c",
+        )
+        accessor = RasterAccessor(info, data_source="")
+        meta = CogMetadata(
+            width=1,
+            height=1,
+            tile_width=1,
+            tile_height=1,
+            dtype=np.dtype("uint16"),
+            crs=4326,
+            transform=[1.0, 0.0, -1.0, 1.0],
+            tile_offsets=[0],
+            tile_byte_counts=[1],
+        )
+
+        with (
+            patch.object(
+                accessor,
+                "try_get_band_cog_metadata",
+                return_value=(meta, "s3://requester-pays-bucket/red.tif", None),
+            ),
+            patch(
+                "rasteret.core.raster_accessor.read_cog",
+                new=AsyncMock(side_effect=OSError("AccessDenied")),
+            ),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                await accessor._load_single_band(
+                    pa.array([None]),
+                    0,
+                    "B04",
+                )
+
+        message = str(excinfo.value)
+        assert "AccessDenied" in message
+        assert "AWS credentials" in message
+        assert excinfo.value.__cause__ is not None
+
     @pytest.mark.asyncio
     async def test_unsupported_geometry_error_is_not_silently_swallowed(self):
         """Geometry type errors should fail loudly, not become 'No valid data found'."""
