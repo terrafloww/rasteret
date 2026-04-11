@@ -6,7 +6,7 @@
 </p>
 <p align="center">
 Rasteret helps you manage and read massive satellite imagery collections with zero friction. <br>
-It provides a high-performance "drop-in" backend for **TorchGeo**, **xarray**, and **NumPy** that is up to 20x faster than traditional GDAL-based workflows.
+It provides a 20x faster "drop-in" backend for TorchGeo, interops with all Arrow-based tools like DuckDB, Polars, while maintaining xarray, and NumPy support.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@ It provides a high-performance "drop-in" backend for **TorchGeo**, **xarray**, a
 
 ## Why Rasteret?
 
-Geospatial data science is often 80% "plumbing." You spend hours writing `pystac-client` loops, manual `ThreadPoolExecutor` code, and fragile CRS-alignment logic just to get a batch of pixels for your model.
+Geospatial data science is often 80% "plumbing." You spend hours writing STAC reading loops, manual `ThreadPoolExecutor`, and fragile CRS-alignment logic just to get a batch of pixels for your model.
 
 **Rasteret turns those 80% into a single line of code.**
 
@@ -30,26 +30,37 @@ It separates the **Control Plane** (managing your scenes, labels, and splits in 
 ### The "Friction" vs. "Flow" Comparison
 
 **The Old Way (25+ lines of fragile plumbing)**:
-1. Search STAC catalog ✅
-2. Loop over items ✅
-3. Handle pagination ✅
-4. Filter by cloud cover ✅
-5. **Wait 500ms per file** to parse remote TIFF headers (GDAL cold start) ❌
-6. Manage `ThreadPoolExecutor` manually ❌
-7. Manually stack results and align CRS ❌
+1. Search STAC catalog
+2. Loop over items
+3. Handle pagination
+4. Filter by cloud cover
+5. **Wait 500ms per file** to parse remote TIFF headers (GDAL cold start)
+6. Manage `ThreadPoolExecutor` manually
+7. Manually stack results and align CRS
 
 **The Rasteret Way (3 lines of robust code)**:
 ```python
 import rasteret
 
-# 1. Load or Build your collection (Index is local, metadata is relational)
+# 1. Load or Build your collection
 collection = rasteret.load("my_s2_experiment")
 
 # 2. Query like a Table: "Give me the training scenes with <10% clouds"
 filtered = collection.subset(split="train", cloud_cover_lt=10)
+# OR send Collection to DuckDB or Polars for enriching with your own data and bring it back to Rasteret
+filtered = duckdb.sql("""
+SELECT
+    c.*,
+    p.plot_id,
+    p.is_target
+FROM collection c
+JOIN plots p ON ST_Intersects(c.geometry, p.geometry)
+WHERE p.is_target = true AND c.cloud_cover_lt < 10
+""")
+filtered = rasteret.as_collection(filtered)
 
-# 3. Batch Read: "Fetch aligned pixels for these 1000 polygons"
-data = filtered.get_numpy(geometries=my_polygons, bands=["B04", "B08"])
+# 3. Batch Read: "Fetch aligned pixels for all geometries in the filtered collection"
+data = filtered.get_numpy(geometries=filtered.geometry, bands=["B04", "B08"])
 ```
 
 ---
@@ -57,7 +68,7 @@ data = filtered.get_numpy(geometries=my_polygons, bands=["B04", "B08"])
 ## Key Features
 
 - **🚀 20x Faster Cold Starts**: By caching tile-layout metadata locally, Rasteret jumps straight to the pixels, skipping expensive remote header parsing, which happens in every new environment.
-- **📦 Seamless "Drop-in" Backends**: Boost **TorchGeo** or **xarray** performance by simply swapping the reader. No need to rewrite your training code.
+- **📦 Seamless "Drop-in" Backends**: Boost **TorchGeo** or **xarray** performance by simply swapping the reader. No need to rewrite your analysis code.
 - **🧬 Relational Imagery**: Store your labels, `train/val/test` splits, and custom metadata directly in the imagery index. No more separate CSVs.
 - **🛠️ Zero-Config Throughput**: Automatic cloud storage presigning with `Obstore`, and custom async I/O handles the networking so you don't have to.
 
