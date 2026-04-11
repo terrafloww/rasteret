@@ -1,8 +1,10 @@
 # The Correctness Contract
 
-This page defines Rasteret's **user-visible accuracy guarantees**. Our goal is to be **100% Rasterio-aligned** for every pixel we read.
+This page defines Rasteret's user-visible accuracy contract. The goal is to
+match rasterio/GDAL semantics for supported tiled GeoTIFF/COG reads.
 
-When Rasteret cannot safely match the behavior of the industry standard (GDAL/Rasterio), it fails loudly with an actionable error. We believe that a hard failure is always better than a silent "guess" that could poison your ML training data.
+When Rasteret cannot safely match those semantics, it should fail with an
+actionable error rather than silently guess.
 
 ## Scope (what Rasteret supports)
 

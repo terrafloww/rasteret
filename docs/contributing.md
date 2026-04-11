@@ -208,9 +208,7 @@ The built-in catalog lives in `src/rasteret/catalog.py`. Each entry is a
 (STAC API, static STAC catalog, or GeoParquet URI), band map, license
 info, and coverage hints.
 
-Before adding a dataset, work through the
-[prerequisites checklist](how-to/dataset-catalog.md#prerequisites-for-contributing-a-built-in-dataset).
-The short version:
+Before adding a dataset, work through this checklist:
 
 1. **Data source is reachable**: STAC API, static catalog, or GeoParquet
    file. Verify you can query it or read it with PyArrow.

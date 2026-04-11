@@ -1,203 +1,190 @@
 # Schema Contract
 
-## Why Parquet indexes?
+This page describes the table shape Rasteret expects and produces. It is useful
+when you are building an ingest path, preparing a Parquet/Arrow record table, or
+debugging why a collection can filter but cannot read pixels yet.
 
-Traditional geospatial workflows pay a "Cold Start Tax" every time they open a remote COG. GDAL has to fetch the TIFF header (IFD) over HTTP just to know where the pixels are. For a 30-scene time series, that's 120+ blocking network round-trips before your model sees a single pixel.
+The short version:
 
-**Rasteret removes this Tax by caching the header metadata in a local Parquet index.**
+```text
+required record columns + optional COG metadata + your own workflow columns
+```
 
-We chose Parquet (over Zarr, JSON, or SQLite) for its specialized layout:
-- **Queryable**: Filter millions of scenes using Arrow predicate pushdown without reading the whole file.
-- **Ecosystem Native**: Your index is a standard table. You can open it in **DuckDB**, **Polars**, or **pandas** to perform complex joins between your ground-truth data and your imagery.
-- **Portable**: A 2MB Parquet index can describe 2TB of satellite data. It’s small enough to commit to Git or share via Slack.
+Pixels stay in the original GeoTIFF/COG files. The collection stores the record
+metadata and the COG header metadata Rasteret needs to read byte ranges later.
 
-## The "Three Tier" Design
+## Required Record Columns
 
-A Rasteret Collection is more than just a list of files; it is a **unified index** that simplifies the researcher's mental model. Traditionally, you have to manage discovery metadata (search results), pixel offsets (for speed), and project-specific labels (for training) in separate places.
+Every Rasteret collection starts from four record fields:
 
-**Rasteret unifies these into three tiers of columns within a single Parquet file:**
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | `string` | Stable record identifier. |
+| `datetime` | `timestamp` | Acquisition or record time. Integer years can be normalized by `build_from_table()`. |
+| `geometry` | WKB / GeoArrow-compatible geometry | Footprint geometry for the raster record. |
+| `assets` | struct-like mapping | Band key to asset metadata, including a resolvable `href`. |
 
-1. **Required columns**: The base contract. These make the file a valid Rasteret Collection.
-2. **COG acceleration columns**: Cached TIFF header metadata. This is what removes the "Cold Start" friction and makes Rasteret fast.
-3. **User-extensible columns**: Your splits, labels, and quality flags. This is what makes the Collection a reproducible experiment store.
+The normalisation layer validates these fields and raises `ValueError` when any
+are missing.
 
-By unifying these, a single `.parquet` file becomes a complete, shareable record of your experiment. For the full technical specification, see the [Required Columns](#tier-1-required-columns) section below.
+An `assets` value usually looks like:
 
-For the full rationale (including alternatives considered), see
-[Design Decisions](design-decisions.md#why-parquet-indexes).
+```python
+{
+    "B04": {"href": "s3://bucket/scene_B04.tif"},
+    "B08": {"href": "s3://bucket/scene_B08.tif"},
+}
+```
 
-### GeoParquet (and Parquet native geometry types)
+For multi-band GeoTIFFs where several logical bands live in the same file, each
+band can point to the same `href` with a different 0-based `band_index`:
 
-Rasteret Collections are written as **GeoParquet**: the footprint geometry is
-stored as **WKB** (in **CRS84**) and `Collection.export()` writes the GeoParquet
-1.1 `geo` file metadata so other tools can interpret the geometry column.
+```python
+{
+    "R": {"href": "s3://bucket/naip.tif", "band_index": 0},
+    "G": {"href": "s3://bucket/naip.tif", "band_index": 1},
+    "B": {"href": "s3://bucket/naip.tif", "band_index": 2},
+    "NIR": {"href": "s3://bucket/naip.tif", "band_index": 3},
+}
+```
 
-Parquet is also adding native `GEOMETRY`/`GEOGRAPHY` logical types. The GeoParquet
-community is planning GeoParquet 2.0 to align with that evolution as tool support
-matures. Rasteret tracks this and plans to adopt newer encodings when ecosystem
-support stabilizes.
+## Columns Rasteret Can Add
 
-GeoParquet is also incubating an **alpha "Parquet Raster"** proposal
-for representing raster pixels (and/or external raster references) *inside* Parquet.
-See the [draft spec](https://github.com/opengeospatial/geoparquet/blob/main/format-specs/parquet-raster.md).
-Rasteret's Collections are different: they are **record tables** (GeoParquet) that
-reference existing GeoTIFF/COG assets and add acceleration metadata for fast
-byte-range tile reads, rather than storing raster payloads in Parquet.
+During normalization, Rasteret adds these when missing:
 
-### Dataset descriptors
+| Column | Meaning |
+| --- | --- |
+| `bbox` | Struct with `xmin`, `ymin`, `xmax`, `ymax`, derived from `geometry`. |
+| `year` | Partition column derived from `datetime`. |
+| `month` | Partition column derived from `datetime`. |
 
-Rasteret uses `DatasetDescriptor` objects to describe how a dataset is discovered
-(STAC API vs GeoParquet), accessed (cloud auth / URL rewriting), and mapped
-(band codes -> asset keys + optional `band_index` for multi-sample GeoTIFFs).
+During COG enrichment, Rasteret can add CRS sidecars:
 
-See:
+| Column | Meaning |
+| --- | --- |
+| `proj:epsg` | Integer EPSG code for the native raster CRS. |
+| `crs` | String CRS code such as `EPSG:32632`. |
 
-- [Architecture](architecture.md) for the end-to-end flow
-- [`rasteret.types`](../reference/types.md) for the concrete descriptor fields
+These CRS sidecars describe the raster asset CRS for each row. They do not
+describe the footprint `geometry` column, which Rasteret treats as CRS84
+footprint geometry for Arrow/GeoArrow export.
 
----
+## COG Metadata Columns
 
-## Tier 1: Required columns
+Pixel reads need per-band COG header metadata. These columns are added when you
+build from STAC/catalog sources, or when you call:
 
-These columns are required for `Collection` to function:
+```python
+rasteret.build_from_table(..., enrich_cog=True)
+```
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `string` | Unique record identifier |
-| `datetime` | `timestamp` | Acquisition / observation time (may be null when `start_datetime`/`end_datetime` present) |
-| `geometry` | `binary` (WKB) | Record footprint geometry |
-| `assets` | `struct` | Band key -> asset dict with resolvable `href` |
+Column names follow this pattern:
 
-The normalisation layer (`build_collection_from_table`) validates these
-exist and raises `ValueError` if any are missing.
+```text
+{band}_metadata
+```
 
-The asset dict supports:
+Examples:
 
-- `href` (required): URL/path to a tiled GeoTIFF/COG.
-- `band_index` (optional, default `0`): 0-based sample/band index within a
-  multi-sample GeoTIFF asset. This is required when multiple logical bands
-  live in one file (e.g. NAIP `image` contains R/G/B/NIR), and is also used
-  to slice planar-separate tile tables at enrichment time.
+```text
+B04_metadata
+B08_metadata
+red_metadata
+```
 
-### Derived columns (added automatically)
+Each metadata struct stores the header data Rasteret needs for tiled reads:
 
-The normalisation layer adds these when missing:
+| Field | Meaning |
+| --- | --- |
+| `image_width`, `image_height` | Full raster dimensions. |
+| `tile_width`, `tile_height` | Tile dimensions. |
+| `dtype` | Source NumPy dtype string. |
+| `transform` | Affine transform parameters. |
+| `tile_offsets`, `tile_byte_counts` | Byte ranges for each tile. |
+| `compression`, `predictor`, `photometric` | TIFF decode metadata. |
+| `pixel_scale`, `tiepoint` | GeoTIFF georeferencing tags when present. |
+| `nodata` | GDAL nodata value when present. |
+| `samples_per_pixel`, `planar_configuration`, `extra_samples` | Multi-sample TIFF layout metadata. |
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `scene_bbox` | `list<float64>[4]` | `[minx, miny, maxx, maxy]` from geometry |
-| `bbox_minx`, `bbox_miny`, `bbox_maxx`, `bbox_maxy` | `float64` | Scalar bbox for Arrow predicate pushdown |
-| `year` | `int64` | Partition column from datetime |
-| `month` | `int64` | Partition column from datetime |
+A null `{band}_metadata` value means that record was not enriched for that band,
+the band was missing for that row, or header parsing failed for that asset.
+Rasteret skips records with null metadata for requested pixel reads.
 
----
+## User Columns
 
-## Tier 2: COG acceleration columns
+You can add columns beside Rasteret's columns. Common examples:
 
-Per-band metadata struct columns enable fast tiled reads by caching IFD
-data from COG headers. These are added by COG enrichment
-(`enrich_table_with_cog_metadata`) or by `StacCollectionBuilder`.
+| Column | Purpose |
+| --- | --- |
+| `split` | Train/validation/test assignment. |
+| `label` | Classification or regression target. |
+| `plot_id`, `aoi_id`, `fold` | Experiment grouping keys. |
+| `eo:cloud_cover` | Scene-level cloud percentage from STAC or your own metadata. |
+| `quality_flag` | Custom filtering or audit value. |
 
-Column name pattern: `{band}_metadata` (e.g. `B04_metadata`, `red_metadata`).
+For examples, see [Enriched Parquet Workflows](../how-to/enriched-parquet-workflows.md)
+and [ML Training with Splits](../how-to/ml-training-splits.md).
 
-Each struct contains:
+## Arrow And GeoArrow Interop
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `image_width` | `int32` | Full image width in pixels |
-| `image_height` | `int32` | Full image height in pixels |
-| `tile_width` | `int32` | Tile width in pixels |
-| `tile_height` | `int32` | Tile height in pixels |
-| `dtype` | `string` | NumPy dtype string (e.g. `"uint16"`) |
-| `transform` | `list<float64>` | Affine transform parameters |
-| `predictor` | `int32` | TIFF predictor tag |
-| `compression` | `int32` | TIFF compression tag |
-| `tile_offsets` | `list<int64>` | Byte offsets of each tile in the file |
-| `tile_byte_counts` | `list<int64>` | Byte sizes of each tile |
-| `pixel_scale` | `list<float64>` | GeoTIFF ModelPixelScaleTag |
-| `tiepoint` | `list<float64>` | GeoTIFF ModelTiepointTag |
-| `nodata` | `float64` | GDAL nodata value (null when tag absent) |
-| `samples_per_pixel` | `int32` | Bands per IFD (TIFF SamplesPerPixel) |
-| `planar_configuration` | `int32` | 1 = chunky, 2 = planar separate |
-| `photometric` | `int32` | TIFF PhotometricInterpretation |
-| `extra_samples` | `list<int32>` | Extra sample types (alpha, unspecified) |
+Rasteret collections can be passed to Arrow-aware tools. On Arrow export,
+Rasteret marks the `geometry` field as `geoarrow.wkb` so GeoPandas and other
+GeoArrow-aware consumers can detect the footprint geometry.
 
-### Null values in COG metadata
+Important CRS distinction:
 
-A `null` value in a `{band}_metadata` column means that record was not
-enriched for that band. This happens when:
+- `geometry` is the raster footprint and is exported with CRS84 metadata.
+- `crs` and `proj:epsg` are row-level raster CRS sidecars used for pixel reads.
 
-- The record was ingested without COG enrichment (e.g. [`build_from_table()`](../reference/rasteret.md)
-  without `enrich_cog=True`)
-- The COG header fetch failed for that specific record during enrichment
-- The band does not exist for that record
+That means a collection can have footprints in CRS84 while the rasters
+themselves are in UTM or another projected CRS.
 
-The execution layer skips records with null metadata for the requested
-bands. Partial enrichment is valid; some records can have metadata while
-others don't.
+## Entry Points
 
----
+Use the entry point that matches your table state:
 
-## Tier 3: User-extensible columns
+| Situation | Use |
+| --- | --- |
+| External record table that needs normalization or enrichment | `build_from_table(...)` |
+| Read-ready Rasteret Arrow table already in memory | `as_collection(...)` |
+| Previously exported collection artifact | `load(...)` |
 
-Any column can be added to a Collection's Parquet file. Common examples:
+`as_collection(...)` expects the table to already have Rasteret's read-ready
+columns, including `{band}_metadata` by default. Use `build_from_table(...)` for
+first-time external record tables.
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| `split` | `string` | `"train"` / `"val"` / `"test"` assignment |
-| `label` (or custom name) | varies | Classification target, regression value |
-| `cloud_cover` / `eo:cloud_cover` | `float64` | Scene-level cloud percentage |
-| `quality_flag` | `int32` | Custom quality score |
-| `collection` | `string` | Parent collection identifier |
-| `proj:epsg` | `int32` | EPSG code for native CRS |
+## Layer Requirements
 
-### Adding custom columns
+For filtering and metadata work:
 
-Load the Collection's table, add columns with PyArrow, rebuild with
-`build_collection_from_table()`, and save. For a complete walkthrough
-(splits, labels, TorchGeo integration), see
-[ML Training with Splits](../how-to/ml-training-splits.md).
+- required record columns
+- `bbox` for spatial filtering
 
----
+For `get_numpy()`, `get_xarray()`, `get_gdf()`, and `sample_points()`:
 
-## Layer requirements
-
-### TorchGeo adapter
-
-`Collection.to_torchgeo_dataset(...)` requires:
-
-- `id`, `datetime`, `assets`, `proj:epsg`
+- required record columns
+- `bbox`
+- `proj:epsg` or enough COG header CRS metadata to backfill it during enrichment
 - `{band}_metadata` for each requested band
-- `collection` is optional (data source resolved via `Collection.data_source`)
-- Requires either a usable `datetime` or `start_datetime`/`end_datetime` for temporal indexing; rows without a resolved timestamp are dropped
 
-### Execution layer
+For `to_torchgeo_dataset(...)`:
 
-`Collection.get_numpy(...)`, `Collection.get_xarray(...)`, and `Collection.get_gdf(...)` iterate
-rasters via `Collection.iterate_rasters()`, which needs:
+- required record columns
+- `proj:epsg`
+- `{band}_metadata` for each requested band
+- usable `datetime` or `start_datetime` / `end_datetime` values for temporal indexing
 
-- All four required columns
-- `scene_bbox` (for spatial filtering)
-- `{band}_metadata` for each requested band (for tile window calculation)
+## Data Source Resolution
 
-### Data source resolution
+When Rasteret needs a data source for band mapping or cloud configuration, it
+checks:
 
-When resolving which band mapping to use, the execution layer checks:
+1. An explicit `data_source=...` argument.
+2. `Collection.data_source`.
+3. Parquet schema metadata written by `Collection.export()`.
+4. The first non-empty value from a `collection` column.
+5. Otherwise, no data source is assumed.
 
-1. Explicit `data_source=...` parameter
-2. `Collection.data_source` attribute
-3. Parquet schema metadata `data_source` (written by `Collection.export`)
-4. First non-empty value from the `collection` column
-5. Otherwise: no data source is assumed (identity band mapping, no URL signing)
-
----
-
-## Validation expectations for new ingest paths
-
-When introducing a new ingestion source:
-
-1. Emit the required core columns exactly as above.
-2. Use `build_collection_from_table()` for normalisation.
-3. Call `enrich_table_with_cog_metadata()` if the source has COG assets.
-4. Add a smoke test that creates a Collection and runs [`get_numpy()`](../reference/core/collection.md) or [`get_xarray()`](../reference/core/collection.md)
-   on a small geometry.
+When a table engine drops schema metadata or changes string types during an
+Arrow round trip, pass `data_source=collection.data_source` explicitly when
+calling `as_collection(...)`.

@@ -9,8 +9,8 @@ the `Collection` class and execution layer (`get_numpy()`, `get_xarray()`,
 `get_gdf()`, `sample_points()`, `to_torchgeo_dataset()`). **[Ingest](ingest/index.md)**
 has the builders for STAC and Parquet sources. **[Fetch](fetch/cog.md)**
 has the COG reader and obstore backend internals. **[Integrations](integrations/torchgeo.md)**
-covers TorchGeo. **[Configuration](types.md)** has types and
-the [CLI](cli.md).
+covers TorchGeo. **Configuration** covers [cloud/storage](cloud.md),
+[types](types.md), and the [CLI](cli.md).
 
 Browse by navigating the module tree in the sidebar, or use the search box.
 

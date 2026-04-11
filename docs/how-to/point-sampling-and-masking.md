@@ -1,59 +1,40 @@
-# Neighborhood-Aware Sampling & Masking
+# Point Sampling And Masking
 
-This guide covers how to extract pixel values for specific GPS coordinates, and more importantly, how to handle the common problem of **Nodata gaps** (e.g., when your coordinate lands on a cloud or a missing tile).
+Use this page when you want pixel values at point locations, or when you want to
+control how polygon edges are masked for chip/area reads.
 
-## The Challenge: GPS vs. Clouds
+`Collection.sample_points(...)` returns a `pyarrow.Table` with one row per
+sampled point, record, and band. The usual workflow is:
 
-In traditional point sampling, if your ground-truth coordinate lands on a `nodata` pixel, your script simply returns `NaN`, and your training batch loses a sample. **Rasteret solves this with Smart Fallback.**
-
-## Sample values at points (standard Arrow-native workflow)
-
-`Collection.sample_points(...)` returns a `pyarrow.Table` with one row per sampled value.
-
-Recommended pattern:
-
-1. Keep points in your current engine (DuckDB / Polars / pandas).
-2. Select `x`/`y` columns.
-3. Pass the table directly to `sample_points(...)` with column names.
-
-If your columns are named `x/y`, `lon/lat`, `longitude/latitude`, or `lng/lat`,
-you can omit `x_column` and `y_column`.
-
-Collection-centric workflow reminder:
-`build/load/as_collection -> subset/where -> sample_points`.
-
-Why `points=`?
-`sample_points()` is a point-value query API, so it uses `points=...`.
-Area/chip read APIs (`get_xarray()`, `get_numpy()`, `get_gdf()`) use
-`geometries=...`.
-
-### pandas -> Rasteret
-
-```python
-import pandas as pd
-df = pd.read_parquet("points.parquet", columns=["lon", "lat"])
-samples = collection.sample_points(
-    points=df,
-    x_column="lon",
-    y_column="lat",
-    bands=["B04"],
-    geometry_crs=4326,
-)
+```text
+collection -> filter metadata -> pass points -> receive Arrow samples
 ```
 
-### DuckDB -> Rasteret
+## Point Tables
+
+For large point jobs, keep your points in the table engine you already use and
+pass that object directly to Rasteret. Rasteret accepts Arrow tables, pandas or
+GeoPandas dataframes, Polars dataframes, and DuckDB/SedonaDB-style relations.
+
+If your point table has `x/y`, `lon/lat`, `longitude/latitude`, or `lng/lat`
+columns, Rasteret can infer the coordinate columns. You can still pass
+`x_column` and `y_column` explicitly when that is clearer.
+
+### Polars
 
 ```python
-import duckdb
-tbl = duckdb.sql("""
-    SELECT lon, lat
-    FROM my_points
-    WHERE lon BETWEEN -122.5 AND -122.3
-      AND lat BETWEEN 37.7 AND 37.9
-""").arrow().read_all()
+import polars as pl
+
+points = pl.DataFrame(
+    {
+        "plot_id": ["plot-a", "plot-b"],
+        "lon": [-122.40, -122.39],
+        "lat": [37.79, 37.80],
+    }
+)
 
 samples = collection.sample_points(
-    points=tbl,
+    points=points,
     x_column="lon",
     y_column="lat",
     bands=["B04", "B08"],
@@ -61,130 +42,141 @@ samples = collection.sample_points(
 )
 ```
 
-### SedonaDB -> Rasteret
+### DuckDB
 
 ```python
-import pandas as pd
-import sedonadb
+import duckdb
 
-ctx = sedonadb.connect()
-ctx.create_data_frame(
-    pd.DataFrame({"lon": [-122.39, -122.395], "lat": [37.79, 37.795]})
-).to_view("pts")
+con = duckdb.connect()
 
-tbl = ctx.sql("SELECT lon, lat FROM pts").to_arrow_table()
+points = con.sql("""
+    SELECT plot_id, lon, lat
+    FROM plot_points
+    WHERE lon BETWEEN -122.5 AND -122.3
+      AND lat BETWEEN 37.7 AND 37.9
+""")
+
 samples = collection.sample_points(
-    points=tbl,
+    points=points,
     x_column="lon",
     y_column="lat",
+    bands=["B04", "B08"],
+    geometry_crs=4326,
+)
+```
+
+No CSV, pandas dataframe, or temporary file writes are required for this pattern.
+
+### Geometry Columns
+
+If your upstream tool already has a point geometry column, pass
+`geometry_column=...` instead of `x_column` and `y_column`.
+
+```python
+samples = collection.sample_points(
+    points=point_table,
+    geometry_column="geometry",
     bands=["B04"],
     geometry_crs=4326,
 )
 ```
 
-This is the standard easy way: use it as part of Arrow-native tools, then pass
-the point column to Rasteret.
+The geometry column should be WKB or GeoArrow points. For DuckDB `GEOMETRY`
+values, convert them in SQL first:
 
-If your upstream tool already has a WKB/GeoArrow point column, pass the table
-with `geometry_column="..."` (no conversion step required). For DuckDB, use
-`ST_AsWKB(geom)` in SQL when starting from a `GEOMETRY` column.
+```sql
+SELECT plot_id, ST_AsWKB(geom) AS geometry
+FROM plot_points
+```
 
-### Output columns
+### Output Columns
 
-`sample_points()` returns:
+`sample_points()` returns an Arrow table with:
 
 - `point_index`, `point_x`, `point_y`, `point_crs`
 - `record_id`, `datetime`, `collection`, `cloud_cover`
 - `band`, `value`, `raster_crs`
-- optional `neighbourhood_values` when `return_neighbourhood!="off"`
+- `neighbourhood_values` when `return_neighbourhood!="off"`
 
-Notes:
+`cloud_cover` may be null when the source collection does not provide it.
 
-- `cloud_cover` may be `NULL` when the source collection does not provide it.
-- `neighbourhood_values` is a 1D row-major list with length `(2r + 1)^2`,
-  where `r = max_distance_pixels`.
-- With `return_neighbourhood="if_center_nodata"`, rows whose base pixel is
-  valid return `neighbourhood_values = NULL`.
+Use `match="all"` for time-series style output with every matching record per
+point and band:
 
-This is intentionally Arrow-first, so you can keep processing in PyArrow,
-DuckDB, Polars, SedonaDB and geopandas.
+```python
+samples = collection.sample_points(
+    points=points,
+    bands=["B04"],
+    match="all",
+)
+```
 
-### `match="all"` vs `match="latest"`
+Use `match="latest"` to keep one row per `(point_index, band)`:
 
-- `match="all"`: keep all matching records per point/band (time series style).
-- `match="latest"`: keep only the latest datetime per `(point_index, band)`.
+```python
+latest = collection.sample_points(
+    points=points,
+    bands=["B04"],
+    match="latest",
+)
+```
 
-### Nodata fallback (`max_distance_pixels`)
+### Nodata Fallback
 
-By default, `sample_points()` returns the base pixel containing the point as-is:
+By default, `sample_points()` samples the base pixel containing the point:
 
 - If the base pixel is valid, Rasteret returns it.
-- If the base pixel is nodata/NaN, Rasteret returns that nodata value unless
-  you opt into a fallback search.
-- With `max_distance_pixels > 0`, Rasteret searches outward in **square rings**
-  up to `max_distance_pixels` (measured in **Chebyshev distance**, i.e. ring 1 is
-  the 8-neighborhood around the center pixel).
-- Within the first ring that contains valid candidates, Rasteret picks the
-  candidate with minimum exact distance from the point to the candidate pixel
-  rectangle (map-space distance via pixel width/height).
+- If the base pixel is nodata/NaN, Rasteret returns that nodata value.
 
-Set `max_distance_pixels=0` to disable fallback and return the nearest pixel
-value as-is (even if it is nodata).
+Set `max_distance_pixels > 0` to search nearby pixels when the base pixel is
+nodata:
 
 ```python
 samples = collection.sample_points(
-    points=tbl,
-    x_column="lon",
-    y_column="lat",
+    points=points,
     bands=["B04"],
     geometry_crs=4326,
-    max_distance_pixels=0,  # strict nearest-pixel value, no nodata search
+    max_distance_pixels=2,  # search up to a 5x5 window
 )
 ```
 
-If you also want the searched neighbourhood window itself, set
-`return_neighbourhood="always"`. Rasteret will include a `neighbourhood_values` list
-column in row-major order, centered on the base pixel under the point.
+The distance is measured in square rings around the base pixel. Rasteret uses
+Chebyshev distance for the ring limit and picks the closest valid candidate by
+point-to-pixel-rectangle distance.
+
+If you also want the searched window in the result, use
+`return_neighbourhood`:
 
 ```python
 samples = collection.sample_points(
-    points=tbl,
-    x_column="lon",
-    y_column="lat",
+    points=points,
     bands=["B04"],
     geometry_crs=4326,
-    max_distance_pixels=1,   # 3x3 neighborhood
-    return_neighbourhood="always",
-)
-```
-
-If you only want the neighbourhood window for rows where the base pixel is
-nodata/NaN, use `return_neighbourhood="if_center_nodata"`:
-
-```python
-samples = collection.sample_points(
-    points=tbl,
-    x_column="lon",
-    y_column="lat",
-    bands=["B04"],
-    geometry_crs=4326,
-    max_distance_pixels=2,  # 5x5 neighborhood
+    max_distance_pixels=2,
     return_neighbourhood="if_center_nodata",
 )
 ```
 
-Use this mode when you want fallback context for nodata rows without paying the
-Arrow column size cost for rows whose base pixel is already valid.
+Options:
 
-## Convenience inputs (quick scripts)
+| Value | Behavior |
+| --- | --- |
+| `"off"` | Do not include `neighbourhood_values`. |
+| `"always"` | Include the searched window for every sampled row. |
+| `"if_center_nodata"` | Include the searched window only when the base pixel is nodata/NaN. |
 
-`sample_points()` also accepts convenience formats (Shapely Point, WKB, GeoJSON Point),
-which are useful for quick scripts. For large-scale point jobs, prefer Arrow-native
-point arrays (example above).
+`neighbourhood_values` is a row-major list with length `(2r + 1)^2`, where `r`
+is `max_distance_pixels`.
 
-## Control polygon masking (`all_touched`)
+### Convenience Inputs
 
-For `get_xarray()`, `get_gdf()`, and `get_numpy()`, you can now pass `all_touched` directly.
+For quick scripts, `sample_points()` can also accept Shapely points, WKB point
+bytes, GeoJSON points, or lists of those values. For larger jobs, prefer Arrow inputs.
+
+## Polygon Masking
+
+For area/chip reads, `all_touched` controls whether pixels touched by polygon
+edges are included:
 
 ```python
 arr = collection.get_numpy(
@@ -194,10 +186,13 @@ arr = collection.get_numpy(
 )
 ```
 
-Set `all_touched=True` when you want edge pixels included whenever the geometry touches them.
+Set `all_touched=True` when edge pixels should be included whenever the polygon
+touches them.
 
-## CRS notes
+## CRS Notes
 
-- `geometry_crs` must describe your input points.
-- Output includes both `point_crs` and `raster_crs` for explicit downstream handling.
-- For multi-zone/time-series workloads, keep results in Arrow and group/filter before converting to other formats.
+- `geometry_crs` describes the input points, not the raster CRS.
+- `geometry_crs` defaults to EPSG:4326.
+- Output includes both `point_crs` and `raster_crs`.
+- For multi-zone or time-series workloads, keep results in Arrow and group or
+  filter before converting to formats that only support one CRS at a time.

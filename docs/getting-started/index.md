@@ -1,6 +1,11 @@
 # Getting Started
 
-This guide walks you through your first installation and your first automated "Build once, reuse often" workflow.
+This guide builds a small Sentinel-2 collection and reads pixels from it. The
+goal is to show the Rasteret loop you will use in larger projects:
+
+```text
+build a collection -> inspect/filter it -> read pixels in the shape you need
+```
 
 ## Installation
 
@@ -10,18 +15,15 @@ Rasteret requires Python 3.12 or later.
 uv pip install rasteret
 ```
 
-Add extras for specific integrations:
+Install extras for the output surfaces you plan to use:
+
 ```bash
-uv pip install "rasteret[xarray]"    # For get_xarray()
-uv pip install "rasteret[torchgeo]"  # For ML training
-uv pip install "rasteret[all]" # Incase you want to explore the whole thing anyway
+uv pip install "rasteret[xarray]"    # Collection.get_xarray()
+uv pip install "rasteret[torchgeo]"  # Collection.to_torchgeo_dataset()
+uv pip install "rasteret[all]"       # explore the optional integrations
 ```
 
-## First Workflow
-
-This section shows you how to move from a remote catalog and into your first pixel-ready collection.
-
-### 1. Build a collection
+## 1. Build A Collection
 
 ```python
 import rasteret
@@ -34,35 +36,65 @@ collection = rasteret.build(
 )
 ```
 
-This works because `earthsearch/sentinel-2-l2a` is already in Rasteret's
-built-in catalog.
+This works because `earthsearch/sentinel-2-l2a` is in Rasteret's built-in
+catalog. The build step searches the source STAC API, parses the COG header
+metadata once, and creates a Rasteret collection.
 
-!!! tip "Why two steps?"
-    By separating the **Build** (Control Plane) from the **Read** (Data Plane), we remove the network latency of re-parsing TIFF headers every time you run your script. For the full technical story behind this shift, see the [**Conceptual Roadmap**](../explanation/conceptual-roadmap.md).
+The important part: Rasteret does **not** move all pixels into Parquet. It keeps
+the imagery in the source COGs and stores a queryable Arrow/Parquet index with
+metadata such as IDs, footprints, assets, bounding boxes, CRS sidecars, and
+per-band COG header metadata.
 
-Useful inspection calls:
+!!! tip "Why build first?"
+    Opening many remote TIFFs repeatedly is expensive because each environment
+    has to rediscover header metadata such as tile offsets, transforms, dtype,
+    nodata, and CRS. Rasteret pays that setup cost during build, then reuses the
+    collection for later reads.
+
+## 2. Inspect The Collection
 
 ```python
+collection.describe()
 collection.bands
 collection.bounds
 collection.epsg
-len(collection)
 ```
 
-If you want to compare the collection you built against the source dataset:
+If the collection came from the built-in catalog, compare what you built against
+the catalog descriptor:
 
 ```python
 collection.compare_to_catalog()
 ```
 
-### 2. Read pixels
+Useful mental model:
 
-All of these read paths operate from the same collection.
+- `geometry` is the scene footprint, stored as WKB footprint geometry.
+- `crs` / `proj:epsg` describe the native raster CRS for each row.
+- `*_metadata` columns store per-band COG header metadata used by the read path.
+- Extra columns such as splits, labels, AOI IDs, or experiment metadata can live
+  beside the raster metadata.
 
-For analysis:
+## 3. Filter Before Reading
 
 ```python
-ds = collection.get_xarray(
+filtered = collection.subset(
+    cloud_cover_lt=20,
+    bbox=(77.55, 13.01, 77.58, 13.08),
+)
+```
+
+Filtering works on metadata first. That keeps pixel reads focused on candidate
+records instead of opening every raster and checking later.
+
+## 4. Read Pixels
+
+Choose the output surface that matches your task.
+
+For xarray analysis:
+
+```python
+ds = filtered.get_xarray(
     geometries=(77.55, 13.01, 77.58, 13.08),
     bands=["B04", "B08"],
 )
@@ -71,7 +103,16 @@ ds = collection.get_xarray(
 For array-first workflows:
 
 ```python
-arr = collection.get_numpy(
+arr = filtered.get_numpy(
+    geometries=(77.55, 13.01, 77.58, 13.08),
+    bands=["B04", "B08"],
+)
+```
+
+For GeoPandas output:
+
+```python
+gdf = filtered.get_gdf(
     geometries=(77.55, 13.01, 77.58, 13.08),
     bands=["B04", "B08"],
 )
@@ -80,22 +121,23 @@ arr = collection.get_numpy(
 For TorchGeo pipelines:
 
 ```python
-dataset = collection.to_torchgeo_dataset(
+dataset = filtered.to_torchgeo_dataset(
     bands=["B04", "B03", "B02", "B08"],
     chip_size=256,
 )
 ```
 
-Everything after `to_torchgeo_dataset()` is standard TorchGeo.
+Everything after `to_torchgeo_dataset()` is standard TorchGeo sampler and
+DataLoader code.
 
-### 3. Sample point values
+## 5. Sample Point Values
 
 ```python
 import pyarrow as pa
 
 points = pa.table({"lon": [77.56, 77.57], "lat": [13.03, 13.04]})
 
-samples = collection.sample_points(
+samples = filtered.sample_points(
     points=points,
     x_column="lon",
     y_column="lat",
@@ -104,70 +146,36 @@ samples = collection.sample_points(
 )
 ```
 
-`samples` is a `pyarrow.Table`, so it stays easy to use with Arrow-native tools.
+`samples` is a `pyarrow.Table`, so it can move into Arrow-native tools without
+first becoming a pandas dataframe.
 
-That is the same pattern again: one collection, different output surfaces.
-
-## Browse the catalog first, if needed
-
-If you do not already know which dataset ID you want, inspect the catalog:
-
-```bash
-rasteret datasets list
-```
-
-```python
-import rasteret
-
-for d in rasteret.DatasetRegistry.list():
-    print(d.id, d.name)
-```
-
-## What to use when
+## What To Use When
 
 Use `build()` when the dataset is already in Rasteret's catalog.
 
-If not:
+If it is not in the catalog:
 
-- custom STAC API:
-  [Build from STAC via `build_from_stac()`](../reference/rasteret.md)
-- existing Parquet or GeoParquet:
-  [Build from Parquet via `build_from_table()`](../how-to/build-from-parquet.md)
-- already have a read-ready collection table in memory:
-  use `as_collection(...)`
-- already have an exported collection:
-  use `load(...)`
+- custom STAC API: use `build_from_stac(...)`
+- existing Parquet or GeoParquet record table: use `build_from_table(...)`
+- read-ready Arrow table in memory: use `as_collection(...)`
+- exported Rasteret collection: use `load(...)`
 
-## A few practical notes
+## Practical Notes
 
-!!! info "Native dtypes are preserved"
-    Rasteret preserves the native COG dtype. If you need floating-point values
-    for downstream math, cast explicitly.
+!!! info "Native dtype is preserved"
+    Rasteret preserves the native COG dtype. If you need floating-point math,
+    cast explicitly or compute with an output surface that fits your workflow.
 
-!!! tip "Sharing collections"
-    `collection.export("path/")` writes a portable artifact that another user
-    can reopen with `rasteret.load("path/")`.
+!!! tip "Share the collection, not a notebook full of setup code"
+    `collection.export("path/")` writes a portable collection artifact. Another
+    user can reopen it with `rasteret.load("path/")`.
 
-!!! tip "Keep the collection at the center"
-    When you are unsure what to do next, come back to the collection-first
-    pattern:
-    build or load a collection, filter it, then choose the output surface you need.
+!!! warning "CRS still matters"
+    Query geometries default to EPSG:4326 (`geometry_crs=4326`). If your input
+    points or polygons are in another CRS, pass the correct `geometry_crs`.
+    Rasteret uses the raster CRS metadata in the collection to transform reads
+    safely.
 
-## Next pages
+## Next
 
-After this page, go where your task takes you:
-
-- hands-on notebook walkthroughs:
-  [Tutorials](../tutorials/index.md)
-- existing Parquet or GeoParquet source:
-  [Build from Parquet](../how-to/build-from-parquet.md)
-- point sampling and masking behavior:
-  [Point Sampling and Masking](../how-to/point-sampling-and-masking.md)
-- collection enrichment, splits, labels, experiment metadata:
-  [Enriched Parquet Workflows](../how-to/enriched-parquet-workflows.md)
-- local collection lifecycle:
-  [Collection Management](../how-to/collection-management.md)
-- built-in dataset IDs and local dataset registration:
-  [Dataset Catalog](../how-to/dataset-catalog.md)
-- auth and requester-pays reads:
-  [Custom Cloud Provider](../how-to/custom-cloud-provider.md)
+Next: [Concepts](../explanation/concepts.md)

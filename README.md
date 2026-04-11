@@ -166,7 +166,7 @@ Rasteret is built for flexibility. Choose the output format that fits your exist
 
 Full documentation at **[terrafloww.github.io/rasteret](https://terrafloww.github.io/rasteret)**:
 
-- [**Conceptual Roadmap**](https://terrafloww.github.io/rasteret/explanation/conceptual-roadmap/): Why Rasteret?
+- [**Concepts**](https://terrafloww.github.io/rasteret/explanation/concepts/): Why Rasteret?
 - [**Transitioning from Rasterio**](https://terrafloww.github.io/rasteret/how-to/transitioning-from-rasterio/): Side-by-side patterns.
 - [**Turbocharging TorchGeo**](https://terrafloww.github.io/rasteret/how-to/turbocharging-torchgeo/): Scaling your DL loaders.
 - [**Tutorials**](https://terrafloww.github.io/rasteret/tutorials/): Hands-on examples.

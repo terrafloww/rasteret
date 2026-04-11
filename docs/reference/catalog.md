@@ -1,5 +1,7 @@
 # rasteret.catalog
 
-Catalog entries and the in-memory registry used by `build()` and `rasteret datasets ...`.
+Dataset descriptors and registries used by `build()` and
+`rasteret datasets ...`. For task-focused examples, see
+[Dataset Catalog](../how-to/dataset-catalog.md).
 
 ::: rasteret.catalog

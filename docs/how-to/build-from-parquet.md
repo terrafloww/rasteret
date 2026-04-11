@@ -1,221 +1,207 @@
-# Blueprint to Pixel: Ingesting your own Catalogs
+# Build From Parquet Or Arrow Tables
 
-`build_from_table()` creates a Collection from **any Parquet table that contains GeoTIFF URLs**. Whether you have STAC GeoParquet from Source Cooperative or your own custom CSV-converted-to-Parquet, this is the "zero-friction" ingest path for your private data.
+Use `build_from_table()` when you already have a table of raster records and
+want Rasteret to turn it into a reusable collection.
 
-Rasteret validates your schema, derives per-record bounding boxes, and parsing COG headers to create an accelerated local index.
+This is the right path for:
 
-Use this path for **first-time ingest** of external data. If your table already came from a Rasteret Collection and you only appended columns, use [**as_collection()**](../reference/rasteret.md) to re-wrap it instantly.
+- STAC GeoParquet exports
+- a Parquet/Arrow manifest you created yourself
+- a DuckDB relation or PyArrow table in memory
+- private drone, satellite, or derived COG catalogs
 
----
+The table describes the rasters. The pixels stay in the original COGs.
 
-## Supported sources
+## The Record Table Contract
 
-| Source | Example URI |
-|--------|-------------|
-| [Source Cooperative](https://source.coop) | `s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet` |
-| STAC GeoParquet exports (Planetary Computer, Element84, ...) | `s3://sentinel-cogs/sentinel-s2-l2a-cogs/items.parquet` |
-| Your own Parquet with GeoTIFF URLs | `s3://my-bucket/my-catalog.parquet` or `/local/path.parquet` |
+At minimum, Rasteret needs these record fields:
 
-Any Parquet file works as long as it has the four required columns:
-`id`, `datetime`, `geometry`, `assets` (where `assets` contains
-GeoTIFF/COG URLs). See the [Schema Contract](../explanation/schema-contract.md)
-for details.
+| Column | Meaning |
+| --- | --- |
+| `id` | Stable record id. |
+| `datetime` | Acquisition or record time. Integer years are accepted and normalized. |
+| `geometry` | Footprint geometry, usually WKB/GeoArrow or GeoPandas geometry. |
+| `assets` | Mapping from band key to asset info, including `href`. |
 
-If you only have raw COG files (local paths or `s3://...` URLs), first
-create this record table yourself, then call `build_from_table()`.
-Rasteret does not scan folders/globs of TIFFs directly.
+Rasteret can add `bbox`, `year`, and `month` during normalization. Pass
+`enrich_cog=True` so that Rasteret also parses COG headers and adds
+`{band}_metadata` columns used by pixel reads.
 
-### Starting from raw COG paths (local or S3)
+## Build From An In-Memory Table
 
 ```python
+from datetime import datetime
+
 import geopandas as gpd
 import pandas as pd
 import rasteret
 from shapely.geometry import box
 
-rows = [
+records = [
     {
         "id": "scene-001",
-        "datetime": "2024-01-15T10:32:11Z",
-        "geometry": box(77.50, 12.90, 77.70, 13.10),  # scene footprint in EPSG:4326
+        "datetime": datetime(2024, 1, 15),
+        "geometry": box(77.50, 12.90, 77.70, 13.10),
         "assets": {
             "B04": {"href": "s3://my-bucket/scenes/scene-001_B04.tif"},
             "B08": {"href": "s3://my-bucket/scenes/scene-001_B08.tif"},
         },
     }
 ]
-gdf = gpd.GeoDataFrame(pd.DataFrame(rows), geometry="geometry", crs="EPSG:4326")
-gdf.to_parquet("my-scenes.parquet")  # writes valid GeoParquet metadata
+
+gdf = gpd.GeoDataFrame(records, geometry="geometry", crs="OGC:CRS84")
 
 collection = rasteret.build_from_table(
-    "my-scenes.parquet",
+    gdf.to_arrow(geometry_encoding="WKB"),
     name="my-scenes",
-    enrich_cog=True,  # parse COG headers for accelerated reads
+    enrich_cog=True,
 )
 ```
 
-!!! note
-    Rasteret works with local or remote COGs. It is primarily optimized for
-    remote tiled COG workflows, where index-first reads provide the largest gains.
+`build_from_table()` accepts direct file/cloud-storage paths to parquet/arrow tables and Arrow-compatible in-memory objects
 
----
+## Build From DuckDB
 
-## Build from a remote Parquet
+DuckDB is useful when your record table needs SQL filtering or joins before
+Rasteret builds the collection.
 
 ```python
-import os
-
-os.environ["AWS_NO_SIGN_REQUEST"] = "YES"  # for public S3 buckets
-
+import duckdb
 import rasteret
 
-# Source Cooperative - reads directly from S3 via PyArrow
-collection = rasteret.build_from_table(
-    "s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet",
-    name="maxar-opendata",
-)
+con = duckdb.connect()
 
-print(f"Rows: {collection.dataset.count_rows()}")
+records = con.sql("""
+    SELECT *
+    FROM 'records.parquet'
+    WHERE "eo:cloud_cover" < 20
+""")
+
+collection = rasteret.build_from_table(
+    records,
+    name="filtered-scenes",
+    enrich_cog=True,
+)
 ```
 
-When `name` is provided, the collection is cached to
-`~/rasteret_workspace/{name}_records/` and discoverable via
-`rasteret collections list`. Subsequent calls with the same name load
-from the local collection instantly. Pass `force=True` to rebuild.
+No intermediate file is required. Rasteret consumes the DuckDB relation through
+Arrow.
 
-See [`build_from_table()`](../reference/rasteret.md) API reference.
+## Build From A Parquet Path
+
+```python
+import rasteret
+
+collection = rasteret.build_from_table(
+    "s3://my-bucket/my-cog-records.parquet",
+    name="my-cog-records",
+    enrich_cog=True,
+    band_codes=["B04", "B08"],
+    max_concurrent=300,
+)
+```
+
+When `name` is provided, Rasteret caches the collection under
+`~/rasteret_workspace/{name}_records/`.
 
 !!! note
-    `build_from_table()` uses PyArrow's dataset API internally, which supports
-    local paths, `s3://`, and `gs://` URIs. HTTPS URLs are **not** supported
-    by PyArrow's scanner. Download HTTPS files locally first, or use an S3/GCS
-    URI when available.
+    PyArrow dataset scanning supports local paths and many cloud URIs such as
+    `s3://` and `gs://`. For plain HTTPS Parquet files, download the file first
+    or use the cloud URI when available.
 
----
+## Column Mapping
 
-## Filter during scan
-
-For large remote files, pass `filter_expr` and `columns` to push
-filtering and projection down to the scan layer (only matching row
-groups are transferred):
-
-```python
-import pyarrow.dataset as ds
-
-collection = rasteret.build_from_table(
-    "s3://my-bucket/stac-items.parquet",
-    name="filtered",
-    filter_expr=ds.field("eo:cloud_cover") < 20.0,
-    columns=["id", "datetime", "geometry", "assets", "eo:cloud_cover"],
-)
-```
-
----
-
-## Column mapping
-
-If the source Parquet uses different column names, remap them:
+If your table uses different names, map source columns to Rasteret's canonical
+fields:
 
 ```python
 collection = rasteret.build_from_table(
-    "path/to/records.parquet",
+    "records.parquet",
     name="custom",
-    column_map={"scene_id": "id", "timestamp": "datetime"},
-)
-```
-
-Rasteret requires four columns: `id`, `datetime`, `geometry`, `assets`.
-Everything else is passed through as-is.
-
-The `assets` column is a mapping from band key -> asset dict. Each asset
-dict must contain a resolvable `href`. For multi-sample planar-separate
-GeoTIFFs (multiple bands in one file), you can also include `band_index`
-to select which sample/band the asset refers to.
-
----
-
-## Enrich with COG headers
-
-By default, `build_from_table()` imports the Parquet as-is. The resulting
-Collection works for filtering and metadata queries, but cannot do fast
-tiled reads (`get_xarray()`, `get_gdf()`, `get_numpy()`, `to_torchgeo_dataset()`) because
-it has no cached tile offsets.
-
-Pass `enrich_cog=True` to parse COG headers from the asset URLs during
-the build. This adds `{band}_metadata` struct columns to the Parquet
-index (tile offsets, byte counts, image dimensions, etc.) that enable
-Rasteret's accelerated reads:
-
-```python
-collection = rasteret.build_from_table(
-    "s3://my-bucket/my-catalog.parquet",
-    name="my-enriched-collection",
+    column_map={
+        "scene_id": "id",
+        "geom": "geometry",
+        "year": "datetime",
+    },
+    href_column="url",
+    band_index_map={"B04": 0, "B08": 1},
     enrich_cog=True,
-    band_codes=["B04", "B08"],       # which bands to enrich (optional)
-    max_concurrent=300,               # concurrent header fetches
 )
 ```
 
-`band_codes` specifies which asset keys to parse. When omitted, Rasteret
-enriches every asset found in the `assets` column. For large datasets,
-specifying only the bands you need saves time and storage.
+In this example, `records.parquet` has a `url` column. Each row's URL points to
+one multi-band GeoTIFF/COG, and `band_index_map` tells Rasteret which 0-based
+sample index inside that file should be treated as each logical band:
 
-!!! tip "When do I need enrichment?"
+| Logical band | Source file | Sample index |
+| --- | --- | --- |
+| `B04` | value from `url` | `0` |
+| `B08` | value from `url` | `1` |
 
-    | Use case | `enrich_cog` needed? |
-    |----------|---------------------|
-    | Filtering by time, location, cloud cover | No |
-    | Exporting / sharing the Collection | No |
-    | `get_xarray()`, `get_gdf()`, `get_numpy()` - reading pixels | **Yes** |
-    | `to_torchgeo_dataset()` - ML training | **Yes** |
-
-    If you built from a STAC API via `build()` or `build_from_stac()`,
-    enrichment already happened automatically. You only need
-    `enrich_cog=True` when using `build_from_table()`.
-
-Once enriched, use the Collection like any other. `geometries` accepts
-Arrow arrays, bbox tuples, Shapely objects, or raw WKB - Arrow columns
-from GeoParquet are the fastest path (no Python-object conversion):
+Rasteret uses that to build an `assets` value like:
 
 ```python
-import pyarrow.parquet as pq
+{
+    "B04": {"href": "<row url>", "band_index": 0},
+    "B08": {"href": "<row url>", "band_index": 1},
+}
+```
 
-# Arrow geometry column - passed directly, no conversion
-parcels = pq.read_table("field_boundaries.geoparquet", columns=["geometry"])
-ds = collection.get_xarray(
-    geometries=parcels.column("geometry"),
-    bands=["B04", "B08"],
-)
+If your table already has separate URLs for separate single-band COGs, build an
+`assets` column instead. For example, `B04` and `B08` should point to different
+`href` values when they live in different files.
 
-# Bbox tuple also works for a single area of interest
+## When Enrichment Is Needed
+
+By default, `build_from_table()` normalizes the table. It does not parse every
+COG header unless you ask it to.
+
+| Use case | Need `enrich_cog=True`? |
+| --- | --- |
+| Filter metadata only | No |
+| Add labels/splits and export a metadata table | No |
+| `get_numpy()` / `get_xarray()` / `get_gdf()` pixel reads | Yes |
+| `sample_points()` pixel reads | Yes |
+| `to_torchgeo_dataset()` | Yes |
+
+If you built from a STAC API with `build()` or `build_from_stac()`, COG header
+enrichment already happens during build.
+
+## Read From The Collection
+
+Once the table is enriched, it behaves like any Rasteret collection:
+
+```python
 ds = collection.get_xarray(
     geometries=(77.55, 13.01, 77.58, 13.08),
     bands=["B04", "B08"],
 )
 ```
 
-For more on what the enrichment columns contain, see
-[Schema Contract - Tier 2: COG acceleration columns](../explanation/schema-contract.md#tier-2-cog-acceleration-columns).
+You can also pass Arrow geometry columns directly:
 
----
+```python
+import pyarrow.parquet as pq
 
-## CLI
+parcels = pq.read_table("field_boundaries.geoparquet", columns=["geometry"])
 
-```bash
-rasteret collections import maxar-opendata \
-  --record-table "s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet"
+arr = collection.get_numpy(
+    geometries=parcels.column("geometry"),
+    bands=["B04", "B08"],
+)
 ```
 
-The full runnable script is at
-`examples/build_collection_from_parquet.py`.
+## Troubleshooting
 
-For first-time users, the script defaults to Source Cooperative Maxar OpenData,
-so this works out of the box:
+If a requested band cannot be resolved, check:
 
-```bash
-uv run python examples/build_collection_from_parquet.py --name maxar-opendata
-```
+- the keys inside `assets`
+- the available `{band}_metadata` columns
+- whether you need `data_source=...` for a registered band mapping
+- whether the table was built with `enrich_cog=True`
 
-For custom non-STAC COG datasets in S3, create a Parquet record table with the
-4 required columns (`id`, `datetime`, `geometry`, `assets`) and pass it via
-`--record-table`.
+If COG header parsing fails for all assets, check whether the URLs require
+credentials, requester-pays configuration, URL rewriting, or a custom backend.
+
+For the exact runtime schema, see
+[Schema Contract](../explanation/schema-contract.md).

@@ -1,59 +1,52 @@
-# Zero-Friction Discovery: The Dataset Catalog
+# Dataset Catalog
 
-Rasteret ships with a built-in **dataset catalog**: a registry of "Blueprints" that allow you to build a Collection by name without ever looking up a STAC endpoint, Parquet file with image urls, S3 bucket.
+Use the dataset catalog when you want to build a Rasteret Collection from a
+known dataset ID instead of manually wiring a STAC endpoint, GeoParquet path,
+band map, and cloud configuration.
 
-Instead of hunting for endpoints, you simply use the **Dataset ID** (e.g., `earthsearch/sentinel-2-l2a`) directly in your code.
+A catalog entry is not the collection itself. It is a lightweight descriptor
+that tells Rasteret how to discover or load raster records. The result of a
+build is still a normal `Collection`.
 
-The built-in catalog includes 12 entries across Earth Search, Planetary
-Computer, and AlphaEarth Foundation -- covering Sentinel-2, Landsat,
-NAIP, Copernicus DEM (30 m and 90 m), ESRI Land Cover, ESA WorldCover,
-USDA CDL, ALOS DEM, NASADEM, and AEF embeddings. Run
-`rasteret datasets list` to see them all.
-
-Each catalog entry includes **license metadata**: a license identifier, a
-URL to the full license text, and a `commercial_use` flag so you can quickly
-tell whether the data can be used commercially.
-
-In short:
-
-- A **Collection** is the Parquet index you build and reuse for fast reads.
-- A **catalog entry** is lightweight metadata that tells Rasteret *how to build or load* a Collection.
-- Catalog entries also include **coverage/temporal hints**, **license info**, and (when available) a small **example bbox + date range** you can use to sanity-check access.
-
----
-
-## Build a Collection from the catalog (CLI)
-
-```bash
-# Build a local Collection from a catalog entry
-rasteret datasets build earthsearch/sentinel-2-l2a bangalore \
-  --bbox 77.55,13.01,77.58,13.08 \
-  --date-range 2024-01-01,2024-06-30
+```text
+catalog entry -> rasteret.build(...) -> Collection
 ```
 
-The resulting Collection is written under `~/rasteret_workspace/` by default.
-You can override this with `--workspace-dir`.
+## Browse The Catalog
 
-To browse the catalog before building:
+From the CLI:
 
 ```bash
-# List every known dataset
 rasteret datasets list
-
-# Inspect a single catalog entry
+rasteret datasets list --search sentinel
 rasteret datasets info earthsearch/sentinel-2-l2a
 ```
 
-Many entries include an **Example bbox** and **Example time**. These are known-good values used by Rasteret's live smoke tests, and are a good first check when debugging auth or rate limits.
+Use `--json` when scripting:
 
----
+```bash
+rasteret datasets list --json
+```
 
-## Build a Collection from the catalog (Python)
+From Python:
 
 ```python
 import rasteret
 
-# STAC-backed entries need bbox + date_range; GeoParquet entries may not
+for dataset in rasteret.DatasetRegistry.list():
+    print(dataset.id, dataset.name)
+```
+
+Catalog entries include practical metadata such as source type, available bands,
+coverage hints, auth requirements, license fields, and example query values when
+available. Treat license fields as a starting point and check the authoritative
+provider license for production or commercial use.
+
+## Build From A Catalog ID
+
+```python
+import rasteret
+
 collection = rasteret.build(
     "earthsearch/sentinel-2-l2a",
     name="bangalore",
@@ -62,257 +55,129 @@ collection = rasteret.build(
 )
 ```
 
-If you want explicit control over STAC endpoints and collection IDs, use
-[`build_from_stac()`](../reference/rasteret.md).
+STAC-backed entries usually need `bbox` and `date_range`. GeoParquet-backed
+entries may not, because the record table is already the build source.
 
-!!! note "Authenticated datasets"
-
-    Some catalog entries require credentials:
-
-    - **Requester-pays S3 (Landsat, NAIP):** install `rasteret[aws]` and configure AWS creds.
-    - **Planetary Computer (Azure):** install `rasteret[azure]` for SAS signing (signing can be rate-limited; see Custom Cloud Provider).
-    - **Authenticated STAC catalogs (Earthdata, etc.):** install `rasteret[earthdata]`
-      and configure credentials via `~/.netrc` or environment variables when needed.
-
-    For details and custom backends, see
-    [Custom Cloud Provider](../how-to/custom-cloud-provider.md).
-
-!!! note "Testing new catalog entries"
-
-    Built-in catalog entries should be exercised by Rasteret's network smoke
-    tests (they auto-skip when credentials/extras are missing). When you add a
-    dataset, document which extras and credentials are required to run it
-    locally, and keep those prerequisites explicit in the PR description.
-
-    See [Contributing](../contributing.md) for how the test suite is structured.
-
-??? tip "Browsing the catalog programmatically"
-
-    You can list or search catalog entries via the `DatasetRegistry` class:
-
-    ```python
-    for d in rasteret.DatasetRegistry.list():
-        print(d.id, d.name)
-    ```
-
-    This is useful for interactive exploration in a notebook, but most
-    scripts can simply pass a known dataset ID straight to `build()`.
-
-!!! info "How this differs from TorchGeo's dataset classes"
-
-    TorchGeo ships per-dataset Python classes that download data locally
-    and read from disk via rasterio/GDAL. Rasteret's catalog points at
-    cloud-hosted data (STAC APIs or GeoParquet files): no downloads, no
-    custom code per dataset. You get a standard `Collection` from any
-    catalog entry, then read pixels on demand from the cloud.
-
----
-
-!!! info "Everything below is optional"
-
-    The two sections above (CLI and Python) cover the common workflow.
-    The remaining sections explain how to register your own datasets and
-    customise the catalog. You can safely skip them until you need them.
-
----
-
-## Make local collections reusable (optional)
-
-Local collections are shareable as Parquet directories/files. The catalog layer
-is what makes them *discoverable* across sessions and usable via `build()`.
-
-To register a local Collection as a catalog entry:
+The CLI equivalent is:
 
 ```bash
-rasteret datasets register-local local/bangalore ./bangalore_202401-06_sentinel_stac
+rasteret datasets build earthsearch/sentinel-2-l2a bangalore \
+  --bbox 77.55,13.01,77.58,13.08 \
+  --date-range 2024-01-01,2024-06-30
 ```
 
-By default, Rasteret persists local catalog entries to:
+Use `--force` to rebuild an existing cache and `--workspace-dir` to choose a
+different local workspace.
 
-- `~/.rasteret/datasets.local.json` (or `RASTERET_LOCAL_DATASETS_PATH`)
+## Auth And Cloud Access
 
-This is a simple JSON list of entries. It is editable and
-friendly to version control if you choose to track it.
+Some catalog entries point at public data. Others need cloud credentials or URL
+signing. Inspect the entry before building:
 
-### Exporting and removing local entries
+```bash
+rasteret datasets info earthsearch/landsat-c2-l2
+```
 
-When you want to hand off a Collection, exporting a single catalog entry
-file makes review and sharing easier than copying an entire registry file:
+Common cases:
+
+| Source | Typical requirement |
+| --- | --- |
+| Earth Search public Sentinel-2 | Usually no credentials |
+| Earth Search Landsat / NAIP requester-pays S3 | AWS credentials and requester-pays config |
+| Planetary Computer | Azure/SAS signing support via `rasteret[azure]` |
+| Earthdata-backed sources | Earthdata credentials |
+
+For requester-pays buckets, private stores, Planetary Computer signing, and
+custom credential providers, see
+[Custom Cloud Provider](custom-cloud-provider.md).
+
+## Compare A Built Collection To Its Catalog Entry
+
+After building from the catalog, use `compare_to_catalog()` to see how your
+subset relates to the source descriptor:
+
+```python
+collection.compare_to_catalog()
+```
+
+Use this when you want to check bands, date range, source coverage, or auth
+metadata. If a collection was built from an unregistered table, use
+`collection.describe()` instead.
+
+## Register A Local Collection
+
+If you have a local exported collection or Parquet record table that you want to
+reuse by dataset ID, register it:
+
+```bash
+rasteret datasets register-local local/bangalore ./bangalore_collection \
+  --name "Bangalore Sentinel-2 subset" \
+  --description "Reusable local collection for examples"
+```
+
+After registration:
+
+```bash
+rasteret datasets list --search bangalore
+rasteret datasets info local/bangalore
+```
+
+You can then build/load through the catalog ID:
+
+```python
+collection = rasteret.build("local/bangalore", name="bangalore-copy")
+```
+
+By default, local registry entries are persisted to:
+
+```text
+~/.rasteret/datasets.local.json
+```
+
+Set `RASTERET_LOCAL_DATASETS_PATH` or pass `--registry-path` when you need a
+different registry file.
+
+## Export Or Remove A Local Entry
+
+Export one local descriptor as JSON for review or sharing:
 
 ```bash
 rasteret datasets export-local local/bangalore ./bangalore.dataset.json
 ```
 
-To remove a local entry later:
+Remove a local descriptor:
 
 ```bash
 rasteret datasets unregister-local local/bangalore
 ```
 
----
+This removes the catalog registration. It does not delete the underlying
+collection artifact.
 
-## Add your own catalog entries (advanced)
+## Runtime Registration
 
-!!! note "Advanced"
-
-    This section is for users who need to programmatically register custom
-    datasets at runtime or contribute new built-in entries to Rasteret.
-
-There are two supported patterns:
-
-1. **Runtime registration** in Python (process-local):
-
-   ```python
-   import rasteret
-   from rasteret.catalog import DatasetDescriptor
-
-   rasteret.register(
-        DatasetDescriptor(
-            id="acme/field-survey-2024",
-            name="ACME Field Survey",
-            geoparquet_uri="/path/to/collection_parquet",
-            description="Drone mosaics for 2024 survey.",
-            band_map={"R": "red", "G": "green", "B": "blue"},
-            license="proprietary",
-            license_url="https://acme.example.com/license",
-        )
-   )
-   ```
-
-   The `band_map` maps user-facing band codes to asset keys (STAC
-   asset keys, or column-derived keys for GeoParquet sources).
-   It is auto-registered so downstream code resolves band names
-   without users needing to touch `BandRegistry` directly.
-
-2. **Contribute a built-in entry** via PR: add a `DatasetDescriptor` to
-   `src/rasteret/catalog.py`. See the prerequisites checklist below
-   and existing entries in `catalog.py` for the pattern.
-
-For full field documentation, see the [`rasteret.catalog`](../reference/catalog.md)
-API reference.
-
----
-
-## Prerequisites for contributing a built-in dataset
-
-Before adding a new dataset to the built-in catalog, verify these
-requirements. Every built-in entry must actually work with Rasteret's
-pipeline. Listing a dataset that can't be ingested is worse than not
-listing it at all.
-
-A catalog entry can point to a **STAC API**, a **static STAC catalog**,
-or a **GeoParquet file** (like the built-in AEF embeddings dataset).
-The verification steps differ slightly depending on the source type.
-
-### 1. Data source is reachable
-
-=== "STAC API / static catalog"
-
-    The dataset must be reachable via either a **STAC API** (with a `/search`
-    endpoint) or a **static STAC catalog** (`catalog.json` on S3). Verify
-    with:
-
-    ```python
-    # STAC API
-    import pystac_client
-    client = pystac_client.Client.open("<stac_api_url>")
-    col = client.get_collection("<collection_id>")
-
-    # Static catalog
-    import pystac
-    cat = pystac.Catalog.from_file("<catalog_json_url>")
-    items = list(cat.get_all_items())  # should return items
-    ```
-
-=== "GeoParquet"
-
-    The Parquet file must be readable by PyArrow and contain the four
-    required columns (`id`, `datetime`, `geometry`, `assets`), or columns
-    that can be mapped to them via `column_map`. Verify with:
-
-    ```python
-    import pyarrow.parquet as pq
-    table = pq.read_table("<parquet_uri>")
-    print(table.schema)
-    # Confirm id, datetime, geometry, and asset URL columns exist
-    ```
-
-### 2. Assets point to tiled GeoTIFFs (COGs)
-
-The `band_map` must map at least one band code to an asset key that
-points to a Cloud-Optimized GeoTIFF. Rasteret parses COG headers
-during `build()`. If no assets can be parsed, Rasteret can't index or read
-the dataset.
-
-=== "STAC"
-
-    Check a sample item's asset keys:
-
-    ```python
-    item = items[0]
-    for key, asset in item.assets.items():
-        print(f"{key}: {asset.media_type}")
-    # Look for "image/tiff" or "application=geotiff" entries
-    ```
-
-=== "GeoParquet"
-
-    Check that the `assets` column (or `href_column`) contains URLs
-    pointing to `.tif` / `.tiff` files:
-
-    ```python
-    print(table.column("assets")[0])  # or your href column
-    ```
-
-### 3. End-to-end `build()` succeeds
-
-Run a real build with a small item limit:
+For process-local registration in Python:
 
 ```python
 import rasteret
-col = rasteret.build(
-    "<dataset_id>",
-    name="smoke-test",
-    query={"max_items": 2},  # STAC only; ignored for GeoParquet
-    force=True,
+from rasteret.catalog import DatasetDescriptor
+
+rasteret.register(
+    DatasetDescriptor(
+        id="acme/field-survey-2024",
+        name="ACME Field Survey",
+        geoparquet_uri="/path/to/collection_or_record_table",
+        description="Drone mosaics for 2024 survey.",
+        band_map={"R": "red", "G": "green", "B": "blue"},
+        license="proprietary",
+        license_url="https://acme.example.com/license",
+    )
 )
-print(len(col))  # should be > 0
 ```
 
-For STAC API datasets (non-static catalogs), `bbox` and `date_range` are
-required. GeoParquet-backed entries may not need them (the Parquet file
-is the complete record set).
+This is useful in notebooks, tests, or applications that want a dataset ID for
+the current process without writing to the local registry file.
 
-### 4. License is verified from the authoritative source
-
-Pull the license from the data provider. Do not guess:
-
-```python
-# STAC API
-col = client.get_collection("<collection_id>")
-print(col.license)  # "CC-BY-4.0", "proprietary", etc.
-license_links = [l.href for l in col.links if l.rel == "license"]
-```
-
-For GeoParquet-only datasets, check the data provider's website or
-repository for license terms.
-
-Set `commercial_use=False` when the license prohibits it (e.g.
-`CC-BY-NC-4.0`).
-
-### 5. Descriptor includes required metadata
-
-Include at minimum: `id`, `name`, `description`, `stac_api` (or
-`geoparquet_uri`), `band_map`, `license`, `license_url`, `spatial_coverage`,
-`temporal_range`. For static catalogs, set `static_catalog=True`.
-For GeoParquet sources, include `column_map` if the source uses
-non-standard column names, and `href_column` if asset URLs live in a
-single column rather than a struct.
-
----
-
-## Next Step: Managing your Experiment
-
-Once you have discovered your data and built your first Collection, the next step is to move from **Metadata** to **Management**.
-
-👉 [**Enriched Parquet Workflows**](enriched-parquet-workflows.md)
+For contributor guidance on adding built-in catalog entries, see
+[Contributing](../contributing.md) and the
+[`rasteret.catalog` API reference](../reference/catalog.md).

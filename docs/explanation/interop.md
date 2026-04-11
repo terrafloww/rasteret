@@ -1,190 +1,162 @@
-# Ecosystem Power-ups
+# Ecosystem Interop
 
-Rasteret is designed to act as the **high-performance I/O engine** for the tools you already use, not to replace them. By caching tile layout metadata in Parquet, we accelerate reads while remaining 100% compatible with the libraries researchers rely on.
+Rasteret is designed to work with the geospatial and Arrow tools you already
+use. It owns the COG indexing and byte-range read path, then hands metadata or
+pixels to standard libraries.
 
-We speak the same "math" as `rasterio` and `pyproj` to ensure that every pixel Rasteret reads is perfectly aligned with the industry standard.
+The main boundary is:
 
-## Interop
-
-### TorchGeo
-
-!!! note "Version requirement"
-    Rasteret requires **TorchGeo >= 0.9.0**. Earlier versions use a different
-    `GeoDataset` index structure that is incompatible with the adapter.
-
-`Collection.to_torchgeo_dataset()` returns a standard TorchGeo
-[`GeoDataset`](../reference/integrations/torchgeo.md). Your samplers,
-DataLoader, and training loop do not change.
-
-This is **pipeline-level interop**: Rasteret provides a TorchGeo dataset object
-that plugs into TorchGeo's samplers and transforms, while Rasteret remains the
-pixel I/O backend. TorchGeo's own `RasterDataset` still reads via rasterio/GDAL
-and remains the right tool when Rasteret's COG/tile constraints don't apply.
-
-```python
-dataset = collection.to_torchgeo_dataset(bands=["B04", "B03", "B02"], chip_size=256)
-sampler = RandomGeoSampler(dataset, size=256, length=100)
-loader  = DataLoader(dataset, sampler=sampler, batch_size=4, collate_fn=stack_samples)
+```text
+Rasteret Collection metadata: Arrow / Parquet
+Rasteret pixel reads: COG byte ranges
+Outputs: NumPy / xarray / GeoPandas / TorchGeo / Arrow tables
 ```
 
-#### GeoDataset contract
+## Arrow And GeoArrow
 
-`RasteretGeoDataset` subclasses TorchGeo's `GeoDataset` and honors the
-full contract that samplers and dataset composition rely on:
+A collection can be passed to Arrow-aware tools through the Arrow protocol.
+Rasteret exports the footprint `geometry` column as `geoarrow.wkb` and marks
+that footprint geometry as CRS84.
 
-| Surface | What Rasteret does |
-|---|---|
-| `__getitem__(GeoSlice) -> Sample` | Returns `{"image": Tensor, "bounds": Tensor, "transform": Tensor}` (or `"mask"` when `is_image=False`) |
-| `index` | GeoPandas GeoDataFrame with `IntervalIndex` named `"datetime"` and Shapely footprint geometry |
-| `crs` | Set from the collection's EPSG code via `CRS.from_epsg()` |
-| `res` | Derived from the first record's COG metadata transform |
-| Samplers | Works with `RandomGeoSampler`, `GridGeoSampler`, and any sampler that reads `bounds`, `index`, and `res` |
-| Dataset composition | Works with `IntersectionDataset` and `UnionDataset`; the index is designed so `reset_index()` does not conflict |
+```python
+import polars as pl
 
-Rasteret replaces the I/O backend (custom IO instead of rasterio/GDAL)
-but speaks the same interface. Nothing downstream of the dataset object
-needs to change.
+frame = pl.from_arrow(collection)
+```
 
-#### Rasteret additions
+For read-ready tables coming back from Arrow-native tools:
 
-These are features Rasteret adds on top of the GeoDataset contract. They
-do not break interop because TorchGeo ignores unknown sample keys, and
-constructor parameters are Rasteret-specific.
+```python
+experiment = rasteret.as_collection(
+    frame,
+    data_source=collection.data_source,
+)
+```
 
-| Feature | What it does | Interop impact |
-|---|---|---|
-| `label_field` | Adds `sample["label"]` from a metadata column | None: extra key, ignored by TorchGeo trainers |
-| `time_series=True` | Stacks records that overlap the sampler/query spatiotemporal slice into `[T, C, H, W]` | None: standard tensor shape, works with TorchGeo transforms |
-| `target_crs=` | Reprojects scenes from different CRS zones on the fly | None: result has uniform CRS, transparent to samplers |
-| `cloud_config=` | Configures authenticated cloud reads (requester-pays, signed URLs) | None: constructor-level, transparent to samplers |
-| `allow_resample=True` | Resamples bands with different native resolutions onto a common grid | None: output tensor has uniform resolution |
+Use `data_source=...` when a table engine may have dropped schema metadata or
+changed Arrow string types during a round trip.
 
-#### Behavior details
+CRS distinction:
 
-Rasteret preserves the native COG dtype (e.g., `uint16` for Sentinel-2)
-whereas TorchGeo converts to `float32` by default (via its `dtype` property).
+- `geometry` is the raster footprint and is exported as CRS84 GeoArrow WKB.
+- `crs` and `proj:epsg` are row-level raster CRS sidecars used by Rasteret's
+  read path.
 
-Multi-CRS scenes are auto-reprojected to a common CRS using GDAL's
-`calculate_default_transform` for correct resolution handling.
-
-Rasteret computes a `valid_mask` (boolean) during COG reads to identify valid
-pixels. Point sampling uses this mask to skip filled pixels. The TorchGeo
-adapter keeps samples TorchGeo-standard by default and does not include
-`valid_mask`.
-
-For mask-style datasets, pass `is_image=False` to return `sample["mask"]`
-instead of `sample["image"]` (single-band data squeezes the channel
-dimension, matching TorchGeo `RasterDataset` conventions).
-
-If requested bands have different resolutions, Rasteret fails fast by default.
-To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
-`allow_resample=True` to `Collection.to_torchgeo_dataset(...)`.
-
-When records in a collection have different native resolutions, Rasteret warns
-at dataset creation time. The read path resamples each tile to the query grid
-correctly regardless.
-
-See [TorchGeo Integration](../tutorials/02_torchgeo_09_accelerator.ipynb) and
-[TorchGeo Benchmark](../tutorials/05_torchgeo_comparison.ipynb).
-
-### xarray / GeoPandas / NumPy
-
-Rasteret handles the I/O (async byte-range reads), then hands
-off to standard xarray, GeoPandas, or NumPy outputs:
-
-- [`Collection.get_xarray(...)`](../reference/core/collection.md) returns an `xr.Dataset`
-- [`Collection.get_gdf(...)`](../reference/core/collection.md) returns a `gpd.GeoDataFrame`
-- [`Collection.get_numpy(...)`](../reference/core/collection.md) returns NumPy arrays (`[N, H, W]` or `[N, C, H, W]`)
-- [`Collection.sample_points(...)`](../reference/core/collection.md) returns an Arrow table for point features (`pyarrow.Table`)
-
-See [Quickstart](../tutorials/01_quickstart.ipynb).
-
-#### CRS encoding
-
-xarray output uses CF conventions via pyproj (no rioxarray dependency):
-
-- `spatial_ref` coordinate with WKT2 (ISO 19162:2019), PROJJSON, and
-  CF grid-mapping attributes
-- `GeoTransform` attribute for GDAL-compatible tools
-- Pixel-center coordinates (half-pixel offset from tile origin)
-
-Code that uses `ds.rio.*` methods will need to `pip install rioxarray`
-separately. The `spatial_ref` coordinate written by Rasteret is compatible
-with rioxarray if installed.
-
-#### Data types
-
-Band arrays return in the native COG dtype. For Sentinel-2 L2A, that is
-`uint16` (surface reflectance values 0-10000). Geometry masking fills
-outside-AOI / outside-coverage pixels with the COG `nodata` value when
-present, otherwise `0`, preserving native dtype.
-
-#### Multi-CRS
-
-When a query spans records from multiple CRS zones (e.g., adjacent UTM
-zones), Rasteret auto-detects this and reprojects all tiles to the most
-common CRS before merging. A warning is logged. Pass `target_crs=` to
-`get_xarray()`, `get_numpy()`, or `get_gdf()` to override.
-
-### rasterio
-
-Rasteret uses rasterio for geometry masking (`rasterio.features.geometry_mask`),
-multi-CRS reprojection (`rasterio.warp.reproject`), and TorchGeo query-grid
-placement (`rasterio.merge.merge` via `rio_semantics.py`). CRS transforms and
-coordinate operations use pyproj directly. Tile reads go through Rasteret's
-own async IO. No GDAL in the tile-read path.
-
-CRS encoding in xarray output uses pyproj's CF conventions (`CRS.to_cf()`,
-`CRS.to_wkt()`, `CRS.to_json()`), not rioxarray.
-
-## Alternative approaches
-
-These libraries solve related problems with different designs:
-
-**GeoParquet "Parquet Raster" (alpha/WIP)**: a draft specification for storing
-raster payloads (and/or external raster references) in Parquet
-([draft spec](https://github.com/opengeospatial/geoparquet/blob/main/format-specs/parquet-raster.md)).
-Rasteret is different: it uses GeoParquet as a **record table/index** and reads
-pixel tiles from existing GeoTIFF/COG assets via byte-range I/O. If Parquet Raster
-stabilizes, it may become an interop/export target, but it is not what Rasteret
-writes today.
-
-**TACO / tacoTIFF**: packaging-first (materializes data into a TACO layout
-with a `level0.parquet` manifest). Rasteret is indexing-first (indexes
-existing tiled GeoTIFFs in place, no data copying). The approaches are
-complementary: Rasteret's
-`DatasetDescriptor` can point to a TACO `level0.parquet` via `geoparquet_uri`, and
-`build_from_table()` can ingest it like any other Parquet source. As TACO
-matures, deeper interop (e.g. layout-aware reads) is a natural extension.
-
-**async-geotiff / async-tiff**: fast low-level async GeoTIFF readers.
-Interop with Rasteret is possible by replacing the tile-reading layer, but
-they don't yet support passing pre-parsed IFD metadata.
-
-**virtual-tiff**: oriented towards making TIFF data accessible to the Zarr
-ecosystem by exposing tiles as Zarr-compatible chunks. Rasteret reads tiles
-directly via byte-range requests using a Parquet index of tile-layout
+This lets GeoPandas, DuckDB, Polars, and PyArrow inspect or join collection
 metadata.
 
-## When to use what
+## TorchGeo
 
-| Your data | Recommendation |
-|-----------|---------------|
-| Cloud-hosted tiled GeoTIFFs (Sentinel-2, Landsat, etc.) | Rasteret (up to 20x faster) |
-| Local tiled GeoTIFFs | Rasteret works; speedup is smaller, but the index is still useful for filtering and sharing |
-| Non-tiled GeoTIFFs (striped layout) | TorchGeo / rasterio |
-| Non-TIFF formats (NetCDF, HDF5, GRIB) | TorchGeo / rasterio |
+`Collection.to_torchgeo_dataset(...)` returns a TorchGeo `GeoDataset`.
+TorchGeo samplers, transforms, composition, and dataloaders stay standard; the
+pixel reads are served by Rasteret.
 
-## Testing
+```python
+dataset = collection.to_torchgeo_dataset(
+    bands=["B04", "B03", "B02"],
+    chip_size=256,
+)
+```
 
-The test suite includes pixel-level comparisons against direct rasterio
-reads for the xarray, GeoDataFrame, and TorchGeo output paths. The TorchGeo
-comparison uses `rasterio.merge.merge` as the oracle, matching what TorchGeo's
-own `_merge_or_stack` calls. Coverage spans 12 datasets including Sentinel-2,
-Landsat, NAIP, Copernicus DEM, ESA WorldCover, and AEF (south-up). See
-`test_dataset_pixel_comparison.py` (requires `--network`), plus
-`test_public_network_smoke.py`, `test_torchgeo_network.py`, and
-`test_network_smoke.py`.
+Rasteret-specific options for TorchGeo include:
 
-If you encounter edge cases where output differs from rasterio, please
-[file an issue](https://github.com/terrafloww/rasteret/issues).
+| Option | Purpose |
+| --- | --- |
+| `label_field="label"` | Include a collection column as `sample["label"]`. |
+| `split="train"` | Filter the collection before dataset construction. |
+| `target_crs=...` | Read multi-zone data into a chosen CRS. |
+| `time_series=True` | Stack matching records as `[T, C, H, W]`. |
+| `allow_resample=True` | Opt into resampling bands with different native resolutions. |
+| `is_image=False` | Return `sample["mask"]` for mask-style datasets. |
+
+For workflow examples, see [TorchGeo Integration](../how-to/turbocharging-torchgeo.md),
+[ML Training with Splits](../how-to/ml-training-splits.md), and
+[Multi-Dataset Training](../how-to/multi-dataset-training.md).
+
+## xarray, GeoPandas, NumPy, And Point Tables
+
+Rasteret's main pixel output methods are:
+
+| Method | Output |
+| --- | --- |
+| `get_numpy(...)` | NumPy array. |
+| `get_xarray(...)` | xarray Dataset with coordinates and CRS metadata. |
+| `get_gdf(...)` | GeoPandas GeoDataFrame with pixel arrays attached. |
+| `sample_points(...)` | PyArrow table with point sample rows. |
+
+xarray output uses pyproj/CF-style CRS metadata, including a `spatial_ref`
+coordinate and GDAL-compatible `GeoTransform` attribute. rioxarray is not
+required, but tools that understand CF grid mapping metadata can use those
+fields.
+
+Band arrays preserve the native COG dtype. For example, Sentinel-2 L2A data is
+typically `uint16`; AEF embeddings are `int8`. Cast or de-quantize when your
+analysis needs floats.
+
+Point sampling is Arrow-first:
+
+```python
+samples = collection.sample_points(
+    points=points_table,
+    x_column="lon",
+    y_column="lat",
+    bands=["B04"],
+    geometry_crs=4326,
+)
+```
+
+The result remains a `pyarrow.Table`, so it can continue into PyArrow, DuckDB,
+Polars, pandas, or another Arrow-aware tool.
+
+## rasterio And pyproj
+
+Rasteret uses rasterio and pyproj where their semantics matter:
+
+- pyproj for CRS transforms and xarray CRS metadata.
+- rasterio geometry masking for polygon reads.
+- rasterio reprojection/merge semantics for multi-CRS and query-grid behavior.
+
+Tile byte-range reads go through Rasteret's custom async COG reader, not through GDAL's
+file-opening path.
+
+## Related Formats And Tools
+
+**GeoParquet**: Rasteret collection metadata is table-shaped and can be exported
+with GeoParquet metadata for footprint geometry. Rasteret does not store raster
+pixel payloads inside GeoParquet.
+
+**Parquet Raster**: GeoParquet has an alpha raster proposal for representing
+raster payloads "images-inside-Parquet". Rasteret is a COG index/read
+engine, not a Parquet-raster writer.
+
+**TACO / tacoTIFF**: TACO packages imagery into a layout with a Parquet manifest.
+Rasteret can ingest suitable manifests through `build_from_table(...)`; deeper
+layout-aware reads would be a future integration point.
+
+**async-geotiff / async-tiff**: these are lower-level async TIFF readers. They
+could replace parts of Rasteret's tile reader in the future if they support the
+metadata and layout behavior Rasteret needs.
+
+**virtual-tiff**: exposes TIFF tiles as Zarr-compatible chunks. Rasteret instead
+reads COG tiles directly from byte ranges using metadata stored in the collection.
+
+## When To Use What
+
+| Data / task | Usually use |
+| --- | --- |
+| Remote tiled GeoTIFFs / COGs with repeated reads | Rasteret |
+| One-off local TIFF inspection | rasterio |
+| Non-TIFF raster formats such as NetCDF, HDF5, GRIB | rasterio/xarray/TorchGeo-native paths |
+| TorchGeo training over COG collections | Rasteret `to_torchgeo_dataset(...)` |
+| Metadata joins, splits, labels, and filtering | Arrow-native tools plus `as_collection(...)` |
+
+## Verification
+
+Rasteret's tests compare key output paths against rasterio-style behavior and
+exercise Arrow/GeoArrow, GeoPandas, TorchGeo, COG reading, cloud routing, and
+catalog builds. Network-dependent tests are separated from the unit suite and
+auto-skip when optional credentials or extras are missing.
+
+If you find an interop case where Rasteret output differs from the source tool
+semantics, please
+[open an issue](https://github.com/terrafloww/rasteret/issues).

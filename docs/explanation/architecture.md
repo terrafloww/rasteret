@@ -4,12 +4,14 @@ This page explains how Rasteret's components work together.
 
 ## The Index-First Architecture
 
-Rasteret is built on a **Control Plane vs. Data Plane** separation that treats satellite imagery like a tables.
+Rasteret separates raster metadata work from pixel reads.
 
-- **Control plane**: A local Parquet table for discovery, filtering, and experiment metadata. This is where you search, subset, and manage your Training/Val/Test splits.
-- **Data plane**: On-demand, high-throughput pixel streaming from source GeoTIFF/COG assets.
+- **Control plane**: an Arrow/Parquet collection for discovery, filtering, and
+  experiment metadata such as train/validation/test splits or more.
+- **Data plane**: on-demand pixel reads from source GeoTIFF/COG assets.
 
-For the detailed technical reasoning behind this split and how it eliminates the "Cold Start Tax," see [**Design Decisions**](design-decisions.md).
+For the technical reasoning behind this split and the remote-header cold-start
+cost it avoids, see [Design Decisions](design-decisions.md).
 
 ### Architecture
 
@@ -161,14 +163,17 @@ Each driver knows how to read one source type:
   enrichment.
 
 Both converge on [`build_collection_from_table()`][rasteret.ingest.normalize.build_collection_from_table],
-which validates the collection contract, derives `scene_bbox`, and adds
-partition columns.
+which validates the collection contract, derives `bbox`, and adds partition
+columns.
 
 ## Why Parquet indexes?
 
-Traditional geospatial workflows pay a "Cold Start Tax" every time they open a remote COG. GDAL has to fetch the TIFF header (IFD) over HTTP just to know where the pixels are. For a 30-scene time series, that's 120+ blocking network round-trips before your model sees a single pixel.
+Traditional geospatial workflows often pay a cold-start cost every time they
+open remote COGs. GDAL/rasterio needs TIFF header metadata before it can know
+where tile bytes live.
 
-**Rasteret removes this tax by caching the header metadata in a local Parquet index.**
+Rasteret moves that work into collection build/enrichment by caching header
+metadata in the Parquet collection.
 
 For a full discussion of why Parquet over Zarr manifests, JSON, or SQLite, see [Design Decisions](design-decisions.md#why-parquet-indexes).
 

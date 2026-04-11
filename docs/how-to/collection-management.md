@@ -1,16 +1,43 @@
-# Managing the Experiment Lifecycle
+# Collection Management
 
-In Rasteret, your work revolves around **Collections**: high-performance Parquet tables that pair your pixels with your metadata. This guide explains how to manage these tables across their entire lifecycle—from initial ingestion to sharing your results.
+Learn how to manage a Rasteret Collection and its local lifecycle:
+build/import, inspect, export, reload, filter, or delete.
 
-Rasteret provides two logical pathways:
-1.  **Direct CLI**: Quick-start paths for building and inspecting collections (`rasteret collections ...`).
-2.  **Procedural Python**: Deep control for automated pipelines and custom experiments.
+For first-time data ingest details, use:
 
-If you are new, the fastest path is: `build` -> `list` -> `info`.
+- [Build from Parquet](build-from-parquet.md) for external Parquet, GeoParquet,
+  DuckDB, Polars, or Arrow record tables.
+- [Dataset Catalog](dataset-catalog.md) for built-in dataset IDs and local
+  catalog registration.
+- [Custom Cloud Provider](custom-cloud-provider.md) for requester-pays,
+  authenticated buckets, URL rewriting, and custom backends.
 
-## CLI
+## What Gets Managed
 
-### Build from STAC
+A Rasteret Collection is an Arrow/Parquet table of raster records. It stores the
+metadata Rasteret needs for fast reads, including record IDs, footprints, assets,
+CRS sidecars, and optional COG header metadata. Pixel bytes stay in the source
+COGs.
+
+The default local workspace is:
+
+```text
+~/rasteret_workspace
+```
+
+Rasteret uses two suffixes for cached collection directories:
+
+| Suffix | Created by |
+| --- | --- |
+| `_stac` | `build()`, `build_from_stac()`, `rasteret collections build` |
+| `_records` | `build_from_table()`, `rasteret collections import` |
+
+You can pass `workspace_dir=...` in Python or `--workspace-dir ...` in the CLI
+when you want a different location.
+
+## CLI Workflow
+
+Build or refresh a STAC-backed collection cache:
 
 ```bash
 rasteret collections build bangalore \
@@ -20,203 +47,143 @@ rasteret collections build bangalore \
   --date-range 2024-01-01,2024-06-30
 ```
 
-### Import from a Parquet file
-
-Works with any Parquet that has COG URLs: Source Cooperative exports,
-STAC GeoParquet, or your own catalog. See [Build from Parquet](build-from-parquet.md) for details.
+Import an existing Parquet or GeoParquet record table:
 
 ```bash
-# Source Cooperative (public, no credentials needed)
-AWS_NO_SIGN_REQUEST=YES rasteret collections import maxar-opendata \
-  --record-table s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet
-
-# Any Parquet with required columns (id, datetime, geometry, assets)
 rasteret collections import my-collection \
   --record-table s3://my-bucket/stac-items.parquet
 ```
 
-!!! note
-    `collections import` materializes the record table as a local Collection.
-    For accelerated pixel reads (`get_xarray()`, `get_numpy()`, TorchGeo),
-    the table must include enriched COG header columns. Use Python
-    `build_from_table(..., enrich_cog=True)` when your source table is not
-    already enriched.
+`collections import` materializes a local collection from the record table. If
+your source table still needs COG header enrichment for pixel reads, use the
+Python `build_from_table(..., enrich_cog=True)` path instead.
 
-### List local collections
+Inspect local caches:
 
 ```bash
 rasteret collections list
-```
-
-### Inspect a collection
-
-```bash
 rasteret collections info bangalore
 ```
 
-### Delete a collection
+Delete a local cache:
 
 ```bash
 rasteret collections delete bangalore
 ```
 
-All CLI commands accept `--workspace-dir` (default: `~/rasteret_workspace`)
-and `--json` for machine-readable output.
+Use `--json` on `build`, `import`, `list`, and `info` when scripting. Use
+`--yes` with `delete` to skip the confirmation prompt.
 
-### Dataset catalog (optional)
+## Python Entry Points
 
-```bash
-# List built-in catalog entries
-rasteret datasets list
+Choose the entry point based on what you already have:
 
-# Show one catalog entry
-rasteret datasets info earthsearch/sentinel-2-l2a
+| Situation | Use |
+| --- | --- |
+| Registered catalog dataset | `rasteret.build("catalog/id", ...)` |
+| Custom STAC API | `rasteret.build_from_stac(...)` |
+| External Parquet/GeoParquet/Arrow record table | `rasteret.build_from_table(...)` |
+| Existing exported collection artifact | `rasteret.load(path)` |
+| In-memory read-ready Arrow object | `rasteret.as_collection(obj)` |
 
-# Build from a catalog entry
-rasteret datasets build earthsearch/sentinel-2-l2a bangalore \
-  --bbox 77.55,13.01,77.58,13.08 \
-  --date-range 2024-01-01,2024-06-30
-```
-
-See [Dataset Catalog](dataset-catalog.md) for `register-local`,
-`export-local`, and `unregister-local`.
-
-### Naming and registry behavior
-
-- STAC builds are written under `..._stac` directories.
-- With `date_range`, names are `{custom}_{date-range}_{source-prefix}_stac`.
-- Without `date_range` (static catalogs), names are `{custom}_{source}_stac`.
-- `custom` is normalised for filesystem safety (underscores become dashes).
-- `build_from_table()` and CLI `collections import` write collections as `{name}_records`.
-- Local Collections built/imported in a workspace are cached locally;
-  they are not auto-added to the dataset catalog.
-- Dataset catalog workflows are documented in
-  [Dataset Catalog](dataset-catalog.md).
-
-To make a local Collection appear in `rasteret datasets list`, see
-[Dataset Catalog](dataset-catalog.md) for registration workflows.
-
----
-
-## Python API
-
-### Choose the right entry point
-
-| Goal | Use | What it does |
-|---|---|---|
-| Ingest external STAC/Parquet into Rasteret schema | `build()`, `build_from_stac()`, `build_from_table()` | Normalizes schema, can enrich COG metadata, can persist cache |
-| Reopen an existing Collection artifact | `load(path)` | Opens an already-materialized Parquet collection |
-| Re-wrap an in-memory read-ready Arrow object | `as_collection(table)` | Validates required columns and wraps without rebuild |
-
-### Build from STAC
-
-See [`build_from_stac()`](../reference/rasteret.md) API reference.
+Example:
 
 ```python
 import rasteret
 
-collection = rasteret.build_from_stac(
+collection = rasteret.build(
+    "earthsearch/sentinel-2-l2a",
     name="bangalore",
-    stac_api="https://earth-search.aws.element84.com/v1",
-    collection="sentinel-2-l2a",
     bbox=(77.55, 13.01, 77.58, 13.08),
     date_range=("2024-01-01", "2024-06-30"),
 )
 ```
 
-### Build from Parquet
+When `name` is provided, Rasteret can cache the built collection in the default
+workspace with the given name as the folder name.
 
-See [`build_from_table()`](../reference/rasteret.md) and the full
-[Build from Parquet](build-from-parquet.md) guide.
+Pass `force=True` when you want to rebuild an existing cache.
 
-```python
-collection = rasteret.build_from_table(
-    "s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet",
-    name="maxar-opendata",
-)
-```
+## Inspect A Collection
 
-When `name` is provided, the collection is cached to
-`~/rasteret_workspace/{name}_records/`.
-`build_from_stac()` uses `..._stac/` directories.
-
-### Inspect a collection
-
-```python
-collection           # Collection('s2-bangalore', source='sentinel-2-l2a', bands=13, records=42, crs=32643, 2024-01-01..2024-06-30)
-collection.bands     # ['B01', 'B02', ..., 'SCL']
-collection.bounds    # (77.50, 12.90, 77.70, 13.10)
-collection.epsg      # [32643]
-len(collection)      # 42
-```
-
-### Describe a collection
+Use `describe()` for a human-readable summary:
 
 ```python
 collection.describe()
-# Collection: s2-bangalore
-#
-#   Property  Value
-#   ────────  ──────────────────────────────────────
-#   Records   42
-#   Bands     B01, B02, B03, B04, B05 (+8 more)
-#   CRS       EPSG:32643
-#   Bounds    (77.5000, 12.9000, 77.7000, 13.1000)
-#   Dates     2024-01-01 .. 2024-06-30
-#   Source    earthsearch/sentinel-2-l2a
-
-collection.describe()["bands"]  # programmatic access
-collection.describe().data      # full dict
 ```
 
-### Compare against catalog
+The returned object is also programmatic:
 
-For collections built from the catalog, compare what you indexed against
-the full source offering:
+```python
+summary = collection.describe()
+summary["bands"]
+summary.data
+```
+
+Common quick checks:
+
+```python
+collection.bands
+collection.bounds
+collection.epsg
+len(collection)
+```
+
+If the collection came from a registered catalog dataset, compare it to the
+source descriptor:
 
 ```python
 collection.compare_to_catalog()
-# Collection: s2-bangalore
-#
-#   Property  Value
-#   ────────  ─────────────────────────────────────────────────────────
-#   Records   42
-#   Bands     B01, B02, B03, B04, B05 (+8 more) (13/13)
-#   Dates     2024-01-01 .. 2024-06-30  (source: 2015-06-23 .. present)
-#   Source    earthsearch/sentinel-2-l2a (Sentinel-2 Level-2A)
-#   Coverage  global
-#   Auth      none
 ```
 
-In Jupyter/marimo notebooks both methods render as styled HTML tables.
+This is useful when you built a date or AOI subset and want to see how it relates
+to the full catalog entry. If there is no matching catalog descriptor, use
+`collection.describe()` instead.
 
-### Export and reload
+## Export And Reload
 
-See [`export()`](../reference/core/collection.md) and [`load()`](../reference/rasteret.md).
+Export a portable collection artifact:
 
 ```python
-collection.export("./my_collection")
-reloaded = rasteret.load("./my_collection")
+collection.export("./bangalore_collection")
 ```
 
-### Discover cached collections
+Reload it later:
 
-See [`Collection.list_collections()`](../reference/core/collection.md).
+```python
+reloaded = rasteret.load("./bangalore_collection")
+```
+
+The export contains the collection metadata table, labels/splits you added, COG
+header metadata, and asset references. It does not copy the source raster pixel
+bytes.
+
+## List Cached Collections
 
 ```python
 from pathlib import Path
+
 from rasteret import Collection
 
-for c in Collection.list_collections(Path.home() / "rasteret_workspace"):
-    print(f"  {c['name']} ({c['kind']}), {c['size']} rows")
+for item in Collection.list_collections(Path.home() / "rasteret_workspace"):
+    print(item["name"], item["kind"], item["size"])
 ```
 
-### Filter with [`subset()`](../reference/core/collection.md)
+or
 
-Criteria are combined with AND:
+```bash
+rasteret collections list
+```
+
+Each item includes fields such as `name`, `kind`, `data_source`, `date_range`,
+`size`, and `created`.
+
+## Filter Metadata Before Reading
+
+Use `subset()` for common filters:
 
 ```python
-filtered = collection.subset(
+train = collection.subset(
     cloud_cover_lt=15,
     date_range=("2024-03-01", "2024-04-30"),
     bbox=(77.55, 13.03, 77.57, 13.06),
@@ -224,9 +191,7 @@ filtered = collection.subset(
 )
 ```
 
-### Arrow expression filtering
-
-For arbitrary filters, use [`where()`](../reference/core/collection.md) with `pyarrow.dataset` expressions:
+Use `where()` for custom Arrow dataset expressions:
 
 ```python
 import pyarrow.dataset as ds
@@ -234,113 +199,14 @@ import pyarrow.dataset as ds
 clear = collection.where(ds.field("eo:cloud_cover") < 5.0)
 ```
 
----
-
-## Add custom columns
-
-The Parquet schema is extensible. Common additions: splits, labels,
-quality flags.
-
-### Add a train/val/test split
-
-See [ML Training with Splits](ml-training-splits.md#2-assign-splits) for the
-full workflow. Once the `split` column exists, filter with:
+Then read pixels from the filtered collection:
 
 ```python
-train = collection.subset(split="train")
-```
-
-### Add a label column
-
-```python
-labels = pa.array([0, 1, 0, 1], type=pa.int32())  # one per record
-table = table.append_column("label", labels)
-```
-
-Then use `label_field="label"` in [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md) to include
-labels in TorchGeo samples.
-
----
-
-## Register a custom cloud config
-
-See [`CloudConfig`](../reference/cloud.md) API reference.
-
-```python
-from rasteret import CloudConfig
-
-CloudConfig.register(
-    "my-private-collection",
-    CloudConfig(
-        provider="aws",
-        requester_pays=True,
-        region="eu-central-1",
-        url_patterns={
-            "https://my-cdn.example.com/": "s3://my-private-bucket/",
-        },
-    ),
+arr = clear.get_numpy(
+    geometries=(77.55, 13.03, 77.57, 13.06),
+    bands=["B04", "B08"],
 )
 ```
 
-## Register a custom band mapping
-
-For catalog datasets (`build()`), band mappings are handled automatically
-via the `DatasetDescriptor.band_map` field - you never need to touch
-`BandRegistry` directly.
-
-For custom STAC APIs via `build_from_stac()`, **you choose the band keys**.
-`band_map` maps those band keys to STAC asset keys. For example, if you want
-to use short codes like `B04`, provide `band_map={"B04": "red", ...}`.
-
-If you prefer to keep your code generic (and reuse the same band keys across
-catalog + BYO datasets), register a mapping:
-
-```python
-from rasteret.constants import BandRegistry
-
-BandRegistry.register(
-    "my-private-collection",
-    {"B04": "red", "B03": "green", "B02": "blue", "B08": "nir"},
-)
-# Now you can use bands=["B04"] instead of bands=["red"]
-```
-
-For multi-band GeoTIFF assets where multiple logical bands live in one file
-(e.g. NAIP `image` contains R/G/B/NIR), you must also provide
-`band_index_map={"R": 0, "G": 1, "B": 2, "NIR": 3}` so Rasteret can select the
-correct sample plane.
-
----
-
-## Advanced: Catalog registration
-
-If you want a local Collection to appear in `rasteret datasets list`,
-register it as a catalog entry. This is optional; `export()` / `load()`
-work without registration.
-
-### Register a local Collection
-
-```python
-rasteret.register_local("local/my_collection", "./my_collection")
-```
-
-### Runtime registration (process-local)
-
-```python
-from rasteret.catalog import DatasetDescriptor
-
-rasteret.register(
-        DatasetDescriptor(
-            id="acme/field-survey-2024",
-            name="ACME Field Survey",
-            geoparquet_uri="/path/to/collection_parquet",
-            description="Drone mosaics for 2024 survey.",
-            band_map={"R": "red", "G": "green", "B": "blue"},
-        )
-    )
-```
-
-See [Dataset Catalog](dataset-catalog.md) for full catalog workflows
-including CLI commands and persistence.
-
-The full runnable script is at `examples/collection_management.py`.
+For labels, splits, AOI joins, and other experiment metadata, see
+[Enriched Parquet Workflows](enriched-parquet-workflows.md).

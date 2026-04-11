@@ -1,31 +1,58 @@
 # Rasteret
 
-### A high-performance rasterio/GDAL alternative for AI-first geospatial workflows.
+### Build a queryable raster collection once. Read pixels up to 20x faster.
 
-Rasteret is an index-first I/O engine designed to eliminate the friction of training ML models on massive satellite imagery collections. By delivering up to **20x faster reads** from remote COGs compared to traditional sequential approaches, Rasteret lets you spend less time on "plumbing" and more time on science.
+Rasteret helps you work with cloud-hosted tiled GeoTIFFs and COGs without
+rewriting the same STAC, GDAL, threading, CRS, and header-parsing code for
+every experiment.
 
-By separating the **Control Plane** (your metadata) from the **Data Plane** (the pixels), Rasteret removes the friction of cold-start header parsing and fragile multithreaded plumbing.
+The core idea is simple:
 
----
+- keep **metadata** in a queryable Arrow/Parquet collection
+- keep **pixels** in the original COGs
+- cache the expensive raster header metadata once
+- read only the byte ranges needed for your AOIs, chips, or points
 
-## Technical Evidence
+That gives you a Collection-centered workflow for ML training, xarray analysis,
+NumPy arrays, point sampling, and GeoPandas-friendly outputs.
 
-If you are a skeptical engineer (we hope you are!), explore the data behind our architecture:
+```text
+STAC / record table  ->  Rasteret Collection  ->  get_numpy / get_xarray / TorchGeo
+       build once          query/filter/share        read pixels on demand
+```
 
-- [**Benchmarks**](explanation/benchmark.md): See how we compare against **GDAL cold starts** and **HuggingFace MajorTOM** streaming.
-- [**Design Decisions**](explanation/design-decisions.md): Why we chose Parquet over Zarr, JSON, or SQLite.
+## Why This Helps
 
----
+Traditional raster workflows often start by opening many remote TIFFs just to
+discover their tile layout, transforms, dtype, nodata, and CRS. That is painfully slow
+in notebooks, training jobs, and new docker containers because the setup cost repeats.
 
-## Where to start
+Rasteret moves that setup into a collection build step. The collection stores
+image metadata, footprints, assets, splits or labels, and parsed COG header
+metadata in Arrow/Parquet. Later reads can go straight from a filtered table of
+records to byte-range reads against the original COGs.
 
-If you are new, follow the story:
+This is most useful when you:
 
-1. [**The Mental Model**](explanation/conceptual-roadmap.md): The "Verbs to Nouns" shift.
-2. [**The LoC Win**](how-to/transitioning-from-rasterio.md): See why researchers are switching.
-3. [**Getting Started**](getting-started/index.md): Install and build your first collection.
+- train or evaluate models over many satellite/drone scenes
+- repeatedly sample the same raster collection with different AOIs
+- need TorchGeo/xarray/NumPy outputs from the same source
+- want dataset splits, labels, IDs, and scene metadata next to the imagery index
+- want Arrow-native metadata that works with tools like PyArrow, DuckDB,
+  GeoPandas, LanceDB, and related dataframe systems
 
-## What the workflow looks like
+## First Path Through The Docs
+
+If you are new, read these in order:
+
+1. [Getting Started](getting-started/index.md): install Rasteret and build your first collection.
+2. [Concepts](explanation/concepts.md): understand the collection model and why Rasteret is not just another raster reader.
+3. [Transitioning from Rasterio](how-to/transitioning-from-rasterio.md): see the side-by-side workflow shift if you already know rasterio or GDAL.
+4. [Build from Parquet](how-to/build-from-parquet.md): bring your own record table or GeoParquet.
+5. [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md): add splits, labels, plots, or AOI metadata without moving pixels.
+6. [Point Sampling and Masking](how-to/point-sampling-and-masking.md): sample points and AOIs with explicit CRS handling.
+
+## A Minimal Workflow
 
 ```python
 import pyarrow as pa
@@ -33,20 +60,20 @@ import rasteret
 
 collection = rasteret.build(
     "earthsearch/sentinel-2-l2a",
-    name="s2",
+    name="s2-demo",
     bbox=(-122.55, 37.65, -122.30, 37.90),
     date_range=("2024-01-01", "2024-02-01"),
 )
 
-sub = collection.subset(cloud_cover_lt=20)
+filtered = collection.subset(cloud_cover_lt=20)
 
-arr = sub.get_numpy(
+arr = filtered.get_numpy(
     geometries=(-122.50, 37.70, -122.40, 37.80),
     bands=["B04", "B08"],
 )
 
 points = pa.table({"lon": [-122.40, -122.39], "lat": [37.79, 37.80]})
-samples = sub.sample_points(
+samples = filtered.sample_points(
     points=points,
     x_column="lon",
     y_column="lat",
@@ -55,68 +82,62 @@ samples = sub.sample_points(
 )
 ```
 
-The collection stays at the center:
+The pattern stays the same:
 
-`build/load/as_collection -> subset/where -> get_xarray/get_numpy/sample_points/to_torchgeo_dataset`
+```text
+build/load/as_collection -> subset/where -> choose an output surface
+```
 
-## Dataset catalog
+Common output surfaces:
 
-Rasteret ships with a growing built-in dataset catalog across sources such as
-Earth Search, Planetary Computer, and AlphaEarth Foundation.
+| Method | Output | Use it when |
+| --- | --- | --- |
+| `get_numpy()` | `numpy.ndarray` | You want raw arrays for ML or custom processing. |
+| `get_xarray()` | `xarray.Dataset` | You want labeled raster data, coordinates, and CRS metadata. |
+| `get_gdf()` | `geopandas.GeoDataFrame` | You want one row per geometry/record result with pixel arrays attached. |
+| `sample_points()` | `pyarrow.Table` | You want pixel values at points, including point/raster CRS columns. |
+| `to_torchgeo_dataset()` | TorchGeo `GeoDataset` | You want a TorchGeo-compatible dataset backed by Rasteret reads. |
+
+## Dataset Catalog
+
+Rasteret ships with a small built-in catalog for known cloud-native raster
+sources such as Earth Search, Planetary Computer, and AlphaEarth Foundation.
 
 ```bash
 rasteret datasets list
 ```
 
 ```python
-for d in rasteret.DatasetRegistry.list():
-    print(d.id, d.name)
+import rasteret
+
+for descriptor in rasteret.DatasetRegistry.list():
+    print(descriptor.id, descriptor.name)
 ```
 
-If the dataset is in the catalog, use `build()`. If not, use
-`build_from_stac()` or `build_from_table()` and still end up with the same
-collection-centered workflow.
+Use `rasteret.build("catalog/id", ...)` when a dataset is already registered.
+Use `build_from_stac()` or `build_from_table()` when you have your own source.
+Either way, the result is a `Collection`.
 
-## Where to start
+## What Rasteret Is Not
 
-If you are new:
+Rasteret is not a replacement for every raster tool.
 
-1. Read the [**Conceptual Roadmap**](explanation/conceptual-roadmap.md) (Why Rasteret?)
-2. View the [**Transitioning from Rasterio**](how-to/transitioning-from-rasterio.md) comparison (The LOC Win)
-3. Follow the [Getting Started](getting-started/index.md) guide
-4. Run the [Quickstart tutorial](tutorials/01_quickstart.ipynb)
+- Best fit: remote or local **tiled GeoTIFFs / COGs**.
+- Best workflow: build a collection once, then reuse it for many reads.
+- Not the best fit: one-off reads of a single local raster, non-tiled TIFFs, or
+  arbitrary non-TIFF raster formats.
 
-If you already know your task:
+It works alongside rasterio, TorchGeo, xarray, DuckDB, GeoPandas, and Arrow
+tools. The goal is to remove repeated cloud-raster plumbing, not hide the
+geospatial model.
 
-- existing Parquet or GeoParquet source:
-  [Build from Parquet](how-to/build-from-parquet.md)
-- many point samples or masking behavior:
-  [Point Sampling and Masking](how-to/point-sampling-and-masking.md)
-- collection enrichment, splits, labels, workflow metadata:
-  [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md)
-- built-in datasets and local dataset IDs:
-  [Dataset Catalog](how-to/dataset-catalog.md)
+## Deeper Reading
 
-## Why people keep the collection around
-
-The collection is where Rasteret becomes more than a one-off reader:
-
-- cached header metadata avoids repeated setup cost
-- table-native filtering fits DuckDB, PyArrow, Polars, pandas, and GeoPandas workflows
-- extra columns like splits, AOIs, IDs, and labels can live with the same artifact
-- exported collections are easy to share and reload later
-
-## Scope
-
-- Best fit: remote, tiled GeoTIFFs / COGs
-- Also works with local tiled GeoTIFFs
-- Non-tiled TIFFs and non-TIFF formats are better handled by TorchGeo or rasterio directly
-
-Rasteret is an opt-in accelerator. It works alongside TorchGeo, xarray,
-rasterio, DuckDB, and Arrow-native tooling rather than replacing them.
-
-For architecture and design rationale, see [Explanation](explanation/index.md).
-For exact APIs, see [API Reference](reference/index.md).
+- [Getting Started](getting-started/index.md): install Rasteret and build your first collection.
+- [Schema Contract](explanation/schema-contract.md): what a Rasteret collection stores.
+- [Design Decisions](explanation/design-decisions.md): why Parquet + COGs instead of moving pixels into Parquet.
+- [Benchmarks](explanation/benchmark.md): cold-start and cloud-read measurements.
+- [API Reference](reference/index.md): exact method signatures and docstrings.
 
 ---
 
@@ -171,3 +192,5 @@ For exact APIs, see [API Reference](reference/index.md).
     [:octicons-arrow-right-24: Contributing](contributing.md)
 
 </div>
+
+Next: [Getting Started](getting-started/index.md)

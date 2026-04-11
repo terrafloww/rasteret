@@ -1,67 +1,101 @@
-# Data Fusion: Multi-Dataset Training
+# Multi-Dataset Training
 
-In Rasteret, **Data Fusion** isn't a complex engineering task—it’s a relational join. Because every Collection produces standard TorchGeo `GeoDataset` objects, you can combine disparate sources of imagery, masks, and embeddings using simple Python operators (`&`, `|`).
+Use this page when you want to combine multiple Rasteret-backed TorchGeo
+datasets in one training workflow.
 
-This guide shows how to fuse multiple high-performance "Blueprints" into a single unified training flow.
+Each collection can become a standard TorchGeo `GeoDataset`:
 
-## Combining datasets with `&` (intersection)
+```python
+s2 = s2_collection.to_torchgeo_dataset(
+    bands=["B04", "B03", "B02"],
+    chip_size=256,
+)
 
-Use `&` when you need aligned data from two sources, e.g. Sentinel-2
-imagery paired with AEF embeddings, or imagery paired with a label mask.
-The sampler only draws chips where **both** datasets have spatial and
-temporal coverage.
+mask = mask_collection.to_torchgeo_dataset(
+    bands=["mask"],
+    chip_size=256,
+    is_image=False,
+)
+```
+
+TorchGeo handles dataset composition with `&` and `|`.
+
+## Intersection With `&`
+
+Use `&` when a sample should come from areas where both datasets have coverage.
+This is common for imagery plus masks, imagery plus embeddings, or imagery plus
+another aligned raster source.
 
 ```python
 from torch.utils.data import DataLoader
-from torchgeo.samplers import RandomGeoSampler
 from torchgeo.datasets.utils import stack_samples
+from torchgeo.samplers import RandomGeoSampler
 
-s2 = s2_collection.to_torchgeo_dataset(bands=["B04", "B03", "B02"], chip_size=256)
-aef = aef_collection.to_torchgeo_dataset(bands=["A00", "A01"], chip_size=256)
+training = s2 & mask
 
-combined = s2 & aef  # IntersectionDataset: channels concatenated
-
-sampler = RandomGeoSampler(combined, size=256, length=100)
-loader = DataLoader(combined, sampler=sampler, batch_size=4,
-                    collate_fn=stack_samples)
+sampler = RandomGeoSampler(training, size=256, length=100)
+loader = DataLoader(
+    training,
+    sampler=sampler,
+    batch_size=4,
+    collate_fn=stack_samples,
+)
 
 for batch in loader:
-    # batch["image"] shape: [B, C_s2 + C_aef, H, W]
-    ...
+    image = batch["image"]
+    target = batch["mask"]
+    break
 ```
 
----
+TorchGeo's `IntersectionDataset` computes the spatial and temporal overlap. By
+default, when both datasets return the same key such as `image`, TorchGeo stacks
+the arrays along the channel dimension. If you want separate keys, create one
+dataset with `is_image=False` so it returns `sample["mask"]`.
 
-## Combining datasets with `|` (union)
+## Union With `|`
 
-Use `|` when you want to train on whichever source has coverage, e.g.
-fall back to Landsat when Sentinel-2 is cloudy, or mosaic adjacent
-coverage from different providers.
+Use `|` when a sample can come from either dataset's coverage area:
 
 ```python
-ds1 = col1.to_torchgeo_dataset(bands=["B04", "B03", "B02"], chip_size=256)
-ds2 = col2.to_torchgeo_dataset(bands=["B04", "B03", "B02"], chip_size=256)
+s2 = s2_collection.to_torchgeo_dataset(
+    bands=["B04", "B03", "B02"],
+    chip_size=256,
+)
+landsat = landsat_collection.to_torchgeo_dataset(
+    bands=["B04", "B03", "B02"],
+    chip_size=256,
+)
 
-combined = ds1 | ds2  # UnionDataset
+training = s2 | landsat
 ```
 
----
+TorchGeo's `UnionDataset` concatenates the spatial index and tries each dataset
+for a requested sample. When multiple datasets can satisfy the same sample, its
+default collation merges the returned sample dictionaries.
 
-## How alignment works
+## CRS And Resolution
 
-- CRS and resolution are aligned to the first dataset at init time
-- `&` computes spatial intersection via GeoPandas overlay; only areas
-  where both datasets exist are valid for sampling
-- `|` concatenates indices; the sampler can draw from either dataset's
-  coverage area
-- Band tensors are concatenated (for `&`) or merged (for `|`) automatically
+TorchGeo composition aligns the second dataset to the first dataset's CRS and
+resolution metadata. If your Rasteret collections span multiple raster CRS
+zones, pass `target_crs=...` when creating each dataset:
 
----
+```python
+s2 = s2_collection.to_torchgeo_dataset(
+    bands=["B04", "B03", "B02"],
+    chip_size=256,
+    target_crs=32610,
+)
 
-## xarray path
+aef = aef_collection.to_torchgeo_dataset(
+    bands=["A00", "A01"],
+    chip_size=256,
+    target_crs=32610,
+)
+```
 
-For analysis workflows, load each Collection separately and combine
-with standard xarray:
+## xarray Path
+
+For analysis workflows, read each collection separately and combine with xarray:
 
 ```python
 import xarray as xr
@@ -71,4 +105,5 @@ ds_aef = aef_collection.get_xarray(geometries=aoi, bands=["A00"])
 combined = xr.merge([ds_s2, ds_aef])
 ```
 
-Both must be in the same CRS. Use `target_crs=` if they differ.
+Use `target_crs=...` on the read calls when the collections are in different
+CRS zones.

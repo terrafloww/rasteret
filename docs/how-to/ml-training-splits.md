@@ -1,83 +1,68 @@
-# Relational Training: Splits and Labels
+# ML Training With Splits
 
-In traditional geospatial ML, datasets often ship with "black box" splits baked into the code. In Rasteret, splits and labels are **simple columns in your Parquet table**.
+Use this page when your Rasteret collection already represents the rasters you
+want to train on, and you need split or label columns for a TorchGeo workflow.
 
-By managing your partitions as data (not code), you gain full control over your experimentation strategy. You can add, join, or update your training assignments using standard tools like **pandas** or **DuckDB**, ensuring your experiment is perfectly reproducible and shareable.
+In Rasteret, splits and labels are table columns. Add them with an Arrow-native
+tool, wrap the table back with `as_collection()`, then pass the column names to
+TorchGeo.
 
-## 1. Build a collection
+## Add Split And Label Columns
 
 ```python
-from pathlib import Path
+import numpy as np
+import polars as pl
 import rasteret
 
-bbox = (77.55, 13.01, 77.58, 13.08)
+frame = pl.from_arrow(collection)
+n = frame.height
+rng = np.random.default_rng(42)
 
-collection = rasteret.build_from_stac(
-    name="bangalore",
-    stac_api="https://earth-search.aws.element84.com/v1",
-    collection="sentinel-2-l2a",
-    bbox=bbox,
-    date_range=("2024-01-01", "2024-03-31"),
-    workspace_dir=Path.home() / "rasteret_workspace",
+frame = frame.with_columns(
+    pl.Series(
+        "split",
+        rng.choice(["train", "val", "test"], size=n, p=[0.7, 0.15, 0.15]),
+    ),
+    pl.Series("label", rng.integers(0, 5, size=n), dtype=pl.Int32),
+)
+
+experiment = rasteret.as_collection(
+    frame,
+    name="training-experiment-v1",
+    data_source=collection.data_source,
 )
 ```
 
-## 2. Assign splits
+Passing `data_source` preserves source-specific band mapping and avoids relying
+on schema metadata that table engines may not round-trip exactly.
 
-Before filtering by split, the collection needs a `split` column:
+For joins with external GIS labels or AOI tables, see
+[Enriched Parquet Workflows](enriched-parquet-workflows.md).
 
-```python
-import pyarrow as pa
-import numpy as np
+## Create Datasets Per Split
 
-table = collection.dataset.to_table()
-n = table.num_rows
-
-rng = np.random.default_rng(42)
-splits = rng.choice(["train", "val", "test"], size=n, p=[0.7, 0.15, 0.15])
-table = table.append_column("split", pa.array(splits))
-
-# Optional: add a label column (e.g. land-cover class per scene)
-labels = rng.integers(0, 5, size=n)
-table = table.append_column("label", pa.array(labels, type=pa.int32()))
-
-# Save the enriched table and reload as a Collection
-import pyarrow.parquet as pq
-pq.write_table(table, "./with_splits.parquet")
-collection = rasteret.load("./with_splits.parquet")
-```
-
-The split column travels with the Parquet file. Reload later with
-`rasteret.load("./with_splits.parquet")` and the splits are preserved.
-
-## 3. Create TorchGeo datasets per split
-
-`split="train"` filters the Parquet index before creating the dataset.
-`label_field="label"` includes the label column (added in step 2) in each
-sample as `sample["label"]`.
+`split="train"` filters the collection before creating the TorchGeo dataset.
+`label_field="label"` includes the label column as `sample["label"]`.
 
 ```python
-train_dataset = collection.to_torchgeo_dataset(
+train_dataset = experiment.to_torchgeo_dataset(
     bands=["B02", "B03", "B04", "B08"],
-    geometries=bbox,
     split="train",
     label_field="label",
     chip_size=256,
 )
 
-val_dataset = collection.to_torchgeo_dataset(
+val_dataset = experiment.to_torchgeo_dataset(
     bands=["B02", "B03", "B04", "B08"],
-    geometries=bbox,
     split="val",
+    label_field="label",
     chip_size=256,
 )
 ```
 
-See [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md) API reference.
+## Train With TorchGeo
 
-## 4. Train
-
-Everything below is standard TorchGeo:
+Everything after dataset creation is standard TorchGeo and PyTorch:
 
 ```python
 from torch.utils.data import DataLoader
@@ -94,11 +79,17 @@ loader = DataLoader(
 )
 
 for batch in loader:
-    print(f"image: {batch['image'].shape}")
-    if "label" in batch:
-        print(f"label: {batch['label']}")
+    print(batch["image"].shape)
+    print(batch["label"])
     break
 ```
 
-For a larger end-to-end remote-sensing workflow, see the TorchGeo tutorial
-notebooks under `notebooks/` and `docs/tutorials/`.
+To persist the enriched collection for later runs:
+
+```python
+experiment.export("./training_experiment_v1")
+reloaded = rasteret.load("./training_experiment_v1")
+```
+
+See [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md) for the
+full API.

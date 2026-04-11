@@ -1,152 +1,114 @@
-# Invisible Connectivity: Multi-Cloud Auth
+# Custom Cloud Provider
 
-In Rasteret, connectivity is designed to be invisible. Our I/O engine automatically routes your requests to the correct cloud store (S3, GCS, Azure) based on the URL pattern and handles standard public access without any configuration.
+Rasteret can read public HTTP, S3, GCS, and Azure Blob COG URLs without custom
+setup. Use this page when your data needs requester-pays handling, URL
+rewriting, temporary credentials, or a preconfigured storage backend.
 
-This guide covers what to do in the cases where you **do** need to manage connectivity: custom requester-pays buckets, private buckets, and custom credential providers.
+Most users only need one of these:
 
----
+| Need | Use |
+| --- | --- |
+| Rewrite provider URLs and configure requester-pays S3 | `CloudConfig` |
+| Use temporary cloud credentials from an obstore provider | `rasteret.create_backend(...)` |
+| Wrap a custom obstore store yourself | `ObstoreBackend` |
 
-This guide covers three layers, from simplest to most advanced:
+## Public Data
 
-1. **Requester-pays / URL rewriting** - `CloudConfig` (URL patterns + auto-resolved credentials)
-2. **Dynamic credentials** - `create_backend()` with obstore credential providers
-3. **Custom I/O** - implement `StorageBackend` (or wrap a store) and pass `backend=`
+For public COG URLs, no configuration is usually needed. Rasteret routes common
+URL shapes to the appropriate store:
 
-## Register a cloud config
+| URL pattern | Store |
+| --- | --- |
+| `s3://bucket/...` | S3 |
+| `*.s3.*.amazonaws.com/...` | S3 |
+| `gs://bucket/...` | GCS |
+| `storage.googleapis.com/bucket/...` | GCS |
+| `*.blob.core.windows.net/container/...` | Azure Blob |
+| pre-signed or SAS URLs | HTTP |
+| other HTTPS URLs | HTTP |
 
-```python
-from rasteret import CloudConfig
+If public reads fail, first check whether the bucket is requester-pays, private,
+or behind provider-specific signing.
 
-CloudConfig.register(
-    "my-private-collection",
-    CloudConfig(
-        provider="aws",
-        requester_pays=True,
-        region="eu-central-1",
-        url_patterns={
-            "https://my-cdn.example.com/": "s3://my-private-bucket/",
-        },
-    ),
-)
-```
+## CloudConfig For URL Rewriting
 
-The `url_patterns` dict maps HTTP URL prefixes to S3 URL prefixes.
-When Rasteret encounters a COG URL starting with the HTTP pattern, it
-rewrites it to the S3 pattern for authenticated access.
-
-## Use the config
-
-Once registered, the config is picked up automatically when
-`data_source` matches:
+Use `CloudConfig` when URLs in metadata should be rewritten before range reads.
+This is common when a catalog exposes HTTPS URLs but authenticated reads should
+go through `s3://...`.
 
 ```python
 import rasteret
-
-collection = rasteret.build_from_stac(
-    name="private-data",
-    stac_api="https://my-stac.example.com/v1",
-    collection="my-private-collection",
-    # Optional: namespace conventions to avoid collisions across providers.
-    # data_source="acme/my-private-collection",
-    bbox=(-0.2, 51.4, 0.2, 51.7),
-    date_range=("2024-01-01", "2024-06-30"),
-)
-```
-
-Or pass the config explicitly via `cloud_config` when you need requester-pays
-or URL rewriting:
-
-```python
 from rasteret import CloudConfig
 
-config = CloudConfig.get_config("my-private-collection")
+config = CloudConfig(
+    provider="aws",
+    requester_pays=True,
+    region="eu-central-1",
+    url_patterns={
+        "https://my-cdn.example.com/": "s3://my-private-bucket/",
+    },
+)
 
+CloudConfig.register("acme/private-scenes", config)
+```
+
+When a collection has `data_source="acme/private-scenes"`, Rasteret can look up
+the config automatically. You can also pass it explicitly:
+
+```python
 ds = collection.get_xarray(
-    geometries=(-0.1, 51.45, 0.1, 51.65),  # bbox tuple
+    geometries=(-0.1, 51.45, 0.1, 51.65),
     bands=["B04", "B08"],
     cloud_config=config,
 )
 ```
 
-Rasteret auto-creates a backend from the config at read time.
-For requester-pays buckets, AWS credentials are resolved automatically
-from environment variables or `~/.aws/credentials` via boto3.
+For requester-pays S3, Rasteret configures `request_payer=true` on the backend.
+Make sure your AWS credentials are available in the environment or standard AWS
+credential files.
 
-## Built-in configs
+## Use A Config While Building
 
-Rasteret ships with a few pre-registered configs for common sources, and the
-catalog also registers per-dataset configs when a `DatasetDescriptor` includes
-`cloud_config`.
-
-The key thing: configs are looked up by **Collection `data_source`**. When in
-doubt, print `collection.data_source` and register/lookup under that value.
-
-Check what's registered:
+Pass the same config during build when COG header enrichment needs authenticated
+range reads:
 
 ```python
-CloudConfig.get_config("sentinel-2-l2a")
-# CloudConfig(provider='aws', requester_pays=False, region='us-west-2', ...)
+collection = rasteret.build_from_stac(
+    name="private-scenes",
+    stac_api="https://my-stac.example.com/v1",
+    collection="private-scenes",
+    data_source="acme/private-scenes",
+    bbox=(-0.2, 51.4, 0.2, 51.7),
+    date_range=("2024-01-01", "2024-06-30"),
+    cloud_config=config,
+)
 ```
 
-For catalog datasets, the `data_source` is the catalog ID (e.g.
-`earthsearch/landsat-c2-l2`, `earthsearch/naip`), so those are the keys you
-should use with `CloudConfig.get_config(...)` if you want to inspect or
-override built-in behavior.
+If you build through a registered dataset catalog entry, Rasteret can register
+the entry's `cloud_config` for you. When debugging, check:
 
-## Multi-cloud URL routing (via obstore)
+```python
+collection.data_source
+CloudConfig.get_config(collection.data_source)
+```
 
-Rasteret's IO layer uses obstore as the HTTP transport and natively routes
-URLs to the correct cloud store:
+## Temporary Credentials With `create_backend()`
 
-| URL pattern | Store type |
-|---|---|
-| `s3://bucket/...` | `S3Store` |
-| `*.s3.*.amazonaws.com/...` | `S3Store` |
-| `gs://bucket/...` | `GCSStore` |
-| `storage.googleapis.com/bucket/...` | `GCSStore` |
-| `*.blob.core.windows.net/container/...` | `AzureStore` |
-| Pre-signed / SAS-signed URLs (query params) | `HTTPStore` |
-| Other HTTPS | `HTTPStore` |
-
-This happens automatically -- no configuration needed for public data.
-
-## Authenticated cloud reads
-
-Use `create_backend()` when your data source provides its own credential
-mechanism (Planetary Computer SAS tokens, Earthdata-style temporary S3 credentials).
-This passes the credential provider to the underlying cloud store
-(S3Store, AzureStore, GCSStore):
+Use `create_backend()` when the provider supplies an obstore credential provider
+for temporary credentials or request signing. Pass the backend to both build and
+read calls when both phases need the same authenticated access.
 
 ### Planetary Computer
-
-Built-in `pc/*` datasets work via `build()` when `rasteret[azure]` is installed.
-Rasteret signs STAC assets during the build so COG header enrichment can read
-bytes from Azure.
-
-!!! note "Rate limits"
-
-    Planetary Computer has two different network surfaces:
-
-    - **SAS signing** (calling the Planetary Computer API to obtain short-lived SAS URLs) is **rate-limited** and can return **HTTP 429**.
-    - **COG reads** (range requests to Azure Blob URLs that already include SAS tokens) go **directly to Azure Blob Storage**, and do not depend on the signing API.
-
-    If you hit signing rate limits, reduce query size (e.g. `query={"max_items": 1}`), retry later, or configure a subscription key via
-    `PC_SDK_SUBSCRIPTION_KEY` (or `planetarycomputer configure`) for less restrictive rate limits.
-
-    Separately, Azure Blob Storage itself can throttle very high request rates (e.g. **429/503**). If you see those while reading tiles/headers,
-    lower `max_concurrent` and retry.
-
-If you want **long-lived cached Collections** (without embedding SAS tokens in
-the Parquet index), create a backend and pass it to both `build()` and reads:
 
 ```python
 import rasteret
 from obstore.auth.planetary_computer import PlanetaryComputerCredentialProvider
 
-pc_asset_url = "https://naipeuwest.blob.core.windows.net/naip/v002/"
+asset_prefix = "https://naipeuwest.blob.core.windows.net/naip/v002/"
 backend = rasteret.create_backend(
-    credential_provider=PlanetaryComputerCredentialProvider(pc_asset_url)
+    credential_provider=PlanetaryComputerCredentialProvider(asset_prefix)
 )
+
 collection = rasteret.build(
     "pc/sentinel-2-l2a",
     name="pc-s2",
@@ -154,6 +116,7 @@ collection = rasteret.build(
     date_range=("2024-06-01", "2024-07-15"),
     backend=backend,
 )
+
 ds = collection.get_xarray(
     geometries=(-122.45, 37.74, -122.35, 37.84),
     bands=["B04"],
@@ -161,7 +124,11 @@ ds = collection.get_xarray(
 )
 ```
 
-### Earthdata (temporary S3 credentials)
+Planetary Computer signing can be rate-limited. If you see signing HTTP 429s,
+try a smaller query, retry later, or configure a Planetary Computer subscription
+key. Tile reads against already signed Azure URLs are a different network path.
+
+### Earthdata S3 Credentials
 
 ```python
 import rasteret
@@ -172,39 +139,34 @@ backend = rasteret.create_backend(
     credential_provider=NasaEarthdataCredentialProvider(credentials_url),
     region="us-west-2",
 )
+
 ds = collection.get_xarray(
     geometries=(-105.5, 40.0, -105.0, 40.5),
     bands=["B04"],
     backend=backend,
 )
 ```
-Use the DAAC (Distributed Active Archive Center) specific `s3credentials`
-endpoint for the assets you query.
 
-Rasteret does **not** prompt for credentials. Configure Earthdata auth
-via one of:
+Use the DAAC-specific `s3credentials` endpoint for the assets you query.
+Rasteret does not prompt for credentials; configure Earthdata auth with
+`~/.netrc`, `EARTHDATA_TOKEN`, or `EARTHDATA_USERNAME` /
+`EARTHDATA_PASSWORD`.
 
-- `~/.netrc` (recommended), or
-- `EARTHDATA_TOKEN`, or
-- `EARTHDATA_USERNAME` / `EARTHDATA_PASSWORD`.
+## Advanced: Wrap An Obstore Store
 
-For custom Earthdata-backed datasets, set `s3_credentials_url` on your
-dataset descriptor (or pass a pre-built backend) so Rasteret can fetch
-temporary credentials as needed.
-
-### Custom ObstoreBackend
-
-For advanced use cases (e.g. wrapping a pre-configured store with custom
-client options), use [`ObstoreBackend`](../reference/cloud.md) directly:
+Use `ObstoreBackend` when you already have a configured obstore store and want
+Rasteret to use it directly:
 
 ```python
-from rasteret.cloud import ObstoreBackend
 from obstore.store import S3Store
+
+from rasteret.cloud import ObstoreBackend
 
 store = S3Store(
     bucket="my-private-bucket",
     config={"region": "eu-central-1"},
 )
+
 backend = ObstoreBackend(store, url_prefix="s3://my-private-bucket/")
 
 ds = collection.get_xarray(
@@ -214,6 +176,5 @@ ds = collection.get_xarray(
 )
 ```
 
-This is only needed for store configurations that `create_backend()` does
-not cover. For most use cases, `create_backend()` with a credential
-provider is sufficient.
+Prefer `CloudConfig` or `create_backend()` unless you really need direct control
+over the underlying store.

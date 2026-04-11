@@ -1,6 +1,7 @@
 # Design Decisions
 
-Rasteret is built on a simple conviction: **geospatial infrastructure should get out of the way of the science.** This page documents the key choices we made to reduce friction for AI practitioners.
+This page documents the design choices behind Rasteret's collection-first
+workflow.
 
 ## The Architecture: Control Plane vs. Data Plane
 
@@ -9,18 +10,20 @@ We follow an **index-first** retrieval architecture:
 - **Control plane (The Index)**: A local Parquet table for discovery, filtering, and experiment metadata (splits/labels).
 - **Data plane (The Cloud)**: On-demand pixel streaming directly from source GeoTIFFs.
 
-This separation means you can manage 100,000 satellite scenes as easily as a table, while only touching the actual pixel bytes when your model is ready to train.
+This separation lets you filter and enrich large raster inventories as tables,
+then touch pixel bytes only when a read path needs them.
 
 ## Why Parquet indexes?
 
-Traditional geospatial workflows pay a **"Cold Start Tax"** every time they open a remote COG. GDAL has to fetch the TIFF header (IFD) over HTTP just to know where the pixels are. For a 30-scene time series, that's 120+ blocking network round-trips before your model sees a single pixel.
-
-**Rasteret removes this tax by caching the header metadata in a local Parquet index.**
+Traditional geospatial workflows often pay a cold-start cost every time they
+open remote COGs. GDAL/rasterio needs TIFF header metadata before it can know
+where tile bytes live. Rasteret caches that header metadata in the collection.
 
 We chose Parquet (over Zarr, JSON, or SQLite) for its specialized ecosystem support:
 - **Queryable**: Filter millions of scenes using Arrow predicate pushdown without reading the whole file.
 - **Ecosystem Native**: Your index is a standard table. You can open it in **DuckDB**, **Polars**, or **pandas** to perform complex joins between your ground-truth data and your imagery.
-- **Portable**: A 2MB Parquet index can describe 2TB of satellite data. It’s small enough to commit to Git or share via Slack.
+- **Portable**: a small Parquet index can describe much larger raster assets.
+  Teams can share the index without copying the pixels.
 
 ## Why a custom COG reader?
 

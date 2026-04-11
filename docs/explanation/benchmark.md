@@ -1,101 +1,117 @@
-# Benchmarks: Proving the Flow
+# Benchmarks
 
-> [!TIP]
-> **Key Finding**: Rasteret is a **high-performance rasterio/GDAL alternative** that delivers **10x to 20x faster reads** from remote COGs by eliminating the "Cold Start Tax" of remote header parsing.
+This page records benchmark results for Rasteret's index-first reads against
+TorchGeo/rasterio, Google Earth Engine, and Hugging Face `datasets` baselines.
+Treat the exact numbers as environment-specific; the useful signal is where
+time is spent in each workflow.
 
-This page provides an apples-to-apples performance comparison using the workflow found in `docs/tutorials/05_torchgeo_comparison.ipynb`.
+The TorchGeo comparison follows the workflow in
+[`docs/tutorials/05_torchgeo_comparison.ipynb`](../tutorials/05_torchgeo_comparison.ipynb).
 
 **Environment:** Ubuntu Linux, Python 3.13, us-west-2 EC2 instance.
 
-**Data source:** Sentinel-2 L2A via Earth Search v1 (COGs on S3 us-west-2).
+**Data source:** Sentinel-2 L2A via Earth Search v1, with COGs on S3 in
+us-west-2.
 
-**Controlled variables:** Same scenes, same sampler, same DataLoader, same
-`stack_samples` collate. Both paths output identical
-`[batch, T, C, H, W]` tensors.
+**Controlled variables:** same scenes, AOIs, sampler, DataLoader, and
+`stack_samples` collate path. Both paths output the same
+`[batch, T, C, H, W]` tensor shape.
 
-DataLoader uses default settings (no custom `num_workers`, `prefetch_factor`,
-or `persistent_workers`) for both paths.
-
-TorchGeo runs with its recommended GDAL settings (`rasterio_best_practices`
-from Pangeo COG best practices) for best-case remote COG performance:
+TorchGeo runs with GDAL settings based on Pangeo COG best practices:
 
 ```python
 GDAL_DISABLE_READDIR_ON_OPEN = "EMPTY_DIR"
 AWS_NO_SIGN_REQUEST = "YES"
-GDAL_MAX_RAW_BLOCK_CACHE_SIZE = "200000000"  # 200 MB
+GDAL_MAX_RAW_BLOCK_CACHE_SIZE = "200000000"
 GDAL_SWATH_SIZE = "200000000"
 VSI_CURL_CACHE_SIZE = "200000000"
 ```
 
-This gives TorchGeo its best-case scenario for remote COG reads.
+## TorchGeo / rasterio Baseline
 
-### What "Index/header" time measures
+TorchGeo's native path reads remote COGs through GDAL/rasterio. Rasteret reads
+the pre-built collection metadata and fetches only pixel byte ranges.
 
-- **TorchGeo**: Time spent in `rasterio.open("/vsicurl/...")` calls. Each call
-  triggers HTTP HEAD + 1-3 range requests to parse the IFD (Image File
-  Directory) that contains tile offsets and byte counts. For T timesteps with
-  ~3 HTTP round-trips each at ~100 ms, this adds up to seconds of pure header
-  overhead before any pixel data flows.
-- **Rasteret**: Time to read the pre-built Parquet index from local disk.
-  Tile offsets and byte counts are already cached, so no network I/O is needed.
+Cold start:
 
-Both are measuring the same logical step: making tile layout metadata available
-before pixel reads begin.
+| Scenario | TorchGeo/rasterio | Rasteret | Speedup | Shape |
+| --- | ---: | ---: | ---: | --- |
+| Single AOI, 15 scenes | 9.08 s | 1.14 s | **8.0x** | `[2, 15, 1, 256, 256]` |
+| Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **18.7x** | `[4, 30, 1, 256, 256]` |
+| Cross-CRS, 12 scenes | 12.47 s | 0.59 s | **21.3x** | `[2, 12, 1, 256, 256]` |
 
-## Backends tested
+Warm cache, immediate re-run:
 
-| Backend | Transport | Install |
-|---------|-----------|---------|
-| **TorchGeo** | GDAL `/vsicurl/` (sequential) | `uv pip install torchgeo` |
-| **Rasteret** | Custom async IO engine (concurrent byte-range reads, obstore transport) | `uv pip install rasteret` |
+| Scenario | TorchGeo/rasterio | Rasteret | Speedup | Shape |
+| --- | ---: | ---: | ---: | --- |
+| Single AOI, 15 scenes | 9.14 s | 0.81 s | **11.3x** | `[2, 15, 1, 256, 256]` |
+| Multi-AOI, 30 scenes | 29.68 s | 2.60 s | **11.4x** | `[4, 30, 1, 256, 256]` |
+| Cross-CRS, 12 scenes | 3.61 s | 1.06 s | **3.4x** | `[2, 12, 1, 256, 256]` |
 
-## Cold start (first run)
+![TorchGeo/rasterio vs Rasteret processing time](../assets/benchmark_results.png)
 
-| Section | TorchGeo | Rasteret | Speedup | Shape |
-|---------|----------|----------|---------|-------|
-| 1: Single AOI, 15 scenes | 9.08 s | 1.14 s | **8.0x** | `[2, 15, 1, 256, 256]` |
-| 2: Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **18.7x** | `[4, 30, 1, 256, 256]` |
-| 3: Cross-CRS, 12 scenes | 12.47 s | 0.59 s | **21.3x** | `[2, 12, 1, 256, 256]` |
+![Benchmark breakdown](../assets/benchmark_breakdown.png)
 
-## Warm cache (immediate re-run)
+## Where The Difference Comes From
 
-| Section | TorchGeo | Rasteret | Speedup | Shape |
-|---------|----------|----------|---------|-------|
-| 1: Single AOI, 15 scenes | 9.14 s | 0.81 s | **11.3x** | `[2, 15, 1, 256, 256]` |
-| 2: Multi-AOI, 30 scenes | 29.68 s | 2.60 s | **11.4x** | `[4, 30, 1, 256, 256]` |
-| 3: Cross-CRS, 12 scenes | 3.61 s | 1.06 s | **3.4x** | `[2, 12, 1, 256, 256]` |
+| Step | TorchGeo/rasterio path | Rasteret path |
+| --- | --- | --- |
+| Index/header metadata | `rasterio.open()` per COG over HTTP | Pre-built Parquet collection metadata |
+| Time-series read | Sequential `rasterio.merge()` per timestep | Timesteps/bands fetched with `asyncio.gather` |
+| HTTP per timestep | Header + pixel ranges | Pixel ranges, because headers are cached |
+| Concurrency | Mostly sequential in this benchmark path | Concurrent byte-range reads |
 
-## Key observations
+`Index/header` time means:
 
-1. The difference grows with scene count: the rasterio/GDAL path
-   re-parses headers over HTTP per file (sequential), while Rasteret
-   reads cached headers from disk and fetches pixels concurrently.
-2. Cross-CRS adds reprojection overhead (~0.1-0.3 s) to both paths.
+- **TorchGeo/rasterio**: time spent opening remote files and parsing TIFF IFD
+  metadata over HTTP.
+- **Rasteret**: time to read the pre-built collection index from local storage.
 
-## HF `datasets` baseline (Major TOM keyed patches)
+## Google Earth Engine / Time-Series Baseline
 
-Separate benchmark against Hugging Face "images-inside-Parquet" workflows using
-`datasets.load_dataset(..., streaming=True, filters=...)` (PyArrow-backed predicate pushdown):
+This separate time-series comparison measures Rasteret against Google Earth
+Engine and a thread-pooled rasterio path:
 
-| Patches | HF `datasets` parquet filters | Rasteret index+COG | Speedup |
-|---:|---:|---:|---:|
+| Library | First run (cold) | Subsequent runs (hot) |
+| --- | ---: | ---: |
+| Rasterio + ThreadPool | 32 s | 24 s |
+| Google Earth Engine | 10-30 s | 3-5 s |
+| Rasteret | **3 s** | **3 s** |
+
+![Single time-series request performance](../assets/single_timeseries_request.png)
+
+![200 COG comparison](../assets/200_cog_comparison.png)
+
+![Actual analysis time](../assets/actual_analysis_time.png)
+
+## Hugging Face `datasets` Baseline
+
+This benchmark compares Rasteret with image-bytes-inside-Parquet workflows using
+Hugging Face `datasets` and Major TOM-style keyed patch access.
+
+| Patches | HF `datasets` parquet filters | Rasteret index + COG | Speedup |
+| ---: | ---: | ---: | ---: |
 | 120 | 46.83 s | 12.09 s | **3.88x** |
 | 1000 | 771.59 s | 118.69 s | **6.50x** |
 
 ![HF vs Rasteret processing time](../assets/benchmark_hf_results.png)
+
 ![HF vs Rasteret speedup](../assets/benchmark_hf_speedup.png)
 
-Major TOM notebooks often use HF streaming generators for exploration; the
-table above uses `filters=...` keyed retrieval for fairness.
+The point is not that images-inside-Parquet is never useful. It is that for
+large cloud COG collections, Rasteret can keep pixels in the published COGs and
+use Parquet as the queryable index.
 
-## Where the difference comes from
+## Cost And Scaling Views
 
-| | rasterio/GDAL path | Rasteret path |
-|-|----------|---------|
-| **Index** | `rasterio.open()` per COG over HTTP | Pre-built GeoParquet (disk read) |
-| **Time-series read** | Sequential `rasterio.merge()` per timestep | All T timesteps via `asyncio.gather` |
-| **HTTP per timestep** | HEAD + IFD + pixel ranges | Pixel ranges only (headers cached) |
-| **Concurrency** | Sequential | `asyncio.gather` across T x C reads |
+The following figures summarize supporting cost/scaling views from the same
+benchmark asset set.
+
+![Environment scaling costs](../assets/env_scaling_costs.png)
+
+![AWS service-wise costs](../assets/aws_service_wise_costs.png)
+
+![Total VM hours](../assets/total_vm_hours.png)
 
 ## Reproducibility
 
@@ -103,30 +119,22 @@ table above uses `filters=...` keyed retrieval for fairness.
 # Fresh run
 uv run python -m nbconvert --execute docs/tutorials/05_torchgeo_comparison.ipynb
 
-# Immediate re-run (warm cache)
+# Immediate re-run
 uv run python -m nbconvert --execute docs/tutorials/05_torchgeo_comparison.ipynb
 ```
 
-Results vary with network conditions and EC2 instance placement.
+Results vary with network conditions, instance placement, cloud credentials,
+and provider rate limits.
 
-## Why cold-start numbers matter
+## Why Cold Starts Matter
 
-The "cold start" row above is the number that matters most. Every new
-notebook kernel, every new VM, every Kubernetes pod restart, every CI
-runner, every colleague cloning your repo starts cold. There is no
-warm HTTP cache, no OS page cache, no pre-opened file handles.
+Every new notebook kernel, VM, Kubernetes pod, CI runner, or colleague's fresh
+environment starts cold. In the rasterio/GDAL path, remote COG headers are
+re-read to discover tile offsets and byte counts. Rasteret stores that header
+metadata in the collection, so repeated reads can start from the cached index
+and go straight to pixel byte ranges.
 
-TorchGeo re-parses every COG header over HTTP on each cold start.
-Rasteret reads the same headers from a local Parquet file in
-milliseconds. The gap widens with scene count: 30 scenes means 120+
-HTTP round-trips that Rasteret skips entirely.
-
-## Share your numbers
-
-These benchmarks cover 12-30 Sentinel-2 scenes. The speedup grows
-with scene count, so larger workloads should widen the gap. If you're
-running Rasteret on bigger collections, different sensors, or
-production pipelines, share your timings on
+If you run Rasteret on bigger collections, different sensors, or production
+pipelines, share timings in
 [GitHub Discussions](https://github.com/terrafloww/rasteret/discussions/categories/show-and-tell)
-or [Discord](https://discord.gg/V5vvuEBc) - it helps the community
-understand where the real ceiling is.
+or [Discord](https://discord.gg/V5vvuEBc).
