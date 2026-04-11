@@ -1,139 +1,159 @@
 # AlphaEarth Foundation Embeddings (AEF)
 
-[AlphaEarth Foundation (AEF)](https://source.coop/repositories/tge-labs/aef) embeddings are 64-band foundation-model features published as cloud-native GeoTIFFs.
+[AlphaEarth Foundation (AEF)](https://source.coop/repositories/tge-labs/aef)
+embeddings are 64-band foundation-model features published as cloud-native
+GeoTIFFs. Rasteret also publishes a ready-to-read AEF collection for annual
+embeddings, so most users should **load** it instead of rebuilding it.
 
-Because these are high-dimensional vectors, traditional GDAL reads are particularly slow. Rasteret accelerates AEF access by caching tile layouts in your **Collection table**, delivering **10x to 20x faster reads** for each 64-band patch compared to sequential approaches.
-
-AEF is a built-in catalog dataset. Three lines gets you from zero to pixels:
+Use this path first:
 
 ```python
 import rasteret
 
-collection = rasteret.load(
-    "aef/v1-annual",
-    name="aef-demo",
-)
-
-ds = collection.get_xarray(
-    geometries=(11.3, -0.002, 11.5, 0.001),
-    bands=["A00", "A01", "A31", "A63"],
-)
+collection = rasteret.load("aef/v1-annual")
+collection.describe()
 ```
 
-`load()` opens the published AEF collection directory from Source Cooperative
-and keeps the narrow `index.parquet` in front for pushdown. You can call
-`collection.get_xarray(...)` or `collection.subset(...)` immediately; Rasteret
-uses the published index behind the scenes to avoid scanning unnecessary data.
+This opens the maintained AEF Rasteret collection on Source Cooperative. The
+Rasteret Collection is already built for annual AEF embeddings and already contains the
+COG metadata Rasteret needs for fast byte-range reads. `load()` also keeps the
+published `index.parquet` attached as a sidecar index, so spatial and temporal
+filters are applied before Rasteret reads the wider collection data.
+
+You do **not** need to run `rasteret.build()` for the public AEF collection.
 
 ---
 
-## Selecting bands
+## A Small First Read
 
-AEF COGs contain 64 bands (`A00`--`A63`). Enrichment parses the full
-tile layout once per COG (a single HTTP request regardless of band count),
-so you pay no extra cost at build time.
-
-Select which bands to read at query time:
+AEF has one record per year and 64 embedding bands named `A00` through `A63`.
+Start with a small area and one year:
 
 ```python
-# Read all 64 bands
-ds = collection.get_xarray(geometries=bbox, bands=[f"A{i:02d}" for i in range(64)])
+bbox = (-83.86, 39.54, -83.82, 39.58)  # small WGS84 bbox
+bands = ["A00", "A01", "A31", "A63"]
 
-# Read a subset
-ds = collection.get_xarray(geometries=bbox, bands=["A00", "A15", "A31"])
+sub = collection.subset(
+    bbox=bbox,
+    date_range=("2024-01-01", "2024-12-31"),
+)
+
+cube = sub.get_xarray(
+    geometries=bbox,
+    bands=bands,
+)
+
+cube
 ```
+
+`get_xarray(...)` materializes the requested area into an xarray Dataset. That
+is convenient for small windows, plotting, and local analysis. For large areas,
+prefer `sample_points(...)` or `to_torchgeo_dataset(...)` so you do not load a
+large 64-band mosaic all at once.
 
 ---
 
-## De-quantization and nodata
+## Pick The Right API
 
-AEF embeddings are stored as signed 8-bit integers. Nodata is `-128`.
-To convert to floats in `[-1.0, 1.0]`:
+| Task | Recommended API | Why |
+|---|---|---|
+| Inspect or plot a small area | `get_xarray(...)` | Returns a familiar xarray Dataset. |
+| Read embedding vectors at points | `sample_points(...)` | Reads only the pixels under your points. |
+| Scan or train over many chips | `to_torchgeo_dataset(...)` | Streams chips through TorchGeo/DataLoader instead of materializing the whole area. |
+
+Example point sampling:
+
+```python
+import geopandas as gpd
+from shapely.geometry import Point
+
+points = gpd.GeoDataFrame(
+    {"name": ["sample-1"]},
+    geometry=[Point(-83.84, 39.56)],
+    crs="EPSG:4326",
+)
+
+samples = sub.sample_points(
+    points,
+    bands=[f"A{i:02d}" for i in range(64)],
+    geometry_crs=4326,
+)
+
+samples.to_pandas().head()
+```
+
+Example TorchGeo handoff:
+
+```python
+tg_dataset = sub.to_torchgeo_dataset(
+    bands=[f"A{i:02d}" for i in range(64)],
+)
+```
+
+See the AEF notebooks for larger end-to-end examples:
+
+- `notebooks/07_aef_similarity_search.ipynb`
+- `notebooks/08_aef_fire_lancedb_torchgeo.ipynb`
+
+---
+
+## Bands, Dtype, And Nodata
+
+AEF COGs contain 64 bands: `A00` through `A63`.
+
+```python
+all_bands = [f"A{i:02d}" for i in range(64)]
+```
+
+AEF embeddings are stored as signed 8-bit integers. Nodata is `-128`. Rasteret
+preserves the source dtype and carries nodata metadata through xarray assembly.
+If you need model-space float embeddings, de-quantize explicitly at the point
+where your analysis needs floats:
 
 ```python
 import numpy as np
 
-raw = ds["A00"].values.squeeze()
+raw = cube["A00"].values
 embedding = np.where(raw == -128, np.nan, raw.astype(np.float32) / 127.0)
 ```
 
----
-
-## DuckDB + Arrow workflow (advanced)
-
-If you want full control over filtering (e.g. UTM zone, custom SQL
-predicates), use DuckDB to query the AEF GeoParquet index, then pass
-the filtered Arrow table directly into Rasteret via zero-copy:
-
-```python
-import duckdb
-import rasteret
-
-
-con = duckdb.connect()
-filtered = con.execute("""
-    SELECT *
-    FROM read_parquet('https://data.source.coop/tge-labs/aef/v1/annual/aef_index.parquet')
-    WHERE year = 2023
-      AND utm_zone = '32N'
-      AND wgs84_east >= 11.3 AND wgs84_west <= 11.5
-    LIMIT 3
-""").fetch_arrow_table()  # zero-copy Arrow table
-
-collection = rasteret.build_from_table(
-    filtered,  # Arrow table passed directly, no serialization
-    name="aef-duckdb",
-    column_map={"fid": "id", "geom": "geometry", "year": "datetime"},
-    href_column="path",
-    band_index_map={f"A{i:02d}": i for i in range(64)},
-    url_rewrite_patterns={
-        "s3://us-west-2.opendata.source.coop/": "https://data.source.coop/",
-    },
-    enrich_cog=True,
-    band_codes=["A00", "A01", "A31", "A63"],
-    force=True,
-)
-```
-
-The key: `fetch_arrow_table()` returns a PyArrow Table, and
-`build_from_table()` accepts it directly. No CSV export, no file I/O,
-no intermediate copies. Rasteret's `column_map` aliases the DuckDB
-column names to the contract schema, `href_column` + `band_index_map`
-construct the assets struct, and `proj:epsg` is derived automatically
-from the `crs` column.
-
-See the runnable script at `examples/aef_duckdb_query.py`.
+Do not de-quantize earlier than needed. Keeping the source `int8` values reduces
+memory pressure, especially when reading many AEF bands.
 
 ---
 
-## How it works internally
 
-Rasteret reads AEF COGs with the same reader used for all datasets.
-The AEF-specific piece is the [catalog descriptor](../reference/catalog.md)
-which declares how the GeoParquet index maps to Rasteret's schema:
+## How The Built-In AEF Descriptor Works
+
+The AEF entry in Rasteret's catalog has three relevant paths:
+
+| Descriptor field | What it points to |
+|---|---|
+| `record_table_uri` | The narrow published AEF `index.parquet` record table. |
+| `index_uri` | The same `index.parquet`, used by `load()` as the runtime sidecar index. |
+| `collection_uri` | The read-ready Rasteret Collection under the published `data/` directory. |
+
+The descriptor also maps source columns into Rasteret's schema:
 
 | Descriptor field | Purpose |
 |---|---|
-| `column_map` | `{"fid": "id", "geom": "geometry", "year": "datetime"}` - alias source columns to the schema contract |
-| `href_column` | `"path"` - column containing COG URLs |
-| `band_index_map` | `{"A00": 0, "A01": 1, ..., "A63": 63}` - maps band codes to sample indices in the multi-band COG |
-| `bbox_columns` | `{"minx": "wgs84_west", ...}` - enables predicate pushdown on the 235k-row index |
+| `field_roles` / `column_map` | Aliases source columns such as `fid`, `geom`, `year`, and `path` into Rasteret's schema. |
+| `href` role | Identifies the source COG URL column. |
+| `band_index_map` | Maps `A00` through `A63` to band positions in the multi-band COG. |
+| `surface_fields` | Controls which fields are exposed from the index and collection layers. |
 
-Three general-purpose COG features combine to make the GeoTIFFs work:
+Rasteret reads AEF COGs with the same reader used for other collections. The
+AEF-specific details are captured in the catalog descriptor and the published
+collection metadata:
 
-- **ModelTransformationTag**: AEF COGs store their geotransform as a 4x4
-  matrix (TIFF tag 34264) instead of the more common PixelScale + Tiepoint
-  tags. Rasteret's header parser extracts axis-aligned transforms from
-  either representation.
+- **ModelTransformationTag**: AEF COGs store their geotransform as a 4x4 matrix
+  (TIFF tag 34264) instead of the more common PixelScale + Tiepoint tags.
+  Rasteret's header parser handles both forms.
+- **South-up orientation**: AEF tiles use a positive Y pixel scale. Rasteret's
+  tile math handles both north-up and south-up rasters.
+- **Planar-separate multi-band layout**: AEF stores the 64 bands separately in
+  the TIFF. Rasteret uses the band index metadata to read only the requested
+  bands and tile byte ranges.
 
-- **South-up orientation**: AEF tiles have a positive Y pixel scale
-  (`scale_y > 0`), meaning row 0 is the southern edge. Rasteret's tile
-  math is sign-agnostic and works with both north-up and south-up rasters.
-
-- **Planar-separate multi-band**: The 64 bands are stored with TIFF
-  PlanarConfiguration=2. The `band_index` field in the asset dict tells
-  the enrichment pipeline to slice the TileOffsets/TileByteCounts arrays
-  per band, so the tile reader handles each band independently.
-
-For the full `band_index` specification, see
-[Schema Contract -- asset dict](../explanation/schema-contract.md).
+For the asset schema details, see
+[Schema Contract - asset dict](../explanation/schema-contract.md).

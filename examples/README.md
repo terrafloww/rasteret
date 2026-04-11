@@ -27,15 +27,6 @@ For step-by-step learning, see the [tutorial notebooks](../notebooks/).
 
 - For the full TorchGeo comparison and benchmark charts, see [`05_torchgeo_comparison.ipynb`](../docs/tutorials/05_torchgeo_comparison.ipynb).
 
-## AEF + DuckDB
-
-- `aef_duckdb_query.py`: Advanced AEF workflow using DuckDB for full SQL
-  control over the AEF GeoParquet index. Demonstrates Arrow zero-copy interop:
-  DuckDB queries the index over HTTPS, returns a PyArrow Table, and passes it
-  directly to `build_from_table()` with no file I/O or serialization.
-  Includes schema normalization via `column_map`, COG enrichment, and
-  embedding de-quantization.
-
 ## Major TOM-style workflows
 
 - `major_tom_benchmark/`: A three-script workflow to build a scene-level

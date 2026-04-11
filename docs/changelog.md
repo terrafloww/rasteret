@@ -12,6 +12,9 @@
 - **Examples cleanup**: removed the older `ml_training_with_splits.py` script;
   the split/label pattern remains documented in the ML training how-to and
   TorchGeo tutorial notebooks.
+- **AEF how-to refresh**: rewrote the AEF embeddings guide around the
+  maintained `rasteret.load("aef/v1-annual")` flow and moved build/DuckDB
+  guidance to custom-data use cases.
 
 ### Fixed
 
