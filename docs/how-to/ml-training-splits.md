@@ -100,4 +100,5 @@ for batch in loader:
     break
 ```
 
-The full runnable script is at `examples/ml_training_with_splits.py`.
+For a larger end-to-end remote-sensing workflow, see the TorchGeo tutorial
+notebooks under `notebooks/` and `docs/tutorials/`.

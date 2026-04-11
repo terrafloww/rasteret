@@ -11,12 +11,6 @@ For step-by-step learning, see the [tutorial notebooks](../notebooks/).
   collections. Covers `export`, `load`, `list_collections`,
   `subset()`, `where()`, `CloudConfig.register()`, `BandRegistry.register()`.
 
-## ML training pipeline
-
-- `ml_training_with_splits.py`: Full pipeline: STAC → collection → assign
-  train/val/test splits with PyArrow → export as shareable Collection →
-  TorchGeo DataLoader. Requires `rasteret[torchgeo]`.
-
 ## Build from Parquet
 
 - `build_collection_from_parquet.py`: Build a Collection from any Parquet
