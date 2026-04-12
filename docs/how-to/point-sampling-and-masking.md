@@ -94,11 +94,9 @@ FROM plot_points
 `sample_points()` returns an Arrow table with:
 
 - `point_index`, `point_x`, `point_y`, `point_crs`
-- `record_id`, `datetime`, `collection`, `cloud_cover`
+- `record_id`, `datetime`, `collection`
 - `band`, `value`, `raster_crs`
 - `neighbourhood_values` when `return_neighbourhood!="off"`
-
-`cloud_cover` may be null when the source collection does not provide it.
 
 Use `match="all"` for time-series style output with every matching record per
 point and band:

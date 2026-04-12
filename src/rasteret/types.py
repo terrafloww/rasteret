@@ -23,7 +23,6 @@ POINT_SAMPLES_SCHEMA = pa.schema(
         pa.field("record_id", pa.string(), nullable=False),
         pa.field("datetime", pa.timestamp("us"), nullable=True),
         pa.field("collection", pa.string(), nullable=False),
-        pa.field("cloud_cover", pa.float64(), nullable=True),
         pa.field("band", pa.string(), nullable=False),
         pa.field("value", pa.float64(), nullable=False),
         pa.field("raster_crs", pa.int32(), nullable=True),

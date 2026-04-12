@@ -2072,6 +2072,7 @@ class TestPointSampling:
         assert table.num_rows == 0
         assert "point_index" in table.schema.names
         assert "value" in table.schema.names
+        assert "cloud_cover" not in table.schema.names
 
     def test_get_collection_point_samples_empty_neighbourhood_preserves_schema(self):
         collection = self._DummyCollection([])
@@ -2161,6 +2162,7 @@ class TestPointSampling:
             )
 
         assert rows.num_rows == 2
+        assert "cloud_cover" not in rows.schema.names
         assert rows.column("point_index").to_pylist() == [0, 1]
         assert rows.column("value").to_pylist() == [11.0, 77.0]
         assert rows.column("neighbourhood_values").to_pylist() == [

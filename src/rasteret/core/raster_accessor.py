@@ -450,9 +450,6 @@ class RasterAccessor:
 
         point_crs_value = int(geometry_crs) if geometry_crs is not None else None
         raster_crs_value = int(self.crs) if self.crs is not None else None
-        cloud_cover_value = (
-            float(self.cloud_cover) if self.cloud_cover is not None else None
-        )
         point_indices_arr: np.ndarray | None = None
         point_xs_arr, point_ys_arr = ga.point_coords(points)
         point_xs = point_xs_arr.to_numpy(zero_copy_only=False)
@@ -469,13 +466,6 @@ class RasterAccessor:
             if value is None:
                 return pa.nulls(row_count, type=pa.int32())
             return pa.array(np.full(row_count, value, dtype=np.int32), type=pa.int32())
-
-        def _constant_float64_array(value: float | None, row_count: int) -> pa.Array:
-            if value is None:
-                return pa.nulls(row_count, type=pa.float64())
-            return pa.array(
-                np.full(row_count, value, dtype=np.float64), type=pa.float64()
-            )
 
         def _constant_timestamp_array(
             value: np.datetime64 | None, row_count: int
@@ -1008,9 +998,6 @@ class RasterAccessor:
                     collection_arr = _constant_string_array(
                         str(self.collection), row_count
                     )
-                    cloud_cover_arr = _constant_float64_array(
-                        cloud_cover_value, row_count
-                    )
                     raster_crs_arr = _constant_int32_array(raster_crs_value, row_count)
                     batch_columns = {
                         "point_index": point_index_arr,
@@ -1020,7 +1007,6 @@ class RasterAccessor:
                         "record_id": record_id_arr,
                         "datetime": datetime_arr,
                         "collection": collection_arr,
-                        "cloud_cover": cloud_cover_arr,
                         "band": _constant_string_array(
                             str(source["band_code"]), row_count
                         ),
