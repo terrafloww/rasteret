@@ -69,8 +69,8 @@ Rasteret-specific options for TorchGeo include:
 | `allow_resample=True` | Opt into resampling bands with different native resolutions. |
 | `is_image=False` | Return `sample["mask"]` for mask-style datasets. |
 
-For workflow examples, see [TorchGeo Integration](../how-to/turbocharging-torchgeo.md),
-[ML Training with Splits](../how-to/ml-training-splits.md), and
+For workflow examples, see [TorchGeo Integration](../how-to/torchgeo-integration.md),
+[Enriched Collection Workflows](../how-to/enriched-collection-workflows.md), and
 [Multi-Dataset Training](../how-to/multi-dataset-training.md).
 
 ## xarray, GeoPandas, NumPy, And Point Tables

@@ -47,7 +47,7 @@ If you are new, read these in order:
 
 1. [Getting Started](getting-started/index.md): install Rasteret and build your first collection.
 2. [Concepts](explanation/concepts.md): understand the collection model and why Rasteret is not just another raster reader.
-3. [Transitioning from Rasterio](how-to/transitioning-from-rasterio.md): see the side-by-side workflow shift if you already know rasterio or GDAL.
+3. [Migrating from Rasterio](how-to/migrating-from-rasterio.md): see the side-by-side workflow shift if you already know rasterio or GDAL.
 4. [How-To Guides](how-to/index.md): choose a task guide for Parquet/Arrow ingest, enrichment, point sampling, TorchGeo, catalog, or cloud access.
 5. [Tutorials](tutorials/index.md): follow notebook walkthroughs after the core ideas are familiar.
 

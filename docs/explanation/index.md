@@ -12,7 +12,7 @@ Practical workflow lens:
 - [Schema Contract](schema-contract.md): column guarantees for contributors building ingest drivers
 - [Ecosystem Comparison](interop.md): how Rasteret relates to TorchGeo, xarray, rasterio, and similar tools
 - [Benchmarks](benchmark.md): apples-to-apples performance comparison
-- [TorchGeo Benchmark](../tutorials/05_torchgeo_comparison.ipynb): interactive notebook - Rasteret vs TorchGeo native, side-by-side
+- [TorchGeo Benchmark: Rasteret vs Native Rasterio](../tutorials/05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb): interactive notebook - Rasteret vs TorchGeo native, side-by-side
 
 Every design choice here (Parquet indexes, open catalog descriptors, decoupled
 storage backends) is made to keep Rasteret interoperable and community-driven.

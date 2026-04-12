@@ -1,4 +1,4 @@
-# Build From Parquet Or Arrow Tables
+# Build From Parquet And Arrow Tables
 
 Use `build_from_table()` when you already have a table of raster records and
 want Rasteret to turn it into a reusable collection.
@@ -58,7 +58,8 @@ collection = rasteret.build_from_table(
 )
 ```
 
-`build_from_table()` accepts direct file/cloud-storage paths to parquet/arrow tables and Arrow-compatible in-memory objects
+`build_from_table()` accepts direct file/cloud-storage paths to Parquet/Arrow
+tables and Arrow-compatible in-memory objects.
 
 ## Build From DuckDB
 

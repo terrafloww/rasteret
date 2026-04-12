@@ -55,7 +55,7 @@ TorchGeo dataset composition behavior (`dataset1 & dataset2`, `dataset1 | datase
 - `time_series=False` follows TorchGeo merge semantics: overlapping records for the requested slice are mosaicked on the query grid with first-record precedence.
 - Rasteret requires all requested bands to share the same resolution for TorchGeo sampling. To opt into resampling bands onto a common grid, pass `allow_resample=True` to `Collection.to_torchgeo_dataset(...)`.
 
-For train/val/test splits, see [ML Training with Splits](../../how-to/ml-training-splits.md).
+For train/val/test splits, see [Enriched Collection Workflows](../../how-to/enriched-collection-workflows.md).
 
 ::: rasteret.integrations.torchgeo.RasteretGeoDataset
     options:

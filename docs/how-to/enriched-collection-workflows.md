@@ -1,4 +1,4 @@
-# Enriched Parquet Workflows
+# Enriched Collection Workflows
 
 Rasteret Collections are Arrow/Parquet metadata tables. That means you can add
 experiment metadata into Collection and do lots of planning/filtering on the raster records without moving the pixels
@@ -54,9 +54,13 @@ Wrap the enriched table back as a collection:
 ```python
 experiment = rasteret.as_collection(
     frame,
-    name="bangalore-experiment-v1"
+    name="bangalore-experiment-v1",
+    data_source=collection.data_source,
 )
 ```
+
+Passing `data_source` preserves source-specific band mapping and avoids relying
+on schema metadata that table engines may not round-trip exactly.
 
 ## Join External GIS Data With DuckDB
 
@@ -118,6 +122,29 @@ arr = train.get_numpy(
     bands=["B04", "B08"],
 )
 ```
+
+## Use Splits And Labels With TorchGeo
+
+If the enriched collection has `split` and `label` columns, pass them into the
+TorchGeo adapter:
+
+```python
+train_dataset = experiment.to_torchgeo_dataset(
+    bands=["B02", "B03", "B04", "B08"],
+    split="train",
+    label_field="label",
+    chip_size=256,
+)
+
+val_dataset = experiment.to_torchgeo_dataset(
+    bands=["B02", "B03", "B04", "B08"],
+    split="val",
+    label_field="label",
+    chip_size=256,
+)
+```
+
+Everything after dataset creation is standard TorchGeo and PyTorch.
 
 Point sampling works the same way, use a geometry column that contains points:
 

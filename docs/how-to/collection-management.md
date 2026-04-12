@@ -5,7 +5,7 @@ build/import, inspect, export, reload, filter, or delete.
 
 For first-time data ingest details, use:
 
-- [Build from Parquet](build-from-parquet.md) for external Parquet, GeoParquet,
+- [Build from Parquet and Arrow Tables](build-from-tables.md) for external Parquet, GeoParquet,
   DuckDB, Polars, or Arrow record tables.
 - [Dataset Catalog](dataset-catalog.md) for built-in dataset IDs and local
   catalog registration.
@@ -209,4 +209,4 @@ arr = clear.get_numpy(
 ```
 
 For labels, splits, AOI joins, and other experiment metadata, see
-[Enriched Parquet Workflows](enriched-parquet-workflows.md).
+[Enriched Collection Workflows](enriched-collection-workflows.md).

@@ -1,6 +1,8 @@
-# Transitioning From Rasterio
+# Migrating From Rasterio
 
-With Rasteret we see up to **20x faster reads** from remote COGs compared to manual `rasterio.open()` loops.
+Rasteret changes the shape of remote COG workflows: build a reusable
+collection, filter metadata first, then read only the pixels you need. For the
+measured TorchGeo/rasterio comparison, see [Benchmarks](../explanation/benchmark.md).
 
 ## The Mental Shift
 
@@ -119,7 +121,7 @@ them as columns in the collection table. Rasteret keeps pixels in the COGs, so
 metadata joins can happen in Arrow-native tools without rewriting raster data.
 
 For the full GeoPandas -> DuckDB -> Rasteret pattern, see
-[Enriched Parquet Workflows](enriched-parquet-workflows.md).
+[Enriched Collection Workflows](enriched-collection-workflows.md).
 
 ## When To Use Which Tool
 

@@ -131,15 +131,14 @@ nav:
   - Home: index.md
   - Getting Started: getting-started/index.md
   - Concepts: explanation/concepts.md
-  - Transitioning from Rasterio: how-to/transitioning-from-rasterio.md
+  - Migrating from Rasterio: how-to/migrating-from-rasterio.md
   - How-To Guides:
     - how-to/index.md
-    - TorchGeo Integration: how-to/turbocharging-torchgeo.md
-    - Build from Parquet: how-to/build-from-parquet.md
+    - TorchGeo Integration: how-to/torchgeo-integration.md
+    - Build from Parquet and Arrow Tables: how-to/build-from-tables.md
     - Point Sampling and Masking: how-to/point-sampling-and-masking.md
     - AEF Embeddings: how-to/aef-embeddings.md
-    - Enriched Parquet Workflows: how-to/enriched-parquet-workflows.md
-    - ML Training with Splits: how-to/ml-training-splits.md
+    - Enriched Collection Workflows: how-to/enriched-collection-workflows.md
     - Multi-Dataset Training: how-to/multi-dataset-training.md
     - Collection Management: how-to/collection-management.md
     - Dataset Catalog: how-to/dataset-catalog.md
@@ -147,11 +146,10 @@ nav:
   - Tutorials:
     - tutorials/index.md
     - "Quickstart": tutorials/01_quickstart.ipynb
-    - TorchGeo Integration: tutorials/02_torchgeo_09_accelerator.ipynb
-    - Build from Parquet Record Tables: tutorials/06_non_stac_cog_collections.ipynb
-    - Parquet-first Filtering: tutorials/03_parquet_first_filtering.ipynb
-    - Configuring Custom Collections: tutorials/04_custom_cloud_and_bands.ipynb
-    - TorchGeo Benchmark: tutorials/05_torchgeo_comparison.ipynb
+    - Using Rasteret with TorchGeo: tutorials/02_using_rasteret_with_torchgeo.ipynb
+    - Build from Parquet and Arrow Tables: tutorials/06_build_from_parquet_and_arrow_tables.ipynb
+    - Work with Collection Tables: tutorials/03_work_with_collection_tables.ipynb
+    - Custom Datasets with Rasteret: tutorials/04_custom_datasets_with_rasteret.ipynb
   - Explanation:
     - explanation/index.md
     - Architecture: explanation/architecture.md
@@ -160,6 +158,7 @@ nav:
     - Schema Contract: explanation/schema-contract.md
     - Ecosystem Comparison: explanation/interop.md
     - Benchmarks: explanation/benchmark.md
+    - "TorchGeo Benchmark: Rasteret vs Native Rasterio": tutorials/05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb
   - API Reference:
     - reference/index.md
     - Entry Points: reference/rasteret.md

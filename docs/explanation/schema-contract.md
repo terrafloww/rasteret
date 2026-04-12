@@ -122,8 +122,8 @@ You can add columns beside Rasteret's columns. Common examples:
 | `eo:cloud_cover` | Scene-level cloud percentage from STAC or your own metadata. |
 | `quality_flag` | Custom filtering or audit value. |
 
-For examples, see [Enriched Parquet Workflows](../how-to/enriched-parquet-workflows.md)
-and [ML Training with Splits](../how-to/ml-training-splits.md).
+For examples, see
+[Enriched Collection Workflows](../how-to/enriched-collection-workflows.md).
 
 ## Arrow And GeoArrow Interop
 

@@ -6,7 +6,7 @@ Treat the exact numbers as environment-specific; the useful signal is where
 time is spent in each workflow.
 
 The TorchGeo comparison follows the workflow in
-[`docs/tutorials/05_torchgeo_comparison.ipynb`](../tutorials/05_torchgeo_comparison.ipynb).
+[`docs/tutorials/05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb`](../tutorials/05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb).
 
 **Environment:** Ubuntu Linux, Python 3.13, us-west-2 EC2 instance.
 
@@ -117,10 +117,10 @@ benchmark asset set.
 
 ```bash
 # Fresh run
-uv run python -m nbconvert --execute docs/tutorials/05_torchgeo_comparison.ipynb
+uv run python -m nbconvert --execute docs/tutorials/05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb
 
 # Immediate re-run
-uv run python -m nbconvert --execute docs/tutorials/05_torchgeo_comparison.ipynb
+uv run python -m nbconvert --execute docs/tutorials/05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb
 ```
 
 Results vary with network conditions, instance placement, cloud credentials,

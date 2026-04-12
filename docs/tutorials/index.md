@@ -8,25 +8,27 @@ If you want the canonical task guide instead of a walkthrough, use the
 
 Recommended sequence:
 
-**Quickstart** -> **TorchGeo Integration** -> **Building from Parquet** ->
-**Parquet-first Filtering** -> **Configuring Custom Collections** ->
-**TorchGeo Benchmark**
+**Quickstart** -> **Using Rasteret with TorchGeo** -> **Build from Parquet and Arrow Tables** ->
+**Work with Collection Tables** -> **Custom Datasets with Rasteret**
 
 | Tutorial | What it walks through |
 |---------|------------------------|
 | [Quickstart](01_quickstart.ipynb) | The first collection build and the basic read paths |
-| [TorchGeo Integration](02_torchgeo_09_accelerator.ipynb) | Using a Rasteret collection inside a TorchGeo workflow |
-| [Building from Parquet](06_non_stac_cog_collections.ipynb) | A notebook walkthrough of `build_from_table()` with real Parquet data |
-| [Parquet-first Filtering](03_parquet_first_filtering.ipynb) | Table-first filtering before raster reads |
-| [Configuring Custom Collections](04_custom_cloud_and_bands.ipynb) | Cloud config, band mapping, and custom collection setup |
-| [TorchGeo Benchmark](05_torchgeo_comparison.ipynb) | Benchmarking Rasteret against a native TorchGeo path |
+| [Using Rasteret with TorchGeo](02_using_rasteret_with_torchgeo.ipynb) | Use a Rasteret collection inside a TorchGeo workflow |
+| [Build from Parquet and Arrow Tables](06_build_from_parquet_and_arrow_tables.ipynb) | A notebook walkthrough of `build_from_table()` with real Parquet data |
+| [Work with Collection Tables](03_work_with_collection_tables.ipynb) | Table-first filtering before raster reads |
+| [Custom Datasets with Rasteret](04_custom_datasets_with_rasteret.ipynb) | Advanced dataset registration, band mapping, URL rewriting, and cloud access |
+
+Benchmark notebook:
+
+- [TorchGeo Benchmark: Rasteret vs Native Rasterio](05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb): benchmark evidence for the [Benchmarks](../explanation/benchmark.md) page.
 
 Useful pairing:
 
 - [Quickstart](01_quickstart.ipynb) pairs well with
   [Getting Started](../getting-started/index.md)
-- [Building from Parquet](06_non_stac_cog_collections.ipynb) pairs well with
-  [Build from Parquet](../how-to/build-from-parquet.md)
+- [Build from Parquet and Arrow Tables](06_build_from_parquet_and_arrow_tables.ipynb) pairs well with
+  [Build from Parquet and Arrow Tables](../how-to/build-from-tables.md)
 
 Some notebooks use live STAC queries and cloud reads. To execute one locally:
 

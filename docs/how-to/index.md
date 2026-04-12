@@ -6,7 +6,7 @@ canonical written guide for it.
 If you are still learning the basic workflow, start with
 [Getting Started](../getting-started/index.md), then
 [Concepts](../explanation/concepts.md), then
-[Transitioning from Rasterio](transitioning-from-rasterio.md).
+[Migrating from Rasterio](migrating-from-rasterio.md).
 
 How-to pages are grouped by the kinds of tasks people usually do next:
 
@@ -18,11 +18,12 @@ How-to pages are grouped by the kinds of tasks people usually do next:
 
 | Guide | Use it when you want to... |
 |-------|----------------------------|
-| [Build from Parquet](build-from-parquet.md) | Create a collection from an existing local or S3 Parquet/GeoParquet source |
+| [Migrating from Rasterio](migrating-from-rasterio.md) | Compare Rasteret's collection-first shape with manual rasterio/STAC loops |
+| [TorchGeo Integration](torchgeo-integration.md) | Use a Rasteret collection as a TorchGeo `GeoDataset` |
+| [Build from Parquet and Arrow Tables](build-from-tables.md) | Create a collection from an existing Parquet, GeoParquet, DuckDB, Polars, or Arrow source |
 | [Point Sampling and Masking](point-sampling-and-masking.md) | Sample point values or control polygon masking behavior |
 | [AEF Embeddings](aef-embeddings.md) | Work with AlphaEarth Foundation embeddings through Rasteret |
-| [Enriched Parquet Workflows](enriched-parquet-workflows.md) | Enrich a collection with workflow metadata such as splits, labels, AOIs, grids, or grouping keys |
-| [ML Training with Splits](ml-training-splits.md) | Add split/label columns and pass them into TorchGeo |
+| [Enriched Collection Workflows](enriched-collection-workflows.md) | Enrich a collection with workflow metadata such as splits, labels, AOIs, grids, or grouping keys |
 | [Multi-Dataset Training](multi-dataset-training.md) | Compose Rasteret-backed TorchGeo datasets or merge xarray outputs |
 | [Collection Management](collection-management.md) | Build, import, inspect, export, reload, and filter collections |
 | [Dataset Catalog](dataset-catalog.md) | Browse built-in datasets and register local dataset IDs |

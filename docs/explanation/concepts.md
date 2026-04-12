@@ -106,4 +106,4 @@ stacking logic yourself.
 | Labels and splits | separate files joined by convention | columns in the collection |
 | Pixel reads | manual windows, threads, stacking | planned byte-range reads |
 
-Next: [Transitioning from Rasterio](../how-to/transitioning-from-rasterio.md)
+Next: [Migrating from Rasterio](../how-to/migrating-from-rasterio.md)
