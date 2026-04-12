@@ -48,9 +48,8 @@ If you are new, read these in order:
 1. [Getting Started](getting-started/index.md): install Rasteret and build your first collection.
 2. [Concepts](explanation/concepts.md): understand the collection model and why Rasteret is not just another raster reader.
 3. [Transitioning from Rasterio](how-to/transitioning-from-rasterio.md): see the side-by-side workflow shift if you already know rasterio or GDAL.
-4. [Build from Parquet](how-to/build-from-parquet.md): bring your own record table or GeoParquet.
-5. [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md): add splits, labels, plots, or AOI metadata without moving pixels.
-6. [Point Sampling and Masking](how-to/point-sampling-and-masking.md): sample points and AOIs with explicit CRS handling.
+4. [How-To Guides](how-to/index.md): choose a task guide for Parquet/Arrow ingest, enrichment, point sampling, TorchGeo, catalog, or cloud access.
+5. [Tutorials](tutorials/index.md): follow notebook walkthroughs after the core ideas are familiar.
 
 ## A Minimal Workflow
 
@@ -131,9 +130,8 @@ It works alongside rasterio, TorchGeo, xarray, DuckDB, GeoPandas, and Arrow
 tools. The goal is to remove repeated cloud-raster plumbing, not hide the
 geospatial model.
 
-## Deeper Reading
+## Reference Material
 
-- [Getting Started](getting-started/index.md): install Rasteret and build your first collection.
 - [Schema Contract](explanation/schema-contract.md): what a Rasteret collection stores.
 - [Design Decisions](explanation/design-decisions.md): why Parquet + COGs instead of moving pixels into Parquet.
 - [Benchmarks](explanation/benchmark.md): cold-start and cloud-read measurements.
@@ -151,14 +149,6 @@ geospatial model.
 
     [:octicons-arrow-right-24: Get started](getting-started/index.md)
 
--   :material-school:{ .lg .middle } **Tutorials**
-
-    ---
-
-    Hands-on notebook walkthroughs.
-
-    [:octicons-arrow-right-24: Tutorials](tutorials/index.md)
-
 -   :material-book-open-variant:{ .lg .middle } **How-To Guides**
 
     ---
@@ -166,6 +156,14 @@ geospatial model.
     Task-focused guides for common Rasteret workflows.
 
     [:octicons-arrow-right-24: How-to guides](how-to/index.md)
+
+-   :material-school:{ .lg .middle } **Tutorials**
+
+    ---
+
+    Hands-on notebook walkthroughs.
+
+    [:octicons-arrow-right-24: Tutorials](tutorials/index.md)
 
 -   :material-api:{ .lg .middle } **API Reference**
 
