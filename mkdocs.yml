@@ -148,7 +148,7 @@ nav:
     - tutorials/index.md
     - "Quickstart": tutorials/01_quickstart.ipynb
     - TorchGeo Integration: tutorials/02_torchgeo_09_accelerator.ipynb
-    - Building from Parquet: tutorials/06_non_stac_cog_collections.ipynb
+    - Build from Parquet Record Tables: tutorials/06_non_stac_cog_collections.ipynb
     - Parquet-first Filtering: tutorials/03_parquet_first_filtering.ipynb
     - Configuring Custom Collections: tutorials/04_custom_cloud_and_bands.ipynb
     - TorchGeo Benchmark: tutorials/05_torchgeo_comparison.ipynb
