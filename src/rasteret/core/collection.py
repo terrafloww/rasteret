@@ -2726,7 +2726,8 @@ class Collection:
         -------
         geopandas.GeoDataFrame
             Band arrays in native COG dtype. Each row is a
-            geometry-record pair with pixel data as columns.
+            geometry-record pair with pixel data and the read-window
+            transform as columns.
         """
         self._validate_bands(bands)
         if backend is None:

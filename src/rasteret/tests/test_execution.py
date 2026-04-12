@@ -728,9 +728,11 @@ class TestRasterAccessorGdfCrs:
         geometries = coerce_to_geoarrow(geom)
 
         async def _ok(*_args, **_kwargs):
+            from affine import Affine
+
             return {
                 "data": np.ones((1, 1), dtype=np.uint8),
-                "transform": None,
+                "transform": Affine(1.0, 0.0, 10.0, 0.0, -1.0, 20.0),
                 "band": "B04",
             }
 
@@ -749,6 +751,8 @@ class TestRasterAccessorGdfCrs:
 
         assert isinstance(out, gpd.GeoDataFrame)
         assert str(out.crs) == "EPSG:3857"
+        assert "transform" in out.columns
+        assert out["transform"].iloc[0].c == 10.0
         bounds = out.geometry.iloc[0].bounds
         # Rough sanity: degrees->meters for 1 degree at equator (~111km).
         assert bounds[2] > 100_000

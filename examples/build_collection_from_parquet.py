@@ -26,7 +26,7 @@ import pyarrow.dataset as ds
 
 import rasteret
 
-DEFAULT_MAXAR_MANIFEST = (
+DEFAULT_MAXAR_RECORD_TABLE = (
     "s3://us-west-2.opendata.source.coop/maxar/maxar-opendata/maxar-opendata.parquet"
 )
 
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
         "--record-table",
         "--manifest-url",
         dest="record_table",
-        default=DEFAULT_MAXAR_MANIFEST,
+        default=DEFAULT_MAXAR_RECORD_TABLE,
         help=(
             "Remote Parquet record table URL/path (e.g. s3://.../items.parquet). "
             "Defaults to Source Cooperative Maxar OpenData record table. "

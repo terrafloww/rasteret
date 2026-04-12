@@ -593,7 +593,7 @@ def get_collection_gdf(
     -------
     geopandas.GeoDataFrame
         Band arrays in native COG dtype. Each row is a geometry-record
-        pair with pixel data as columns.
+        pair with pixel data and the read-window transform as columns.
     """
 
     def _merge_gdfs(dfs: list[gpd.GeoDataFrame]) -> gpd.GeoDataFrame:

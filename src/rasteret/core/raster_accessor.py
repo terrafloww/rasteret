@@ -1470,6 +1470,7 @@ class RasterAccessor:
                         "geometry": geom_obj,
                         "band": band_result["band"],
                         "data": band_result["data"],
+                        "transform": band_result.get("transform"),
                     }
                 )
 

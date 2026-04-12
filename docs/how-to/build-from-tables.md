@@ -6,7 +6,7 @@ want Rasteret to turn it into a reusable collection.
 This is the right path for:
 
 - STAC GeoParquet exports
-- a Parquet/Arrow manifest you created yourself
+- a Parquet/Arrow record table you created yourself
 - a DuckDB relation or PyArrow table in memory
 - private drone, satellite, or derived COG catalogs
 

@@ -26,7 +26,7 @@ Prerequisites:
 | 04 | `04_custom_datasets_with_rasteret.ipynb` | Advanced dataset registration, band mapping, URL rewriting, and cloud access |
 | 05 | `05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb` | **Benchmark** (Explanation section in docs): native TorchGeo/rasterio vs Rasteret-backed TorchGeo |
 | 06 | `06_build_from_parquet_and_arrow_tables.ipynb` | `build_from_table()` with Source Cooperative Maxar data, DuckDB exploration, export/share |
-| 07 | `07_aef_similarity_search.ipynb` | Similarity search notebook derived from GeoPython and GEE community tutorials, uses HuggingFace published Rasteret AEF collection |
+| 07 | `07_aef_similarity_search.ipynb` | Similarity search notebook derived from GeoPython and GEE community tutorials, uses the published Source Cooperative-backed AEF Rasteret collection |
 | 08 | `08_aef_fire_lancedb_torchgeo.ipynb` | AEF fire-patch retrieval with `sample_points()`, `to_torchgeo_dataset()`, using arrow compatible tools LanceDB, Lonboard for viz and Source Coop published Rasteret AEF collection |
 
 ## Running

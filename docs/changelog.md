@@ -46,6 +46,12 @@
 - **Benchmark docs now include the README evidence set**: the benchmark page
   now includes the Google Earth Engine time-series table and the supporting
   benchmark/cost/scaling images from the docs asset set.
+- **AEF similarity notebook clarity**: renamed intermediate variables by access
+  path, removed the DuckDB pivot from the reference-vector step, and made each
+  approach produce comparable match polygons.
+- **Record table terminology cleanup**: refreshed Parquet/Arrow table examples
+  to prefer "record table" wording while keeping `--manifest-url` as a legacy
+  CLI alias.
 
 ### Fixed
 
@@ -54,6 +60,9 @@
   capsules before applying compatible PyArrow casts.
 - Fixed mixed-raster-CRS Arrow export so raster CRS is not incorrectly written
   as geometry column CRS.
+- **GeoDataFrame raster transforms**: `get_gdf(...)` rows now include the
+  read-window `transform`, making record-wise array outputs easier to
+  vectorize or map without reconstructing georeferencing in user code.
 
 ### Tested
 

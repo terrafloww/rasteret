@@ -16,7 +16,7 @@ For step-by-step learning, see the [tutorial notebooks](../notebooks/).
 - `build_collection_from_parquet.py`: Build a Collection from any Parquet
   with COG URLs: Source Cooperative exports, STAC GeoParquet, or custom
   catalogs. Supports Arrow predicate/projection pushdown.
-  CLI-scriptable with `--manifest-url`.
+  CLI-scriptable with `--record-table` (`--manifest-url` remains as a legacy alias).
 
 ## Requester-pays / Landsat
 
