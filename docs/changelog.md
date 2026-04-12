@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.3.11
+
+### Added
+
+- **Native Arrow / GeoArrow Collection export**: `Collection` now implements Arrow
+  PyCapsule protocol surfaces for stream, array, and schema export, allowing
+  Arrow-compatible consumers to read collection metadata directly.
+- **GeoArrow WKB footprint metadata**: Rasteret now exports the `geometry`
+  footprint column as `geoarrow.wkb` with CRS metadata set to `OGC:CRS84`.
+- **Row-level raster CRS sidecar**: enriched and normalized collections now carry
+  an Arrow-friendly `crs` string sidecar such as `EPSG:32632`, while preserving
+  existing `proj:epsg` for Rasteret runtime compatibility.
+- **`Collection.crs`**: returns unique row-level raster CRS codes as strings,
+  using `crs` when present and falling back to legacy `proj:epsg`.
+- **Arrow inputs for table builders**: `build_from_table(...)` now accepts
+  Arrow-compatible in-memory objects and PyCapsule producers, including
+  DuckDB/Polars-style Arrow stream exporters.
+
+### Changed
+
+- **Footprint CRS and raster CRS are now separated in Arrow exports**:
+  GeoArrow metadata on `geometry` describes the footprint geometry CRS
+  (`OGC:CRS84`), while raster-native CRS remains row-level metadata in `crs`
+  and `proj:epsg`.
+- **COG enrichment writes consistent CRS sidecars**: when parsed GeoTIFF header
+  CRS is used to backfill CRS metadata, Rasteret now keeps `crs` and `proj:epsg`
+  aligned.
+- **Hugging Face streaming collections participate in Arrow export**:
+  HF-backed collections now expose enriched Arrow schemas and batches instead
+  of appearing empty to Arrow consumers.
+- **Band/cloud read errors are more actionable**: unresolved band requests and
+  cloud read failures now include available asset/metadata keys, data-source
+  mapping context, and provider-specific credential/requester-pays hints.
+- **Point sampling output schema is leaner**: `sample_points()` no longer emits
+  `cloud_cover` by default, keeping the result focused on point, record, band,
+  value, and CRS fields.
+- **Docs now follow a reader-first path**: the MkDocs nav now keeps
+  Getting Started, Concepts, and Transitioning from Rasterio as the first
+  linear path, with task-focused How-To Guides before notebook Tutorials.
+- **How-to and explanation docs were consolidated**: table/Arrow workflows,
+  collection management, catalog/cloud access, point sampling, TorchGeo,
+  AEF, schema, interop, and benchmark pages were tightened around the current
+  Collection APIs and CRS model.
+- **Benchmark docs now include the README evidence set**: the benchmark page
+  now includes the Google Earth Engine time-series table and the supporting
+  benchmark/cost/scaling images from the docs asset set.
+
+### Fixed
+
+- Fixed Arrow single-batch export for empty collections with non-empty schemas.
+- Fixed requested-schema PyCapsule handling by importing requested Arrow schema
+  capsules before applying compatible PyArrow casts.
+- Fixed mixed-raster-CRS Arrow export so raster CRS is not incorrectly written
+  as geometry column CRS.
+
+### Tested
+
+- Full test suite during Arrow interop validation: `364 passed, 42 skipped`.
+- Verified Arrow interop with PyArrow table/reader/capsule paths.
+- Verified `GeoDataFrame.from_arrow(collection)` reads footprint geometry as
+  `OGC:CRS84`.
+- Verified DuckDB 1.5.1 imports geometry as `GEOMETRY('OGC:CRS84')` and keeps
+  `crs` as `VARCHAR`.
+- Verified LanceDB 0.30.2 preserves `geoarrow.wkb` and the `crs` sidecar.
+- Verified docs with `uv run --extra docs mkdocs build --strict -d /tmp/rasteret-mkdocs-check`.
+
 ## v0.3.10
 
 ### Changed
@@ -341,7 +407,7 @@
   and COG band metadata structs without re-running ingest, enrichment,
   or persistence. Use this after enriching a Collection's table with
   DuckDB, Polars, PyArrow, or any other tool.
-  See [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md).
+  See [Enriched Collection Workflows](how-to/enriched-collection-workflows.md).
 
 ### Changed
 
@@ -403,7 +469,7 @@
 - **Enriched Parquet workflows**: append arbitrary columns (splits, labels,
   AOI polygons, model scores) to a Collection's Parquet, query with
   DuckDB/PyArrow, and fetch pixels for matching rows on demand. See
-  [Enriched Parquet Workflows](how-to/enriched-parquet-workflows.md).
+  [Enriched Collection Workflows](how-to/enriched-collection-workflows.md).
 - **Major TOM on-the-fly**: example workflow rebuilding Major TOM-style
   patch-grid semantics from source Sentinel-2 COGs instead of
   payload-in-Parquet. Benchmarked 3.9-6.5x faster than HF `datasets`
