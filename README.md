@@ -166,6 +166,9 @@ rasteret datasets list
 rasteret datasets info aef/v1-annual
 ```
 
+To make your own dataset ID for a reusable local collection or Parquet record
+table, see [Register A Local Collection into Dataset Catalog](https://terrafloww.github.io/rasteret/how-to/dataset-catalog/#register-a-local-collection-into-dataset-catalog).
+
 ## Performance
 
 Rasteret is 10x to 20x faster than rasterio/GDAL

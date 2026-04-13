@@ -115,7 +115,7 @@ Use this when you want to check bands, date range, source coverage, or auth
 metadata. If a collection was built from an unregistered table, use
 `collection.describe()` instead.
 
-## Register A Local Collection
+## Register A Local Collection into Dataset Catalog
 
 If you have a local exported collection or Parquet record table that you want to
 reuse by dataset ID, register it:
