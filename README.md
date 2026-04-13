@@ -1,12 +1,12 @@
 <h1 align="center">🛰️ Rasteret</h1>
 
 <p align="center">
-  <strong>The AI practitioner's multiplier for cloud-native satellite data.</strong><br>
-  <em>A high-performance rasterio/GDAL alternative for scaleable ML workflows.</em>
+  <strong>The AI practitioner's multiplier for cloud-native geospatial images.</strong><br>
+  <em>Rasteret is a 20x+ faster rasterio/GDAL alternative for ML workflows.</em>
 </p>
 <p align="center">
-Rasteret helps you manage and read massive satellite imagery collections with zero friction. <br>
-It provides a 20x faster "drop-in" backend for TorchGeo, interops with all Arrow-based tools like DuckDB, Polars, while maintaining xarray, and NumPy support.
+It helps you manage and read massive geospatial imagery collections. <br>
+Provides a fast "drop-in" backend for TorchGeo, Xarray, and is Arrow native across DuckDB, Polars.
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@ It provides a 20x faster "drop-in" backend for TorchGeo, interops with all Arrow
 
 Geospatial data science is often 80% "plumbing." You spend hours writing STAC reading loops, manual `ThreadPoolExecutor`, and fragile CRS-alignment logic just to get a batch of pixels for your model.
 
-**Rasteret turns those 80% into a single line of code.**
+**Rasteret turns those 80% into few lines of code.**
 
 It separates the **Control Plane** (managing your scenes, labels, and splits in a local Parquet index) from the **Data Plane** (streaming pixels directly from cloud COGs).
 
@@ -38,26 +38,15 @@ It separates the **Control Plane** (managing your scenes, labels, and splits in 
 6. Manage `ThreadPoolExecutor` manually
 7. Manually stack results and align CRS
 
-**The Rasteret Way (3 lines of robust code)**:
+**The Rasteret Way**:
 ```python
 import rasteret
 
-# 1. Load or Build your collection
+# 1. Load your built collections
 collection = rasteret.load("my_s2_experiment")
 
 # 2. Query like a Table: "Give me the training scenes with <10% clouds"
 filtered = collection.subset(split="train", cloud_cover_lt=10)
-# OR send Collection to DuckDB or Polars for enriching with your own data and bring it back to Rasteret
-filtered = duckdb.sql("""
-SELECT
-    c.*,
-    p.plot_id,
-    p.is_target
-FROM collection c
-JOIN plots p ON ST_Intersects(c.geometry, p.geometry)
-WHERE p.is_target = true AND c.cloud_cover_lt < 10
-""")
-filtered = rasteret.as_collection(filtered)
 
 # 3. Batch Read: "Fetch aligned pixels for all geometries in the filtered collection"
 data = filtered.get_numpy(geometries=filtered.geometry, bands=["B04", "B08"])
@@ -73,8 +62,6 @@ data = filtered.get_numpy(geometries=filtered.geometry, bands=["B04", "B08"])
 - **🛠️ Zero-Config Throughput**: Automatic cloud storage presigning with `Obstore`, and custom async I/O handles the networking so you don't have to.
 
 ## Performance
-
-Rasteret's claims are backed by rigorous, reproducible benchmarks. We measure across three dimensions: cold-start latency, cloud-native scale, and comparison against legacy "data-inside-parquet" patterns.
 
 ### 1. Cold-start comparison with TorchGeo
 Same AOIs, same scenes, same sampler, same DataLoader. Rasteret eliminates the "cold start tax" by caching IFD headers in the local Parquet index.
@@ -111,19 +98,23 @@ Recent "images-inside-Parquet" approaches (like MajorTOM) try to store image byt
 
 *All numbers measured on AWS us-west-2 4CPU machine (same region as data) vs. cold-start GDAL.*
 
+**Cold start measurement is important because that's the true production scenario, across new cloud VMs,
+new notebook reruns, new PyTorch Dataloaders and Epochs, new Docker envs in K8s and more.**
+
 ---
 
 ## Technical Deep Dives
 
 For the full architectural rationale, methodology, and reproducibility scripts, see:
 
-- [**Full Benchmarks Guide**](https://terrafloww.github.io/rasteret/explanation/benchmark/): Methodology and results.
 - [**Design Decisions**](https://terrafloww.github.io/rasteret/explanation/design-decisions.md): Why we chose Parquet + COGs
 - [**Schema Contract**](https://terrafloww.github.io/rasteret/explanation/schema-contract/): The internal anatomy of a Collection.
 
 ```text
-STAC API / GeoParquet  -->  Parquet Collection  -->  Tile-level byte reads
-       (once)                  (queryable)             (no GDAL hot path)
+STAC API / GeoParquet  -->  Parquet Collection  -->  Read pixels into Torch/Xarray/DF and
+                                                     share data across tools with Arrow
+
+       (once)                  (queryable)             (no GDAL in read path)
 ```
 
 ## Quick Start
@@ -139,16 +130,24 @@ collection = rasteret.build(
     bbox=(77.5, 12.9, 77.7, 13.1),
     date_range=("2024-01-01", "2024-06-30")
 )
+
+# OR
+collection = rasteret.build_from_table(
+    "path/to/my/parquet-with-cog-urls-inside.parquet",
+    name="s2_training",
+    bbox=(77.5, 12.9, 77.7, 13.1),
+    date_range=("2024-01-01", "2024-06-30")
+)
 ```
 
 ### 2. Turbocharge your ML (TorchGeo)
-Rasteret provides a high-performance backend that honors the `GeoDataset` contract.
+Rasteret provides a high-performance backend that honors the TorchGeo `GeoDataset` contract.
 
 ```python
 from torch.utils.data import DataLoader
 from torchgeo.samplers import RandomGeoSampler
 
-# Same API as TorchGeo, much faster pixel pipe
+# TorchGeo adapter has same behavior but 20x faster data movement
 dataset = collection.to_torchgeo_dataset(bands=["B04", "B08"], chip_size=256)
 
 sampler = RandomGeoSampler(dataset, size=256, length=100)
