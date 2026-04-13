@@ -602,6 +602,36 @@ class Collection:
         self.dataset = _open_parquet_dataset(self._collection_path)
         return self.dataset
 
+    def _source_part_data_dataset(self, source_parts: set[str]) -> ds.Dataset | None:
+        if not source_parts or self._collection_path is None:
+            return None
+
+        filesystem = self._record_index_filesystem
+        base = self._collection_path.rstrip("/")
+        if filesystem is not None:
+            base = _filesystem_source_path(base).rstrip("/")
+
+        paths: list[str] = []
+        for part in sorted(source_parts):
+            part_is_absolute = _is_cloud_uri(part) or Path(part).is_absolute()
+            if filesystem is not None:
+                path = _filesystem_source_path(part) if _is_cloud_uri(part) else part
+            else:
+                path = part
+            if (
+                not part_is_absolute
+                and not _is_cloud_uri(path)
+                and not Path(path).is_absolute()
+            ):
+                path = f"{base}/{path}"
+            paths.append(path)
+
+        return ds.dataset(
+            paths,
+            format="parquet",
+            filesystem=filesystem,
+        )
+
     def _record_index_required_raw_columns(
         self, columns: list[str] | None = None
     ) -> list[str] | None:
@@ -723,14 +753,17 @@ class Collection:
         )
 
     def _filtered_data_dataset(self) -> ds.Dataset | None:
-        dataset = self._data_dataset()
-        if dataset is None:
-            return None
         if not self._has_record_index():
+            dataset = self._data_dataset()
+            if dataset is None:
+                return None
             if self._wide_filter_expr is not None:
                 return dataset.filter(self._wide_filter_expr)
             return dataset
         if self._record_index_filter_expr is None:
+            dataset = self._data_dataset()
+            if dataset is None:
+                return None
             return (
                 dataset.filter(self._wide_filter_expr)
                 if self._wide_filter_expr is not None
@@ -743,14 +776,20 @@ class Collection:
             raw_columns.append("source_part")
         raw_index = self._read_raw_record_index_table(raw_columns)
         if raw_index.num_rows == 0:
+            dataset = self._data_dataset()
+            if dataset is None:
+                return None
             return dataset.filter(ds.field("id").isin(pa.array([], type=pa.string())))
 
         prepared = self._prepare_record_index_table(columns=["id"], table=raw_index)
         ids = prepared.column("id").combine_chunks()
         if len(ids) == 0:
+            dataset = self._data_dataset()
+            if dataset is None:
+                return None
             return dataset.filter(ds.field("id").isin(pa.array([], type=pa.string())))
 
-        filtered_dataset = dataset
+        filtered_dataset: ds.Dataset | None = None
         if "source_part" in raw_index.column_names:
             requested_parts = {
                 value
@@ -758,20 +797,11 @@ class Collection:
                 if isinstance(value, str) and value
             }
             if requested_parts:
-                fragment_paths = [
-                    fragment.path
-                    for fragment in dataset.get_fragments()
-                    if any(
-                        fragment.path == part or fragment.path.endswith("/" + part)
-                        for part in requested_parts
-                    )
-                ]
-                if fragment_paths:
-                    filtered_dataset = ds.dataset(
-                        fragment_paths,
-                        format="parquet",
-                        filesystem=getattr(dataset, "filesystem", None),
-                    )
+                filtered_dataset = self._source_part_data_dataset(requested_parts)
+        if filtered_dataset is None:
+            filtered_dataset = self._data_dataset()
+            if filtered_dataset is None:
+                return None
         final_filter = ds.field("id").isin(ids)
         if (
             self._wide_filter_expr is None
@@ -1678,7 +1708,15 @@ class Collection:
         """
         required_fields = {"id", "datetime", "geometry", "assets", "bbox"}
 
-        schema = self._schema
+        batch_source: Collection = self
+        if self.dataset is not None or self._has_record_index():
+            scan_dataset = self._filtered_data_dataset()
+            if scan_dataset is None:
+                return
+            batch_source = self._view(scan_dataset, drop_record_index=True)
+            schema = scan_dataset.schema
+        else:
+            schema = self._schema
         if schema is None:
             return
 
@@ -1717,13 +1755,6 @@ class Collection:
                 else band_metadata_cols
             ),
         ]
-
-        batch_source: Collection = self
-        if self.dataset is not None:
-            scan_dataset = self._filtered_data_dataset()
-            if scan_dataset is None:
-                return
-            batch_source = self._view(scan_dataset, drop_record_index=True)
 
         for batch in batch_source._iter_record_batches(columns=scan_cols):
             ids = batch.column(batch.schema.get_field_index("id"))

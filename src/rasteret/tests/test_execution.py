@@ -1997,7 +1997,10 @@ class TestPointSampling:
         )
 
         assert table.num_rows == 2
-        assert collection.last_filters == {"bbox": (1.0, 2.0, 10.0, 20.0)}
+        assert "geometries" in collection.last_filters
+        assert collection.last_filters["geometries"].type.extension_name.endswith(
+            "point"
+        )
         assert raster_left.calls[0]["point_indices"] == [0]
         assert raster_right.calls[0]["point_indices"] == [1]
         assert raster_empty.calls == []

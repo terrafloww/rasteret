@@ -874,9 +874,11 @@ def test_load_dataset_id_uses_source_part_to_narrow_data_fragments(
         )
         DatasetRegistry.register(descriptor)
         captured_paths: list[str] = []
+        captured_sources: list[object] = []
         original_dataset = ds.dataset
 
         def _capture_dataset(source, *args, **kwargs):
+            captured_sources.append(source)
             if isinstance(source, list):
                 captured_paths[:] = list(source)
             return original_dataset(source, *args, **kwargs)
@@ -895,6 +897,7 @@ def test_load_dataset_id_uses_source_part_to_narrow_data_fragments(
 
     assert len(captured_paths) == 1
     assert captured_paths[0].endswith("part-00000.parquet")
+    assert str(data_root) not in {str(source) for source in captured_sources}
 
 
 def test_build_geoparquet_descriptor_uses_struct_bbox_when_no_bbox_columns(

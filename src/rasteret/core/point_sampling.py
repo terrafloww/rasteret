@@ -151,7 +151,17 @@ def get_collection_point_samples(
             intersected_bbox = intersect_bbox(sample_filters.get("bbox"), point_bbox)
             if sample_filters.get("bbox") is not None and intersected_bbox is None:
                 return empty_samples()
-            sample_filters["bbox"] = intersected_bbox or point_bbox
+            if sample_filters.get("bbox") is not None:
+                sample_filters["bbox"] = intersected_bbox
+            elif sample_filters.get("geometries") is None:
+                import geoarrow.pyarrow as ga
+
+                sample_filters["geometries"] = ga.make_point(
+                    pa.array(planned_point_xs, type=pa.float64()),
+                    pa.array(planned_point_ys, type=pa.float64()),
+                )
+            else:
+                sample_filters["bbox"] = point_bbox
 
         selected_collection = (
             collection.subset(**sample_filters) if sample_filters else collection
