@@ -17,18 +17,13 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - run: uv python install 3.12
-
-      - name: Install pypistats
-        run: uv pip install pypistats --system
-
       - name: Collect daily stats
         run: |
           mkdir -p data-repo/data/pypi
 
           # Overall daily downloads (last 180 days window)
-          pypistats overall rasteret --json --mirrors | \
-            python -c "
+          uvx pypistats overall rasteret --json --mirrors with | \
+            python3 -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
           f = 'data-repo/data/pypi/overall.csv'
@@ -47,8 +42,8 @@ jobs:
           "
 
           # By Python version
-          pypistats python_minor rasteret --json --mirrors | \
-            python -c "
+          uvx pypistats python_minor rasteret --json | \
+            python3 -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
           f = 'data-repo/data/pypi/by_python.csv'
@@ -67,8 +62,8 @@ jobs:
           "
 
           # By system (Linux, Windows, macOS)
-          pypistats system rasteret --json --mirrors | \
-            python -c "
+          uvx pypistats system rasteret --json | \
+            python3 -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
           f = 'data-repo/data/pypi/by_system.csv'

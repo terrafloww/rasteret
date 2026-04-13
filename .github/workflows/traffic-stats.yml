@@ -19,6 +19,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DATA_REPO_PAT }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Set DATA_REPO_PAT to a PAT with write access to terrafloww/rasteret, or a fine-grained PAT with repository Administration: read."
+            exit 1
+          fi
+
           mkdir -p data-repo/data/github
 
           REPO="terrafloww/rasteret"
