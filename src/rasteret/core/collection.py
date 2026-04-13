@@ -767,7 +767,11 @@ class Collection:
                     )
                 ]
                 if fragment_paths:
-                    filtered_dataset = ds.dataset(fragment_paths, format="parquet")
+                    filtered_dataset = ds.dataset(
+                        fragment_paths,
+                        format="parquet",
+                        filesystem=getattr(dataset, "filesystem", None),
+                    )
         final_filter = ds.field("id").isin(ids)
         if (
             self._wide_filter_expr is None
@@ -1719,7 +1723,7 @@ class Collection:
             scan_dataset = self._filtered_data_dataset()
             if scan_dataset is None:
                 return
-            batch_source = self._view(scan_dataset)
+            batch_source = self._view(scan_dataset, drop_record_index=True)
 
         for batch in batch_source._iter_record_batches(columns=scan_cols):
             ids = batch.column(batch.schema.get_field_index("id"))
