@@ -1,12 +1,7 @@
-<h1 align="center">🛰️ Rasteret</h1>
+<h1 align="center">Rasteret</h1>
 
 <p align="center">
-  <strong>The AI practitioner's multiplier for cloud-native geospatial images.</strong><br>
-  <em>Rasteret is a 20x+ faster rasterio/GDAL alternative for ML workflows.</em>
-</p>
-<p align="center">
-It helps you manage and read massive geospatial imagery collections. <br>
-Provides a fast "drop-in" backend for TorchGeo, Xarray, and is Arrow native across DuckDB, Polars.
+  <strong>Build a collection once. Query it like a table. Read pixels 20x faster from cloud COGs.</strong>
 </p>
 
 <p align="center">
@@ -17,169 +12,178 @@ Provides a fast "drop-in" backend for TorchGeo, Xarray, and is Arrow native acro
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"></a>
 </p>
 
----
+Rasteret is an index-first reader for cloud-hosted tiled GeoTIFFs and COGs. It
+builds a queryable Arrow/Parquet collection with scene metadata, asset URLs, CRS
+sidecars, and parsed COG header metadata. Pixels stay in the original COGs.
 
-## Why Rasteret?
+After that, you can filter, join, and enrich the collection as a table, then
+read only the pixels you need into NumPy, xarray, GeoPandas, TorchGeo, or Arrow
+point-sample tables.
 
-Geospatial data science is often 80% "plumbing." You spend hours writing STAC reading loops, manual `ThreadPoolExecutor`, and fragile CRS-alignment logic just to get a batch of pixels for your model.
+```text
+STAC / Parquet / Arrow table -> Rasteret Collection -> NumPy / xarray / GeoPandas / TorchGeo
+external labels / plots / points    filter/join/share          read pixels on demand
+```
 
-**Rasteret turns those 80% into few lines of code.**
+## Why Rasteret
 
-It separates the **Control Plane** (managing your scenes, labels, and splits in a local Parquet index) from the **Data Plane** (streaming pixels directly from cloud COGs).
+Remote raster workflows often repeat the same setup work: STAC loops, COG header
+parsing, tile byte-range planning, CRS transforms, retries, and output assembly.
 
-### The "Friction" vs. "Flow" Comparison
+Rasteret moves the expensive raster metadata discovery into a `Collection` build
+step and reuses that metadata for later reads.
 
-**The Old Way (25+ lines of fragile plumbing)**:
-1. Search STAC catalog
-2. Loop over items
-3. Handle pagination
-4. Filter by cloud cover
-5. **Wait 500ms per file** to parse remote TIFF headers (GDAL cold start)
-6. Manage `ThreadPoolExecutor` manually
-7. Manually stack results and align CRS
+That helps when you:
 
-**The Rasteret Way**:
+- train or evaluate models over many remote COG scenes
+- repeatedly sample the same imagery with different AOIs, points, labels, or splits
+- avoid rediscovering raster header metadata in new notebooks, containers, or machines
+- want one source collection to feed TorchGeo, xarray, NumPy, GeoPandas, and Arrow tools
+- need DuckDB, Polars, PyArrow, or GeoPandas to work on metadata and external
+  geometries before pixel reads
+
+## Quick Example
+
 ```python
 import rasteret
 
-# 1. Load your built collections
-collection = rasteret.load("my_s2_experiment")
+sentinel2_collection = rasteret.build(
+    "earthsearch/sentinel-2-l2a",
+    name="s2_bangalore",
+    bbox=(77.5, 12.9, 77.7, 13.1),
+    date_range=("2024-01-01", "2024-06-30"),
+)
 
-# 2. Query like a Table: "Give me the training scenes with <10% clouds"
-filtered = collection.subset(split="train", cloud_cover_lt=10)
+clear = sentinel2_collection.subset(cloud_cover_lt=20)
 
-# 3. Batch Read: "Fetch aligned pixels for all geometries in the filtered collection"
-data = filtered.get_numpy(geometries=filtered.geometry, bands=["B04", "B08"])
+arr = clear.get_numpy(
+    geometries=(77.55, 13.01, 77.58, 13.08),
+    bands=["B04", "B08"],
+)
 ```
 
----
+The same collection can feed TorchGeo:
 
-## Key Features
+```python
+dataset = clear.to_torchgeo_dataset(
+    bands=["B04", "B03", "B02", "B08"],
+    chip_size=256,
+)
+```
 
-- **🚀 20x Faster Cold Starts**: By caching tile-layout metadata locally, Rasteret jumps straight to the pixels, skipping expensive remote header parsing, which happens in every new environment.
-- **📦 Seamless "Drop-in" Backends**: Boost **TorchGeo** or **xarray** performance by simply swapping the reader. No need to rewrite your analysis code.
-- **🧬 Relational Imagery**: Store your labels, `train/val/test` splits, and custom metadata directly in the imagery index. No more separate CSVs.
-- **🛠️ Zero-Config Throughput**: Automatic cloud storage presigning with `Obstore`, and custom async I/O handles the networking so you don't have to.
+## Bring Your Own Geometry And Metadata
+
+Rasteret collections are Arrow tables. That means external labels, farm plots,
+asset locations, fire boundaries, or point samples can be joined to the
+collection before any pixels are read. Rasteret then uses the enriched table and
+the requested geometries to find the right COGs and fetch the needed pixels.
+
+```python
+import duckdb
+import geopandas as gpd
+import rasteret
+
+plots = gpd.read_file("plots.geojson").to_crs("OGC:CRS84")
+plots_arrow = plots.to_arrow(geometry_encoding="WKB")
+
+con = duckdb.connect()
+con.sql("INSTALL spatial; LOAD spatial;")
+con.register("sen2_rasteret", sentinel2_collection)
+con.register("plots", plots_arrow)
+
+#bring your own geometries
+plot_scenes = con.sql("""
+    SELECT
+        sen2_rasteret.*,
+        plots.plot_id,
+        plots.crop,
+        ST_AsWKB(plots.geometry) AS plot_geometry
+    FROM sen2_rasteret, plots
+    WHERE sen2_rasteret."eo:cloud_cover" < 10
+      AND ST_Intersects(sen2_rasteret.geometry, plots.geometry)
+""")
+
+# convert enriched table to rasteret collection
+plot_collection = rasteret.as_collection(
+    plot_scenes,
+)
+
+plot_geometries = plot_collection.to_table(columns=["plot_geometry"])["plot_geometry"]
+patches = plot_collection.get_numpy(
+    geometries=plot_geometries,
+    bands=["B04", "B08"],
+)
+```
+
+The same pattern works with Polars or PyArrow for split/label columns, and with
+`sample_points(...)` when your external data is point-based.
+
+## What You Can Do
+
+| Task | Rasteret surface |
+| --- | --- |
+| Build from a registered dataset | `rasteret.build("catalog/id", ...)` |
+| Build from your own Parquet, GeoParquet, DuckDB, Polars, or Arrow record table | `rasteret.build_from_table(...)` |
+| Reopen a saved Collection | `rasteret.load(path_or_dataset_id)` |
+| Re-wrap a read-ready Arrow object | `rasteret.as_collection(...)` |
+| Get numpy arrays | `Collection.get_numpy(...)` |
+| Get xarray dataset | `Collection.get_xarray(...)` |
+| Get GeoPandas rows with pixel arrays | `Collection.get_gdf(...)` |
+| Sample pixels at points | `Collection.sample_points(...)` |
+| Train/infer with TorchGeo | `Collection.to_torchgeo_dataset(...)` |
 
 ## Performance
 
-### 1. Cold-start comparison with TorchGeo
-Same AOIs, same scenes, same sampler, same DataLoader. Rasteret eliminates the "cold start tax" by caching IFD headers in the local Parquet index.
+Rasteret is 10x to 20x faster than rasterio/GDAL
 
-| Scenario | rasterio/GDAL (Standard) | Rasteret (Index-First) | Speedup |
-|---|---|---|---|
-| Single AOI, 15 scenes | 9.08 s | 1.14 s | **8x** |
-| Multi-AOI, 30 scenes | 42.05 s | 2.25 s | **19x** |
-| Cross-CRS boundary | 12.47 s | 0.59 s | **21x** |
+| Scenario | TorchGeo/rasterio | Rasteret | Speedup |
+| --- | ---: | ---: | ---: |
+| Single AOI, 15 scenes | 9.08 s | 1.14 s | 8.0x |
+| Multi-AOI, 30 scenes | 42.05 s | 2.25 s | 18.7x |
+| Cross-CRS, 12 scenes | 12.47 s | 0.59 s | 21.3x |
 
 ![Processing time comparison](./assets/benchmark_results.png)
-![Speedup breakdown](./assets/benchmark_breakdown.png)
 
-### 2. The Cloud vs. Edge Comparison
-How does Rasteret stack up against **Google Earth Engine (GEE)** or a highly parallelized Rasterio setup for time-series extraction?
+Rasteret also compares well against time-series workflows that use Google Earth
+Engine or thread-pooled rasterio for the measured setup:
 
-| Library | First Run (Cold) | Subsequent Runs (Hot) |
-|---------|-----------------|-----------------------|
-| **Rasterio** + ThreadPool | 32 s | 24 s |
-| **Google Earth Engine** | 10–30 s | 3–5 s |
-| **Rasteret** | **3 s** | **3 s** |
+| Library | First run (cold) | Subsequent runs (hot) |
+| --- | ---: | ---: |
+| Rasterio + ThreadPool | 32 s | 24 s |
+| Google Earth Engine | 10-30 s | 3-5 s |
+| Rasteret | 3 s | 3 s |
 
 ![Single request performance](./assets/single_timeseries_request.png)
 
-### 3. HuggingFace `MajorTOM` vs. Rasteret
-Recent "images-inside-Parquet" approaches (like MajorTOM) try to store image bytes in Parquet files. Rasteret keeps imagery in cloud COGs while using Parquet as a high-performance index—delivering better throughput without the data movement overhead.
+See the [Benchmarks guide](https://terrafloww.github.io/rasteret/explanation/benchmark/)
+for methodology, environment details, and additional Hugging Face `datasets`
+comparisons.
 
-| Patches | HF `datasets` (streaming) | Rasteret index+COGs | Speedup |
-|---:|---:|---:|---:|
-| 120 | 46.83 s | 12.09 s | **3.88x** |
-| 1000 | 771.59 s | 118.69 s | **6.50x** |
+## Install
 
-![HF vs Rasteret speedup](./assets/benchmark_hf_speedup.png)
-
-*All numbers measured on AWS us-west-2 4CPU machine (same region as data) vs. cold-start GDAL.*
-
-**Cold start measurement is important because that's the true production scenario, across new cloud VMs,
-new notebook reruns, new PyTorch Dataloaders and Epochs, new Docker envs in K8s and more.**
-
----
-
-## Technical Deep Dives
-
-For the full architectural rationale, methodology, and reproducibility scripts, see:
-
-- [**Design Decisions**](https://terrafloww.github.io/rasteret/explanation/design-decisions.md): Why we chose Parquet + COGs
-- [**Schema Contract**](https://terrafloww.github.io/rasteret/explanation/schema-contract/): The internal anatomy of a Collection.
-
-```text
-STAC API / GeoParquet  -->  Parquet Collection  -->  Read pixels into Torch/Xarray/DF and
-                                                     share data across tools with Arrow
-
-       (once)                  (queryable)             (no GDAL in read path)
+```bash
+uv pip install rasteret
 ```
 
-## Quick Start
+Optional integrations:
 
-### 1. Build a Collection
-```python
-import rasteret
-
-# Build from any STAC API or Parquet Metadata table
-collection = rasteret.build(
-    "earthsearch/sentinel-2-l2a",
-    name="s2_training",
-    bbox=(77.5, 12.9, 77.7, 13.1),
-    date_range=("2024-01-01", "2024-06-30")
-)
-
-# OR
-collection = rasteret.build_from_table(
-    "path/to/my/parquet-with-cog-urls-inside.parquet",
-    name="s2_training",
-    bbox=(77.5, 12.9, 77.7, 13.1),
-    date_range=("2024-01-01", "2024-06-30")
-)
+```bash
+uv pip install "rasteret[torchgeo]"
+uv pip install "rasteret[aws]"
+uv pip install "rasteret[azure]"
+uv pip install "rasteret[all]"
 ```
 
-### 2. Turbocharge your ML (TorchGeo)
-Rasteret provides a high-performance backend that honors the TorchGeo `GeoDataset` contract.
+Rasteret requires Python 3.12 or later.
 
-```python
-from torch.utils.data import DataLoader
-from torchgeo.samplers import RandomGeoSampler
+## Learn More
 
-# TorchGeo adapter has same behavior but 20x faster data movement
-dataset = collection.to_torchgeo_dataset(bands=["B04", "B08"], chip_size=256)
-
-sampler = RandomGeoSampler(dataset, size=256, length=100)
-loader  = DataLoader(dataset, sampler=sampler, batch_size=4)
-```
-
-### 3. Fast Xarray creation
-```python
-ds = collection.get_xarray(geometries=my_aoi, bands=["B04", "B08"])
-ndvi = (ds.B08 - ds.B04) / (ds.B08 + ds.B04)
-```
-
-## Key Entry Points
-
-Rasteret is built for flexibility. Choose the output format that fits your existing workflow:
-
-| Method | Output | Purpose |
-|---|---|---|
-| [**`to_torchgeo_dataset()`**](https://terrafloww.github.io/rasteret/reference/integrations/torchgeo/) | `RasteretGeoDataset` | Drop-in high-performance backend for **TorchGeo** training. |
-| [**`get_xarray()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.get_xarray) | `xarray.Dataset` | Quick create Xarray for analysis. |
-| [**`get_numpy()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.get_numpy) | `numpy.ndarray` | Raw pixel arrays (`[N, C, H, W]`) directly. |
-| [**`get_gdf()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.get_gdf) | `GeoDataFrame` | Metadata and pixel arrays as a standard geopandas dataframe. |
-| [**`sample_points()`**](https://terrafloww.github.io/rasteret/reference/core/collection/#rasteret.core.collection.Collection.sample_points) | `DataFrame` | Exact pixel values at points geometries with intuitive configurable fallback for nodata pixels |
-
----
-
-Full documentation at **[terrafloww.github.io/rasteret](https://terrafloww.github.io/rasteret)**:
-
-- [**Concepts**](https://terrafloww.github.io/rasteret/explanation/concepts/): Why Rasteret?
-- [**Migrating from Rasterio**](https://terrafloww.github.io/rasteret/how-to/migrating-from-rasterio/): Side-by-side patterns.
-- [**TorchGeo Integration**](https://terrafloww.github.io/rasteret/how-to/torchgeo-integration/): Use Rasteret collections with TorchGeo.
-- [**Tutorials**](https://terrafloww.github.io/rasteret/tutorials/): Hands-on examples.
+- [Getting Started](https://terrafloww.github.io/rasteret/getting-started/)
+- [Build from Parquet and Arrow Tables](https://terrafloww.github.io/rasteret/how-to/build-from-tables/)
+- [Enriched Collection Workflows](https://terrafloww.github.io/rasteret/how-to/enriched-collection-workflows/)
+- [TorchGeo Integration](https://terrafloww.github.io/rasteret/how-to/torchgeo-integration/)
+- [Benchmarks](https://terrafloww.github.io/rasteret/explanation/benchmark/)
+- [API Reference](https://terrafloww.github.io/rasteret/reference/)
 
 ## License
 
