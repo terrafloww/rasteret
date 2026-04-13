@@ -1045,7 +1045,7 @@ class TestRasterAccessorPointSampling:
         assert rows.column("value").to_pylist() == [11.0, 22.0]
 
     @pytest.mark.asyncio
-    async def test_sample_points_does_not_group_planar_band_indices(self):
+    async def test_sample_points_groups_planar_band_indices_with_distinct_offsets(self):
         from shapely.geometry import Point
 
         from rasteret.core.geometry import coerce_to_geoarrow
@@ -1135,9 +1135,9 @@ class TestRasterAccessorPointSampling:
                 max_concurrent=5,
             )
 
-        assert len(reader.calls) == 2
-        assert [req.band_index for req in reader.calls[0]] == [0]
-        assert [req.band_index for req in reader.calls[1]] == [1]
+        assert len(reader.calls) == 1
+        assert sorted(req.band_index for req in reader.calls[0]) == [0, 1]
+        assert sorted(req.offset for req in reader.calls[0]) == [0, 100]
         assert rows.column("band").to_pylist() == ["B04", "B08"]
         assert rows.column("value").to_pylist() == [11.0, 22.0]
 

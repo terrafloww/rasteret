@@ -512,12 +512,6 @@ class RasterAccessor:
                         str(np.dtype(cog_meta.dtype)),
                         int(getattr(cog_meta, "samples_per_pixel", 1) or 1),
                         int(getattr(cog_meta, "planar_configuration", 1) or 1),
-                        # Planar TIFFs store each band in its own IFD (with distinct
-                        # tile offsets). Grouping across band_index would incorrectly
-                        # read band 0's tiles for every band.
-                        int(band_index)
-                        if int(getattr(cog_meta, "planar_configuration", 1) or 1) == 2
-                        else None,
                     ),
                 }
             )
