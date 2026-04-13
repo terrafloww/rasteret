@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.12
+
+### Fixed
+
+- **Planar multi-band point sampling batching**: `sample_points()` now batches
+  distinct per-band tile ranges for planar COGs such as AEF while preserving
+  per-band offsets and values.
+- **Point sampling concurrency**: `match="all"` now samples matching rasters in
+  bounded batches with one shared COG reader instead of awaiting each raster
+  serially.
+- **Point-aware index filtering**: point sampling now uses per-point GeoArrow
+  geometry filters instead of one broad point-envelope bbox when narrowing
+  indexed collections.
+- **Indexed collection shard narrowing on remote filesystems**: `source_part`
+  pruning now preserves the backing PyArrow filesystem and avoids reapplying
+  record-index filters to already-planned scan datasets.
+- **Source-part direct scans**: indexed reads now open only the selected
+  `source_part` Parquet shards when available instead of opening the full
+  `/data` dataset before pruning.
+
 ## v0.3.11
 
 ### Added
