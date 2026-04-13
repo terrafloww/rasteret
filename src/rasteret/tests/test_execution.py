@@ -2063,6 +2063,75 @@ class TestPointSampling:
         assert "reader" in raster_a.calls[0]
         assert raster_a.calls[0]["reader"] is raster_b.calls[0]["reader"]
 
+    def test_get_collection_point_samples_batches_matching_rasters(self):
+        class _StubReader:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        active = 0
+        max_active = 0
+
+        class _SlowRaster(self._DummyRaster):
+            async def sample_points(self, **kwargs):
+                nonlocal active, max_active
+                active += 1
+                max_active = max(max_active, active)
+                try:
+                    await asyncio.sleep(0.01)
+                    return await super().sample_points(**kwargs)
+                finally:
+                    active -= 1
+
+        rows_a = [
+            {
+                "point_index": 0,
+                "point_x": 1.0,
+                "point_y": 2.0,
+                "point_crs": 4326,
+                "record_id": "a",
+                "datetime": np.datetime64("2024-01-01T00:00:00"),
+                "collection": "c",
+                "cloud_cover": 1.0,
+                "band": "B04",
+                "value": 10.0,
+                "raster_crs": 32632,
+            }
+        ]
+        rows_b = [
+            {
+                "point_index": 1,
+                "point_x": 10.0,
+                "point_y": 20.0,
+                "point_crs": 4326,
+                "record_id": "b",
+                "datetime": np.datetime64("2024-01-02T00:00:00"),
+                "collection": "c",
+                "cloud_cover": 2.0,
+                "band": "B04",
+                "value": 20.0,
+                "raster_crs": 32633,
+            }
+        ]
+        raster_a = _SlowRaster(rows_a, raster_id="a", bbox=[0.0, 0.0, 2.0, 3.0])
+        raster_b = _SlowRaster(rows_b, raster_id="b", bbox=[9.0, 19.0, 11.0, 21.0])
+        collection = self._DummyCollection([raster_a, raster_b])
+
+        with patch("rasteret.core.point_sampling.COGReader", _StubReader):
+            table = get_collection_point_samples(
+                collection=collection,
+                points=pa.table({"lon": [1.0, 10.0], "lat": [2.0, 20.0]}),
+                bands=["B04"],
+            )
+
+        assert table.num_rows == 2
+        assert max_active == 2
+
     def test_get_collection_point_samples_empty_returns_schema(self):
         collection = self._DummyCollection([self._DummyRaster([])])
         with patch(

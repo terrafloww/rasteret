@@ -210,6 +210,66 @@ def get_collection_point_samples(
                 return
             sample_batches.extend(sampled.to_batches())
 
+        async def _sample_raster_points(
+            *,
+            raster: Any,
+            raster_points: pa.Array,
+            point_indices: list[int],
+            band_codes: list[str],
+            shared_reader: COGReader,
+        ) -> pa.Table:
+            return _ensure_point_samples_table(
+                await raster.sample_points(
+                    points=raster_points,
+                    band_codes=band_codes,
+                    point_indices=point_indices,
+                    max_concurrent=max_concurrent,
+                    reader=shared_reader,
+                    geometry_crs=geometry_crs,
+                    max_distance_pixels=max_distance_pixels,
+                    return_neighbourhood=return_neighbourhood,
+                ),
+                return_neighbourhood=return_neighbourhood,
+            )
+
+        def _handle_sample_result(raster: Any, result: pa.Table | Exception) -> None:
+            if isinstance(result, Exception):
+                if not isinstance(result, expected_sample_errors):
+                    raise result
+                errors.append((getattr(raster, "id", "<unknown>"), result))
+                logger.error(
+                    "Point sampling failed (id=%s): %s",
+                    errors[-1][0],
+                    result,
+                )
+                return
+            _append_sample_table(result)
+
+        async def _flush_sample_batch(
+            batch: list[tuple[Any, pa.Array, list[int], list[str]]],
+            *,
+            shared_reader: COGReader,
+        ) -> None:
+            if not batch:
+                return
+            results = await asyncio.gather(
+                *[
+                    _sample_raster_points(
+                        raster=raster,
+                        raster_points=raster_points,
+                        point_indices=point_indices,
+                        band_codes=band_codes,
+                        shared_reader=shared_reader,
+                    )
+                    for raster, raster_points, point_indices, band_codes in batch
+                ],
+                return_exceptions=True,
+            )
+            for (raster, _raster_points, _point_indices, _band_codes), result in zip(
+                batch, results, strict=False
+            ):
+                _handle_sample_result(raster, result)
+
         def _prepare_raster_points(
             raster: Any,
             *,
@@ -326,18 +386,12 @@ def get_collection_point_samples(
                 if subset is None:
                     return empty_samples()
                 raster_points, point_indices = subset
-                sampled = _ensure_point_samples_table(
-                    await raster.sample_points(
-                        points=raster_points,
-                        band_codes=band_codes,
-                        point_indices=point_indices,
-                        max_concurrent=max_concurrent,
-                        reader=shared_reader,
-                        geometry_crs=geometry_crs,
-                        max_distance_pixels=max_distance_pixels,
-                        return_neighbourhood=return_neighbourhood,
-                    ),
-                    return_neighbourhood=return_neighbourhood,
+                sampled = await _sample_raster_points(
+                    raster=raster,
+                    raster_points=raster_points,
+                    point_indices=point_indices,
+                    band_codes=band_codes,
+                    shared_reader=shared_reader,
                 )
                 if sampled.num_rows == 0:
                     return sampled
@@ -396,16 +450,9 @@ def get_collection_point_samples(
                         batch, results, strict=False
                     ):
                         if isinstance(result, Exception):
-                            if not isinstance(result, expected_sample_errors):
-                                raise result
-                            errors.append((getattr(rr, "id", "<unknown>"), result))
-                            logger.error(
-                                "Point sampling failed (id=%s): %s",
-                                errors[-1][0],
-                                result,
-                            )
-                            continue
-                        _append_sample_table(result)
+                            _handle_sample_result(rr, result)
+                        else:
+                            _append_sample_table(result)
                     batch = []
 
                 if batch:
@@ -426,17 +473,11 @@ def get_collection_point_samples(
                         batch, results, strict=False
                     ):
                         if isinstance(result, Exception):
-                            if not isinstance(result, expected_sample_errors):
-                                raise result
-                            errors.append((getattr(rr, "id", "<unknown>"), result))
-                            logger.error(
-                                "Point sampling failed (id=%s): %s",
-                                errors[-1][0],
-                                result,
-                            )
-                            continue
-                        _append_sample_table(result)
+                            _handle_sample_result(rr, result)
+                        else:
+                            _append_sample_table(result)
         else:
+            raster_batch_size = 64
             iterable: Any
             if progress:
                 rasters = []
@@ -456,64 +497,38 @@ def get_collection_point_samples(
                 async with COGReader(
                     max_concurrent=max_concurrent, backend=backend
                 ) as shared_reader:
+                    batch: list[tuple[Any, pa.Array, list[int], list[str]]] = []
                     for raster in iterable:
                         prepared = _prepare_raster_points(raster)
                         if prepared is None:
                             continue
                         raster_points, point_indices = prepared
-                        try:
-                            sampled = _ensure_point_samples_table(
-                                await raster.sample_points(
-                                    points=raster_points,
-                                    band_codes=bands,
-                                    point_indices=point_indices,
-                                    max_concurrent=max_concurrent,
-                                    reader=shared_reader,
-                                    geometry_crs=geometry_crs,
-                                    max_distance_pixels=max_distance_pixels,
-                                    return_neighbourhood=return_neighbourhood,
-                                ),
-                                return_neighbourhood=return_neighbourhood,
+                        batch.append((raster, raster_points, point_indices, bands))
+                        if len(batch) >= raster_batch_size:
+                            await _flush_sample_batch(
+                                batch,
+                                shared_reader=shared_reader,
                             )
-                            _append_sample_table(sampled)
-                        except expected_sample_errors as exc:
-                            errors.append((getattr(raster, "id", "<unknown>"), exc))
-                            logger.error(
-                                "Point sampling failed (id=%s): %s",
-                                errors[-1][0],
-                                exc,
-                            )
+                            batch = []
+                    await _flush_sample_batch(batch, shared_reader=shared_reader)
             else:
                 async with COGReader(
                     max_concurrent=max_concurrent, backend=backend
                 ) as shared_reader:
+                    batch: list[tuple[Any, pa.Array, list[int], list[str]]] = []
                     async for raster in iterable:
                         prepared = _prepare_raster_points(raster)
                         if prepared is None:
                             continue
                         raster_points, point_indices = prepared
-                        try:
-                            sampled = _ensure_point_samples_table(
-                                await raster.sample_points(
-                                    points=raster_points,
-                                    band_codes=bands,
-                                    point_indices=point_indices,
-                                    max_concurrent=max_concurrent,
-                                    reader=shared_reader,
-                                    geometry_crs=geometry_crs,
-                                    max_distance_pixels=max_distance_pixels,
-                                    return_neighbourhood=return_neighbourhood,
-                                ),
-                                return_neighbourhood=return_neighbourhood,
+                        batch.append((raster, raster_points, point_indices, bands))
+                        if len(batch) >= raster_batch_size:
+                            await _flush_sample_batch(
+                                batch,
+                                shared_reader=shared_reader,
                             )
-                            _append_sample_table(sampled)
-                        except expected_sample_errors as exc:
-                            errors.append((getattr(raster, "id", "<unknown>"), exc))
-                            logger.error(
-                                "Point sampling failed (id=%s): %s",
-                                errors[-1][0],
-                                exc,
-                            )
+                            batch = []
+                    await _flush_sample_batch(batch, shared_reader=shared_reader)
 
         if errors and sample_batches:
             record_id, first = errors[0]
