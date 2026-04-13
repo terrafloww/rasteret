@@ -22,7 +22,7 @@ jobs:
           mkdir -p data-repo/data/pypi
 
           # Overall daily downloads (last 180 days window)
-          uvx pypistats overall rasteret --json --mirrors with | \
+          uvx pypistats overall rasteret --json --mirrors with --daily | \
             python3 -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
@@ -42,7 +42,7 @@ jobs:
           "
 
           # By Python version
-          uvx pypistats python_minor rasteret --json | \
+          uvx pypistats python_minor rasteret --json --daily | \
             python3 -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
@@ -62,7 +62,7 @@ jobs:
           "
 
           # By system (Linux, Windows, macOS)
-          uvx pypistats system rasteret --json | \
+          uvx pypistats system rasteret --json --daily | \
             python3 -c "
           import json, sys, csv, os
           data = json.load(sys.stdin)
