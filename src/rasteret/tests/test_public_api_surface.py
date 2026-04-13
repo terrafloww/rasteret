@@ -395,6 +395,21 @@ def test_load_dataset_id_uses_descriptor_collection_uri() -> None:
     assert collection.name == "Demo Runtime Collection"
 
 
+def test_build_aef_dataset_id_routes_to_load_alias() -> None:
+    sentinel = object()
+
+    with patch("rasteret.load", return_value=sentinel) as mocked:
+        collection = rasteret.build(
+            "aef/v1-annual",
+            name="aef-runtime",
+            bbox=(11.3, -0.002, 11.5, 0.001),
+            date_range=("2023-01-01", "2023-12-31"),
+        )
+
+    assert collection is sentinel
+    mocked.assert_called_once_with("aef/v1-annual", name="aef-runtime")
+
+
 def test_load_dataset_id_preserves_data_source_for_auto_backend() -> None:
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "published_collection.parquet"

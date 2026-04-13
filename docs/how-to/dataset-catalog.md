@@ -4,13 +4,24 @@ Use the dataset catalog when you want to build a Rasteret Collection from a
 known dataset ID instead of manually wiring a STAC endpoint, GeoParquet path,
 band map, and cloud configuration.
 
-A catalog entry is not the collection itself. It is a lightweight descriptor
-that tells Rasteret how to discover or load raster records. The result of a
-build is still a normal `Collection`.
+A catalog entry is usually not the collection itself. It is a lightweight
+descriptor that tells Rasteret how to discover or load raster records. The
+result of a build is still a normal `Collection`.
 
 ```text
 catalog entry -> rasteret.build(...) -> Collection
 ```
+
+The exception is `aef/v1-annual`, the maintained AlphaEarth Foundation
+Embeddings Collection. That ID points at an existing read-ready Rasteret
+Collection on Source Cooperative and should be opened with:
+
+```python
+collection = rasteret.load("aef/v1-annual")
+```
+
+All other built-in satellite data IDs are build recipes and should use
+`rasteret.build(...)`.
 
 ## Browse The Catalog
 

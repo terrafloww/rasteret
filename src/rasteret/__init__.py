@@ -253,6 +253,10 @@ def build(
     and routes to :func:`build_from_stac` or :func:`build_from_table`
     based on the descriptor's access fields.
 
+    The public AlphaEarth Foundation dataset (``"aef/v1-annual"``) is already
+    published as a read-ready Rasteret Collection, so this function delegates
+    that ID to :func:`load` instead of rebuilding it.
+
     For descriptors backed only by ``record_table_uri`` (for example local
     collections registered with :func:`register_local`), ``bbox`` and
     ``date_range`` are optional and ignored.
@@ -316,6 +320,9 @@ def build(
         raise KeyError(
             f"Dataset '{dataset}' not found in registry. " f"Available: {available}"
         )
+
+    if descriptor.id == "aef/v1-annual" and descriptor.collection_uri:
+        return load(descriptor.id, name=name)
 
     # Auto-create backend for datasets that provide an explicit backend hint.
     #

@@ -124,13 +124,47 @@ The same pattern works with Polars or PyArrow for split/label columns, and with
 | --- | --- |
 | Build from a registered dataset | `rasteret.build("catalog/id", ...)` |
 | Build from your own Parquet, GeoParquet, DuckDB, Polars, or Arrow record table | `rasteret.build_from_table(...)` |
-| Reopen a saved Collection | `rasteret.load(path_or_dataset_id)` |
+| Reopen a saved or prebuilt Collection | `rasteret.load(path_or_dataset_id)` |
 | Re-wrap a read-ready Arrow object | `rasteret.as_collection(...)` |
 | Get numpy arrays | `Collection.get_numpy(...)` |
 | Get xarray dataset | `Collection.get_xarray(...)` |
 | Get GeoPandas rows with pixel arrays | `Collection.get_gdf(...)` |
 | Sample pixels at points | `Collection.sample_points(...)` |
 | Train/infer with TorchGeo | `Collection.to_torchgeo_dataset(...)` |
+
+## Dataset Catalog
+
+Rasteret ships with dataset IDs so you do not have to remember STAC endpoints,
+band maps, license metadata, or cloud access settings. Most catalog entries are
+recipes for `rasteret.build(...)`: Rasteret searches the source catalog, parses
+the COG metadata once, and writes a reusable local Collection.
+
+Only one built-in ID is already a read-ready Rasteret Collection:
+`aef/v1-annual`. Use `rasteret.load("aef/v1-annual")` for AlphaEarth Foundation
+Embeddings. The built-in alias loads Rasteret's maintained Source Cooperative
+Collection. You do not need to call `build()` for this dataset.
+
+| ID | Dataset | Coverage | Auth | Use |
+| --- | --- | --- | --- | --- |
+| `aef/v1-annual` | AlphaEarth Foundation Embeddings (Annual) | global | none | `rasteret.load(...)` |
+| `earthsearch/sentinel-2-l2a` | Sentinel-2 Level-2A | global | none | `rasteret.build(...)` |
+| `earthsearch/landsat-c2-l2` | Landsat Collection 2 Level-2 | global | required | `rasteret.build(...)` |
+| `earthsearch/naip` | NAIP | north-america | required | `rasteret.build(...)` |
+| `earthsearch/cop-dem-glo-30` | Copernicus DEM 30m | global | none | `rasteret.build(...)` |
+| `earthsearch/cop-dem-glo-90` | Copernicus DEM 90m | global | none | `rasteret.build(...)` |
+| `pc/sentinel-2-l2a` | Sentinel-2 Level-2A (Planetary Computer) | global | required | `rasteret.build(...)` |
+| `pc/io-lulc-annual-v02` | ESRI 10m Land Use/Land Cover | global | required | `rasteret.build(...)` |
+| `pc/alos-dem` | ALOS World 3D 30m DEM | global | required | `rasteret.build(...)` |
+| `pc/nasadem` | NASADEM | global | required | `rasteret.build(...)` |
+| `pc/esa-worldcover` | ESA WorldCover | global | required | `rasteret.build(...)` |
+| `pc/usda-cdl` | USDA Cropland Data Layer | conus | required | `rasteret.build(...)` |
+
+You can browse the same list from the CLI:
+
+```bash
+rasteret datasets list
+rasteret datasets info aef/v1-annual
+```
 
 ## Performance
 

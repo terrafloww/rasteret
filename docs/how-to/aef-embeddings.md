@@ -12,11 +12,12 @@ collection = rasteret.load("aef/v1-annual")
 collection.describe()
 ```
 
-This opens Rasteret's maintained AEF collection on Source Cooperative. The
-collection already contains the COG metadata needed for byte-range reads. The
-catalog descriptor also keeps the narrow `index.parquet` attached as a sidecar
-index, so spatial and temporal filters can be applied before Rasteret reads the
-wider collection data.
+This opens Rasteret's maintained AEF collection on Source Cooperative. The AEF
+Rasteret artifact is also published on Hugging Face for discovery and sharing.
+The collection already contains the COG metadata needed for byte-range reads.
+The catalog descriptor also keeps the narrow `index.parquet` attached as a
+sidecar index, so spatial and temporal filters can be applied before Rasteret
+reads the wider collection data.
 
 You do not need to call `rasteret.build()` for the public AEF collection.
 
