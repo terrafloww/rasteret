@@ -15,12 +15,14 @@ Rasteret requires Python 3.12 or later.
 uv pip install rasteret
 ```
 
-Install extras for the output surfaces you plan to use:
+The base install covers NumPy, xarray, GeoPandas, DuckDB, and point sampling.
+Install extras only when you need optional integrations:
 
 ```bash
-uv pip install "rasteret[xarray]"    # Collection.get_xarray()
 uv pip install "rasteret[torchgeo]"  # Collection.to_torchgeo_dataset()
-uv pip install "rasteret[all]"       # explore the optional integrations
+uv pip install "rasteret[aws]"       # AWS helper dependencies
+uv pip install "rasteret[azure]"     # Planetary Computer helpers
+uv pip install "rasteret[all]"       # all optional integrations for exploration
 ```
 
 ## 1. Build A Collection
@@ -32,7 +34,7 @@ collection = rasteret.build(
     "earthsearch/sentinel-2-l2a",
     name="s2-bangalore",
     bbox=(77.5, 12.9, 77.7, 13.1),
-    date_range=("2024-01-01", "2024-06-30"),
+    date_range=("2024-01-01", "2024-01-31"),
 )
 ```
 
@@ -69,7 +71,7 @@ collection.compare_to_catalog()
 
 Useful mental model:
 
-- `geometry` is the scene footprint, stored as WKB footprint geometry.
+- `geometry` is the scene footprint, stored as GeoArrow WKB.
 - `crs` / `proj:epsg` describe the native raster CRS for each row.
 - `*_metadata` columns store per-band COG header metadata used by the read path.
 - Extra columns such as splits, labels, AOI IDs, or experiment metadata can live
@@ -79,7 +81,7 @@ Useful mental model:
 
 ```python
 filtered = collection.subset(
-    cloud_cover_lt=20,
+    cloud_cover_lt=50,
     bbox=(77.55, 13.01, 77.58, 13.08),
 )
 ```

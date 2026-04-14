@@ -51,10 +51,10 @@ sentinel2_collection = rasteret.build(
     "earthsearch/sentinel-2-l2a",
     name="s2_bangalore",
     bbox=(77.5, 12.9, 77.7, 13.1),
-    date_range=("2024-01-01", "2024-06-30"),
+    date_range=("2024-01-01", "2024-01-31"),
 )
 
-clear = sentinel2_collection.subset(cloud_cover_lt=20)
+clear = sentinel2_collection.subset(cloud_cover_lt=50)
 
 arr = clear.get_numpy(
     geometries=(77.55, 13.01, 77.58, 13.08),
@@ -83,7 +83,7 @@ import duckdb
 import geopandas as gpd
 import rasteret
 
-plots = gpd.read_file("plots.geojson").to_crs("OGC:CRS84")
+plots = gpd.read_file("assets/plots.geojson").to_crs("OGC:CRS84")
 plots_arrow = plots.to_arrow(geometry_encoding="WKB")
 
 con = duckdb.connect()
@@ -91,10 +91,11 @@ con.sql("INSTALL spatial; LOAD spatial;")
 con.register("sen2_rasteret", sentinel2_collection)
 con.register("plots", plots_arrow)
 
-#bring your own geometries
+# Bring your own geometries
 plot_scenes = con.sql("""
     SELECT
-        sen2_rasteret.*,
+        sen2_rasteret.* EXCLUDE (geometry),
+        ST_AsWKB(sen2_rasteret.geometry) AS geometry,
         plots.plot_id,
         plots.crop,
         ST_AsWKB(plots.geometry) AS plot_geometry
@@ -106,10 +107,11 @@ plot_scenes = con.sql("""
 # convert enriched table to rasteret collection
 plot_collection = rasteret.as_collection(
     plot_scenes,
+    data_source=sentinel2_collection.data_source,
 )
 
 plot_geometries = plot_collection.to_table(columns=["plot_geometry"])["plot_geometry"]
-patches = plot_collection.get_numpy(
+plot_patches = plot_collection.get_gdf(
     geometries=plot_geometries,
     bands=["B04", "B08"],
 )
@@ -208,7 +210,7 @@ Optional integrations:
 uv pip install "rasteret[torchgeo]"
 uv pip install "rasteret[aws]"
 uv pip install "rasteret[azure]"
-uv pip install "rasteret[all]"
+uv pip install "rasteret[all]"  # all optional integrations for exploration
 ```
 
 Rasteret requires Python 3.12 or later.

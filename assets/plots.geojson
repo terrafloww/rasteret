@@ -1,0 +1,50 @@
+{
+  "type": "FeatureCollection",
+  "name": "sample_plots",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "OGC:CRS84"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "plot_id": "plot-001",
+        "crop": "millet"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.552, 13.014],
+            [77.562, 13.014],
+            [77.562, 13.024],
+            [77.552, 13.024],
+            [77.552, 13.014]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "plot_id": "plot-002",
+        "crop": "maize"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [77.566, 13.042],
+            [77.578, 13.042],
+            [77.578, 13.054],
+            [77.566, 13.054],
+            [77.566, 13.042]
+          ]
+        ]
+      }
+    }
+  ]
+}
