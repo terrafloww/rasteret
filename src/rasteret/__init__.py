@@ -322,7 +322,10 @@ def build(
         )
 
     if descriptor.id == "aef/v1-annual" and descriptor.collection_uri:
-        return load(descriptor.id, name=name)
+        collection = load(descriptor.id, name=name)
+        if bbox is not None or date_range is not None:
+            collection = collection.subset(bbox=bbox, date_range=date_range)
+        return collection
 
     # Auto-create backend for datasets that provide an explicit backend hint.
     #
@@ -737,36 +740,9 @@ def _total_ram_bytes() -> int | None:
 
 def _arrow_object_to_dataset(table: Any):
     """Return ``(dataset, materialized_table)`` for supported Arrow inputs."""
-    import pyarrow as pa
-    import pyarrow.dataset as pads
+    from rasteret.core.arrow_interop import as_dataset
 
-    if isinstance(table, pads.Dataset):
-        return table, None
-    if isinstance(table, pa.Table):
-        return pads.dataset(table), table
-    if isinstance(table, pa.RecordBatch):
-        return pads.dataset(table), None
-    if isinstance(table, pa.RecordBatchReader):
-        return pads.dataset(table), None
-
-    stream_export = getattr(table, "__arrow_c_stream__", None)
-    if callable(stream_export):
-        try:
-            return pads.dataset(pa.RecordBatchReader.from_stream(table)), None
-        except Exception as exc:
-            raise TypeError(
-                "Could not consume the Arrow stream export from the provided object."
-            ) from exc
-
-    try:
-        materialized_table = pa.table(table)
-    except Exception as exc:
-        raise TypeError(
-            "Expected a pyarrow.dataset.Dataset, pyarrow.Table, pyarrow.RecordBatch, "
-            "pyarrow.RecordBatchReader, or an Arrow-compatible object implementing "
-            "the PyCapsule protocol."
-        ) from exc
-    return pads.dataset(materialized_table), materialized_table
+    return as_dataset(table)
 
 
 def _arrow_object_to_table(
@@ -776,10 +752,9 @@ def _arrow_object_to_table(
     filter_expr: Any | None = None,
 ):
     """Materialize a supported Arrow input as a pyarrow.Table."""
-    dataset, materialized_table = _arrow_object_to_dataset(table)
-    if materialized_table is not None and columns is None and filter_expr is None:
-        return materialized_table
-    return dataset.to_table(columns=columns, filter=filter_expr)
+    from rasteret.core.arrow_interop import as_table
+
+    return as_table(table, columns=columns, filter_expr=filter_expr)
 
 
 def as_collection(

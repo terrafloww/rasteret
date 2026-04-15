@@ -1195,7 +1195,7 @@ class RasterAccessor:
                                 f"(record_id='{self.id}', geometry_index={geom_id}). "
                                 "Rasteret currently supports Polygon and MultiPolygon geometries "
                                 "for masking-based sampling via get_xarray/get_numpy/get_gdf. "
-                                "Point sampling is not supported yet."
+                                "Use sample_points() for Point geometries."
                             ) from r
                         failed_band_codes.append(band_code)
                         if first_error is None:
@@ -1225,7 +1225,7 @@ class RasterAccessor:
                             f"(record_id='{self.id}', geometry_index={geom_id}). "
                             "Rasteret currently supports Polygon and MultiPolygon geometries "
                             "for masking-based sampling via get_xarray/get_numpy/get_gdf. "
-                            "Point sampling is not supported yet."
+                            "Use sample_points() for Point geometries."
                         ) from first_error
                     raise RuntimeError(
                         "All band reads failed for the requested geometry "
@@ -1427,7 +1427,7 @@ class RasterAccessor:
         results: list[tuple[list[dict], int]],
         geometries: pa.Array,
         *,
-        geometry_crs: int | None,
+        geometry_crs: int | str | None,
         target_crs: int | None,
     ) -> gpd.GeoDataFrame:
         """Merge results into GeoDataFrame."""
@@ -1461,6 +1461,7 @@ class RasterAccessor:
                         "datetime": self.datetime,
                         "cloud_cover": self.cloud_cover,
                         "collection": self.collection,
+                        "geometry_id": geom_id,
                         "geometry": geom_obj,
                         "band": band_result["band"],
                         "data": band_result["data"],
@@ -1468,11 +1469,12 @@ class RasterAccessor:
                     }
                 )
 
+        crs_out = f"EPSG:{out_crs}" if isinstance(out_crs, int) else out_crs
         if not rows:
-            empty_geometry = gpd.GeoSeries([], name="geometry", crs=f"EPSG:{out_crs}")
-            return gpd.GeoDataFrame(geometry=empty_geometry, crs=f"EPSG:{out_crs}")
+            empty_geometry = gpd.GeoSeries([], name="geometry", crs=crs_out)
+            return gpd.GeoDataFrame(geometry=empty_geometry, crs=crs_out)
 
-        return gpd.GeoDataFrame(rows, geometry="geometry", crs=f"EPSG:{out_crs}")
+        return gpd.GeoDataFrame(rows, geometry="geometry", crs=crs_out)
 
     def __dir__(self) -> list[str]:
         names = super().__dir__()

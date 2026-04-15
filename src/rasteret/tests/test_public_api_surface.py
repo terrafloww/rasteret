@@ -85,16 +85,26 @@ def test_collection_analysis_methods_delegate_to_execution_layer() -> None:
         ) as mocked_points,
     ):
         xarray_result = collection.get_xarray(
-            geometries=[], bands=["B04"], xr_combine="merge_override"
+            geometries=[],
+            bands=["B04"],
+            geometry_column="plot_geometry",
+            xr_combine="merge_override",
         )
-        gdf_result = collection.get_gdf(geometries=[], bands=["B04"])
-        numpy_result = collection.get_numpy(geometries=[], bands=["B04"])
+        gdf_result = collection.get_gdf(
+            geometries=[], bands=["B04"], geometry_column="plot_geometry"
+        )
+        numpy_result = collection.get_numpy(
+            geometries=[], bands=["B04"], geometry_column="plot_geometry"
+        )
         points_result = collection.sample_points(points=[], bands=["B04"])
 
     mocked_xarray.assert_called_once()
     assert mocked_xarray.call_args.kwargs["xr_combine"] == "merge_override"
+    assert mocked_xarray.call_args.kwargs["geometry_column"] == "plot_geometry"
     mocked_gdf.assert_called_once()
+    assert mocked_gdf.call_args.kwargs["geometry_column"] == "plot_geometry"
     mocked_numpy.assert_called_once()
+    assert mocked_numpy.call_args.kwargs["geometry_column"] == "plot_geometry"
     mocked_points.assert_called_once()
     assert xarray_result == "xarray-result"
     assert gdf_result == "gdf-result"
@@ -396,18 +406,29 @@ def test_load_dataset_id_uses_descriptor_collection_uri() -> None:
 
 
 def test_build_aef_dataset_id_routes_to_load_alias() -> None:
-    sentinel = object()
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.subset_kwargs: dict[str, object] | None = None
 
-    with patch("rasteret.load", return_value=sentinel) as mocked:
+        def subset(self, **kwargs):
+            self.subset_kwargs = kwargs
+            return self
+
+    fake = FakeCollection()
+    bbox = (11.3, -0.002, 11.5, 0.001)
+    date_range = ("2023-01-01", "2023-12-31")
+
+    with patch("rasteret.load", return_value=fake) as mocked:
         collection = rasteret.build(
             "aef/v1-annual",
             name="aef-runtime",
-            bbox=(11.3, -0.002, 11.5, 0.001),
-            date_range=("2023-01-01", "2023-12-31"),
+            bbox=bbox,
+            date_range=date_range,
         )
 
-    assert collection is sentinel
+    assert collection is fake
     mocked.assert_called_once_with("aef/v1-annual", name="aef-runtime")
+    assert fake.subset_kwargs == {"bbox": bbox, "date_range": date_range}
 
 
 def test_load_dataset_id_preserves_data_source_for_auto_backend() -> None:
@@ -1308,6 +1329,38 @@ def test_as_collection_wraps_arrow_capsule_array_object() -> None:
     assert collection.name == "wrapped-array"
     assert collection.dataset is not None
     assert collection.dataset.count_rows() == 1
+
+
+def test_build_collection_from_table_reprojects_geoarrow_footprint_to_crs84() -> None:
+    gpd = pytest.importorskip("geopandas")
+    shapely_ops = pytest.importorskip("shapely.ops")
+    from pyproj import Transformer
+    from shapely.geometry import box
+
+    from rasteret.ingest.normalize import build_collection_from_table
+
+    transformer = Transformer.from_crs("OGC:CRS84", "EPSG:3857", always_xy=True)
+    mercator_geom = shapely_ops.transform(transformer.transform, box(0, 0, 1, 1))
+    geometry = pa.table(
+        gpd.GeoDataFrame(geometry=[mercator_geom], crs="EPSG:3857").to_arrow(
+            geometry_encoding="WKB"
+        )
+    ).column("geometry")
+    table = pa.table(
+        {
+            "id": pa.array(["scene-1"]),
+            "datetime": pa.array([datetime(2024, 1, 1)], type=pa.timestamp("us")),
+            "assets": pa.array([{"B04": {"href": "https://example.com/test.tif"}}]),
+        }
+    ).append_column("geometry", geometry)
+
+    collection = build_collection_from_table(table)
+    bbox = collection.to_table().column("bbox")[0].as_py()
+
+    assert bbox["xmin"] == pytest.approx(0.0, abs=1e-6)
+    assert bbox["ymin"] == pytest.approx(0.0, abs=1e-6)
+    assert bbox["xmax"] == pytest.approx(1.0, abs=1e-6)
+    assert bbox["ymax"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_collection_arrow_export_marks_wkb_geometry_as_geoarrow() -> None:

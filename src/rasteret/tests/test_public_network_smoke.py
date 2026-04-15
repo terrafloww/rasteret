@@ -167,11 +167,10 @@ def test_aef_build_enrich_and_read_matches_rasterio(tmp_path: Path) -> None:
             max_concurrent=8,
         )
 
-    assert collection.dataset is not None
-    assert collection.dataset.count_rows() >= 1
+    assert len(collection) >= 1
 
     # Extract the real COG URL we selected (all bands share the same href).
-    row = collection.dataset.to_table(columns=["assets"]).to_pylist()[0]
+    row = collection.to_table(columns=["assets"]).to_pylist()[0]
     url = row["assets"]["A00"]["href"]
 
     from rasteret.cloud import CloudConfig, rewrite_url

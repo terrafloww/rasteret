@@ -59,9 +59,7 @@ def _assert_has_tiled_band_metadata(
     collection: rasteret.Collection, band_code: str
 ) -> None:
     col_name = f"{band_code}_metadata"
-    assert collection.dataset is not None
-    assert col_name in collection.dataset.schema.names
-    table = collection.dataset.to_table(columns=[col_name])
+    table = collection.to_table(columns=[col_name])
     assert table.num_rows >= 1
     values = table.column(col_name).to_pylist()
     first = next((v for v in values if v is not None), None)

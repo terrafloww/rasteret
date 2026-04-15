@@ -22,6 +22,7 @@ from rasteret.core.collection import Collection
 from rasteret.core.execution import (
     _detect_target_crs,
     _narrow_query_filters,
+    get_collection_gdf,
     get_collection_numpy,
     get_collection_xarray,
 )
@@ -205,6 +206,29 @@ class TestXarrayMerge:
                 )
         assert excinfo.value.__cause__ is first
 
+    def test_table_aoi_is_normalized_before_auto_crs_detection(self):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        plots = gpd.GeoDataFrame(
+            {"plot_id": ["p1"]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        ).to_arrow(geometry_encoding="WKB")
+
+        with patch(
+            "rasteret.core.execution._load_collection_data",
+            new=AsyncMock(return_value=([xr.Dataset()], [])),
+        ):
+            out = get_collection_xarray(
+                collection=None,
+                geometries=plots,
+                bands=["B04"],
+                data_source="test-source",
+            )
+
+        assert isinstance(out, xr.Dataset)
+
 
 class TestQueryNarrowing:
     def test_derived_bbox_added_from_geometries(self):
@@ -375,11 +399,158 @@ class TestGdfCrs:
 
             out = get_collection_gdf(
                 collection=None,  # unused due to patched _load_collection_data
-                geometries=[],
+                geometries=(0.0, 0.0, 1.0, 1.0),
                 bands=["B04"],
                 data_source="sentinel-2-l2a",
             )
         assert str(out.crs) == "EPSG:3857"
+
+    def test_gdf_table_aoi_preserves_metadata(self):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        plots = pa.table(
+            {
+                "plot_id": pa.array(["p1", "p2"]),
+                "crop": pa.array(["rice", "wheat"]),
+                "plot_geometry": pa.array(
+                    [box(0, 0, 1, 1).wkb, box(2, 2, 3, 3).wkb],
+                    type=pa.binary(),
+                ),
+            }
+        )
+        frame = gpd.GeoDataFrame(
+            {
+                "record_id": ["scene-1", "scene-1"],
+                "geometry_id": [1, 2],
+                "band": ["B04", "B04"],
+                "data": [np.ones((1, 1)), np.ones((1, 1)) * 2],
+            },
+            geometry=[box(0, 0, 1, 1), box(2, 2, 3, 3)],
+            crs="EPSG:4326",
+        )
+        captured = {}
+
+        async def fake_load_collection_data(**kwargs):
+            captured["geometries"] = kwargs["geometries"]
+            return [frame], []
+
+        with patch(
+            "rasteret.core.execution._load_collection_data",
+            new=AsyncMock(side_effect=fake_load_collection_data),
+        ):
+            out = get_collection_gdf(
+                collection=None,
+                geometries=plots,
+                geometry_column="plot_geometry",
+                geometry_crs=4326,
+                bands=["B04"],
+                data_source="test-source",
+            )
+
+        assert len(captured["geometries"]) == 2
+        assert list(out["plot_id"]) == ["p1", "p2"]
+        assert list(out["crop"]) == ["rice", "wheat"]
+
+    def test_gdf_table_aoi_missing_geometry_column_raises(self):
+        plots = pa.table({"plot_id": pa.array(["p1"])})
+
+        with pytest.raises(ValueError, match="geometry_column='plot_geometry'"):
+            get_collection_gdf(
+                collection=None,
+                geometries=plots,
+                geometry_column="plot_geometry",
+                bands=["B04"],
+                data_source="test-source",
+            )
+
+    def test_gdf_table_aoi_missing_crs_requires_geometry_crs(self):
+        from shapely.geometry import box
+
+        plots = pa.table({"plot_geometry": [box(0, 0, 1, 1).wkb]})
+
+        with pytest.raises(ValueError, match="missing GeoArrow CRS metadata"):
+            get_collection_gdf(
+                collection=None,
+                geometries=plots,
+                geometry_column="plot_geometry",
+                bands=["B04"],
+                data_source="test-source",
+            )
+
+    def test_gdf_geoarrow_aoi_infers_crs_and_preserves_metadata(self):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        plots = gpd.GeoDataFrame(
+            {"plot_id": ["p1"]},
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:3857",
+        ).to_arrow(geometry_encoding="WKB")
+        frame = gpd.GeoDataFrame(
+            {
+                "record_id": ["scene-1"],
+                "geometry_id": [1],
+                "band": ["B04"],
+                "data": [np.ones((1, 1))],
+            },
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:3857",
+        )
+        captured = {}
+
+        async def fake_load_collection_data(**kwargs):
+            captured["geometry_crs"] = kwargs["geometry_crs"]
+            return [frame], []
+
+        with patch(
+            "rasteret.core.execution._load_collection_data",
+            new=AsyncMock(side_effect=fake_load_collection_data),
+        ):
+            out = get_collection_gdf(
+                collection=None,
+                geometries=plots,
+                bands=["B04"],
+                data_source="test-source",
+            )
+
+        assert captured["geometry_crs"] == 3857
+        assert list(out["plot_id"]) == ["p1"]
+
+    def test_gdf_aoi_metadata_collision_fails(self):
+        import geopandas as gpd
+        from shapely.geometry import box
+
+        plots = pa.table(
+            {
+                "band": pa.array(["user-band"]),
+                "plot_geometry": pa.array([box(0, 0, 1, 1).wkb], type=pa.binary()),
+            }
+        )
+        frame = gpd.GeoDataFrame(
+            {
+                "record_id": ["scene-1"],
+                "geometry_id": [1],
+                "band": ["B04"],
+                "data": [np.ones((1, 1))],
+            },
+            geometry=[box(0, 0, 1, 1)],
+            crs="EPSG:4326",
+        )
+
+        with patch(
+            "rasteret.core.execution._load_collection_data",
+            new=AsyncMock(return_value=([frame], [])),
+        ):
+            with pytest.raises(ValueError, match="collide"):
+                get_collection_gdf(
+                    collection=None,
+                    geometries=plots,
+                    geometry_column="plot_geometry",
+                    geometry_crs=4326,
+                    bands=["B04"],
+                    data_source="test-source",
+                )
 
 
 class TestGeometryErrors:
@@ -1936,6 +2107,7 @@ class TestPointSampling:
             collection=collection,
             points=pa.table({"lon": [1.0], "lat": [2.0]}),
             bands=["B04"],
+            geometry_crs=4326,
             match="latest",
         )
         assert table.num_rows == 1
@@ -1943,6 +2115,56 @@ class TestPointSampling:
         assert table.column("value")[0].as_py() == 11.0
         assert len(collection._rasters[0].calls) == 0
         assert len(collection._rasters[1].calls) == 1
+
+    def test_get_collection_point_samples_requires_crs_for_xy_table(self):
+        collection = self._DummyCollection([])
+
+        with pytest.raises(ValueError, match="missing GeoArrow CRS metadata"):
+            get_collection_point_samples(
+                collection=collection,
+                points=pa.table({"lon": [1.0], "lat": [2.0]}),
+                bands=["B04"],
+            )
+
+    def test_get_collection_point_samples_preserves_point_metadata(self):
+        rows = [
+            {
+                "point_index": 0,
+                "point_x": 1.0,
+                "point_y": 2.0,
+                "point_crs": 4326,
+                "record_id": "scene",
+                "datetime": np.datetime64("2024-01-01T00:00:00"),
+                "collection": "c",
+                "cloud_cover": 1.0,
+                "band": "B04",
+                "value": 10.0,
+                "raster_crs": 32632,
+            }
+        ]
+        collection = self._DummyCollection([self._DummyRaster(rows)])
+
+        table = get_collection_point_samples(
+            collection=collection,
+            points=pa.table({"plot_id": ["p1"], "lon": [1.0], "lat": [2.0]}),
+            bands=["B04"],
+            geometry_crs=4326,
+        )
+
+        assert table.column("plot_id").to_pylist() == ["p1"]
+        assert table.column("lon").to_pylist() == [1.0]
+        assert table.column("lat").to_pylist() == [2.0]
+
+    def test_get_collection_point_samples_metadata_collision_fails(self):
+        collection = self._DummyCollection([])
+
+        with pytest.raises(ValueError, match="collide"):
+            get_collection_point_samples(
+                collection=collection,
+                points=pa.table({"value": [99.0], "lon": [1.0], "lat": [2.0]}),
+                bands=["B04"],
+                geometry_crs=4326,
+            )
 
     def test_get_collection_point_samples_groups_points_by_raster_bbox(self):
         raster_left = self._DummyRaster(
@@ -1994,6 +2216,7 @@ class TestPointSampling:
             collection=collection,
             points=pa.table({"lon": [1.0, 10.0], "lat": [2.0, 20.0]}),
             bands=["B04"],
+            geometry_crs=4326,
         )
 
         assert table.num_rows == 2
@@ -2058,6 +2281,7 @@ class TestPointSampling:
                 collection=collection,
                 points=pa.table({"lon": [1.0, 10.0], "lat": [2.0, 20.0]}),
                 bands=["B04"],
+                geometry_crs=4326,
             )
 
         assert table.num_rows == 2
@@ -2130,6 +2354,7 @@ class TestPointSampling:
                 collection=collection,
                 points=pa.table({"lon": [1.0, 10.0], "lat": [2.0, 20.0]}),
                 bands=["B04"],
+                geometry_crs=4326,
             )
 
         assert table.num_rows == 2
@@ -2156,6 +2381,7 @@ class TestPointSampling:
             collection=collection,
             points=pa.table({"lon": [1.0], "lat": [2.0]}),
             bands=["B04"],
+            geometry_crs=4326,
             bbox=(100.0, 100.0, 101.0, 101.0),
             return_neighbourhood="always",
             max_distance_pixels=1,

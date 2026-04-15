@@ -27,6 +27,12 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from tqdm.asyncio import tqdm
 
+from rasteret.core.aoi import (
+    AUTO_CRS,
+    GeometryCrsInput,
+    fail_on_metadata_collisions,
+    prepare_geometry_input,
+)
 from rasteret.core.geometry import bbox_array, intersect_bbox
 from rasteret.core.utils import infer_data_source, run_sync
 
@@ -148,7 +154,7 @@ def _combine_first_int_with_fill(datasets: list[Any]) -> Any | None:
 def _derive_query_bbox(
     geometries: Any,
     *,
-    geometry_crs: int | None,
+    geometry_crs: int | str | None,
 ) -> tuple[float, float, float, float] | None:
     """Derive a query bbox in EPSG:4326 from any supported geometry input."""
     if geometries is None:
@@ -179,7 +185,7 @@ def _derive_query_bbox(
 def _narrow_query_filters(
     *,
     geometries: Any,
-    geometry_crs: int | None,
+    geometry_crs: int | str | None,
     filters: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
     """Return filters narrowed by any bbox derivable from *geometries*.
@@ -213,7 +219,7 @@ async def _load_collection_data(
     progress: bool = False,
     backend: object | None = None,
     target_crs: int | None = None,
-    geometry_crs: int | None = 4326,
+    geometry_crs: int | str | None = 4326,
     all_touched: bool = False,
     **filters: Any,
 ) -> tuple[list[gpd.GeoDataFrame] | list, list[tuple[str, Exception]]]:
@@ -309,7 +315,8 @@ def _load_and_merge(
     backend: object | None = None,
     target_crs: int | None = None,
     progress: bool = False,
-    geometry_crs: int | None = 4326,
+    geometry_crs: GeometryCrsInput = AUTO_CRS,
+    geometry_column: str | None = None,
     all_touched: bool = False,
     **filters: Any,
 ):
@@ -319,31 +326,47 @@ def _load_and_merge(
     ----------
     collection : Collection
         Source collection.
-    geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict
+    geometries : bbox tuple, pa.Array, Shapely, WKB bytes, GeoJSON dict, or table
         Area(s) of interest.
     bands : list of str
         Band codes to load.
     for_xarray : bool
         ``True`` for xarray output, ``False`` for GeoDataFrame.
     merge_fn : callable
-        ``merge_fn(results) -> merged_output``.
+        ``merge_fn(results, aoi_metadata) -> merged_output``.
     data_source, max_concurrent, backend, target_crs, filters
         Forwarded to :func:`_load_collection_data`.
     """
 
     async def _async_load():
+        aoi = prepare_geometry_input(
+            geometries,
+            geometry_column=geometry_column,
+            geometry_crs=geometry_crs,
+            preserve_metadata=not for_xarray and not for_numpy,
+            id_column="geometry_id",
+            id_start=1,
+        )
+        resolved_target_crs = target_crs
+        if for_xarray and resolved_target_crs is None:
+            resolved_target_crs = _detect_target_crs(
+                collection,
+                geometries=aoi.geometries,
+                geometry_crs=aoi.geometry_crs,
+                filters=filters,
+            )
         results, errors = await _load_collection_data(
             collection=collection,
             data_source=data_source or infer_data_source(collection),
-            geometries=_ensure_geoarrow(geometries),
+            geometries=aoi.geometries,
             bands=bands,
             max_concurrent=max_concurrent,
             backend=backend,
             for_xarray=for_xarray,
             for_numpy=for_numpy,
-            target_crs=target_crs,
+            target_crs=resolved_target_crs,
             progress=bool(progress),
-            geometry_crs=geometry_crs,
+            geometry_crs=aoi.geometry_crs,
             all_touched=all_touched,
             **filters,
         )
@@ -365,7 +388,7 @@ def _load_and_merge(
                 )
                 raise ValueError(msg) from first
             raise ValueError("No valid data found")
-        return merge_fn(results)
+        return merge_fn(results, aoi.metadata)
 
     return run_sync(_async_load())
 
@@ -375,7 +398,7 @@ def _detect_target_crs(
     filters: dict[str, Any],
     *,
     geometries: Any = None,
-    geometry_crs: int | None = 4326,
+    geometry_crs: int | str | None = 4326,
 ) -> int | None:
     """Auto-detect multi-CRS and return a target CRS if reprojection is needed.
 
@@ -442,7 +465,8 @@ def get_collection_xarray(
     max_concurrent: int = 50,
     backend: object | None = None,
     target_crs: int | None = None,
-    geometry_crs: int | None = 4326,
+    geometry_crs: GeometryCrsInput = AUTO_CRS,
+    geometry_column: str | None = None,
     all_touched: bool = False,
     progress: bool = False,
     xr_combine: str = "combine_first",
@@ -468,6 +492,8 @@ def get_collection_xarray(
         Reproject all records to this EPSG code before merging. When
         ``None`` and the collection spans multiple CRS zones,
         auto-reprojection to the most common CRS is triggered.
+    geometry_column : str, optional
+        Geometry column to read when ``geometries`` is a tabular AOI input.
     all_touched : bool
         Passed through to polygon masking behavior. ``False`` matches
         rasterio default semantics.
@@ -501,17 +527,7 @@ def get_collection_xarray(
     """
     import xarray as xr
 
-    # Auto-detect multi-CRS to prevent silent spatial data corruption
-    # from merging tiles with incompatible coordinate systems.
-    if target_crs is None:
-        target_crs = _detect_target_crs(
-            collection,
-            geometries=geometries,
-            geometry_crs=geometry_crs,
-            filters=filters,
-        )
-
-    def _merge(datasets):
+    def _merge(datasets, _aoi_metadata=None):
         logger.info("Merging %s datasets", len(datasets))
         if xr_combine == "combine_first":
             merged = _combine_first_int_with_fill(datasets)
@@ -544,6 +560,7 @@ def get_collection_xarray(
         backend=backend,
         target_crs=target_crs,
         geometry_crs=geometry_crs,
+        geometry_column=geometry_column,
         all_touched=all_touched,
         progress=bool(progress),
         **filters,
@@ -559,7 +576,8 @@ def get_collection_gdf(
     max_concurrent: int = 50,
     backend: object | None = None,
     target_crs: int | None = None,
-    geometry_crs: int | None = 4326,
+    geometry_crs: GeometryCrsInput = AUTO_CRS,
+    geometry_column: str | None = None,
     all_touched: bool = False,
     progress: bool = False,
     **filters: Any,
@@ -583,6 +601,10 @@ def get_collection_gdf(
     target_crs : int, optional
         Reproject all records to this EPSG code before building the
         GeoDataFrame.
+    geometry_column : str, optional
+        Geometry column to read when ``geometries`` is a tabular AOI input.
+        Non-geometry AOI columns are joined back to the output by
+        ``geometry_id``.
     all_touched : bool
         Passed through to polygon masking behavior. ``False`` matches
         rasterio default semantics.
@@ -596,8 +618,21 @@ def get_collection_gdf(
         pair with pixel data and the read-window transform as columns.
     """
 
-    def _merge_gdfs(dfs: list[gpd.GeoDataFrame]) -> gpd.GeoDataFrame:
+    def _merge_gdfs(
+        dfs: list[gpd.GeoDataFrame], aoi_metadata: pa.Table | None = None
+    ) -> gpd.GeoDataFrame:
         merged = pd.concat(dfs, ignore_index=True)
+        if aoi_metadata is not None and "geometry_id" in merged.columns:
+            fail_on_metadata_collisions(
+                aoi_metadata,
+                output_columns=set(str(col) for col in merged.columns),
+                join_column="geometry_id",
+            )
+            merged = merged.merge(
+                aoi_metadata.to_pandas(),
+                on="geometry_id",
+                how="left",
+            )
         gdf = gpd.GeoDataFrame(merged, geometry="geometry")
         crs = next(
             (getattr(df, "crs", None) for df in dfs if getattr(df, "crs", None)), None
@@ -618,6 +653,7 @@ def get_collection_gdf(
         backend=backend,
         target_crs=target_crs,
         geometry_crs=geometry_crs,
+        geometry_column=geometry_column,
         all_touched=all_touched,
         progress=bool(progress),
         **filters,
@@ -634,7 +670,8 @@ def get_collection_numpy(
     progress: bool = False,
     backend: object | None = None,
     target_crs: int | None = None,
-    geometry_crs: int | None = 4326,
+    geometry_crs: GeometryCrsInput = AUTO_CRS,
+    geometry_column: str | None = None,
     all_touched: bool = False,
     **filters: Any,
 ):
@@ -656,6 +693,8 @@ def get_collection_numpy(
         Pluggable I/O backend.
     target_crs : int, optional
         Reproject all records to this CRS before assembling arrays.
+    geometry_column : str, optional
+        Geometry column to read when ``geometries`` is a tabular AOI input.
     all_touched : bool
         Passed through to polygon masking behavior. ``False`` matches
         rasterio default semantics.
@@ -675,7 +714,7 @@ def get_collection_numpy(
     """
     import numpy as np
 
-    def _merge_numpy(frames: list[list[tuple[list[dict], int]]]):
+    def _merge_numpy(frames: list[list[tuple[list[dict], int]]], _aoi_metadata=None):
         if not frames:
             raise ValueError("No valid data found")
 
@@ -763,6 +802,7 @@ def get_collection_numpy(
         backend=backend,
         target_crs=target_crs,
         geometry_crs=geometry_crs,
+        geometry_column=geometry_column,
         all_touched=all_touched,
         **filters,
     )

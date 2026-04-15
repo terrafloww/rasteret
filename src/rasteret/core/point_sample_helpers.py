@@ -14,7 +14,7 @@ from rasteret.core.geometry import transform_point_coords
 def point_bounds_4326(
     points: pa.Array,
     *,
-    geometry_crs: int | None,
+    geometry_crs: int | str | None,
 ):
     """Return point lon/lat coordinates and overall bbox in EPSG:4326."""
     if len(points) == 0:

@@ -20,7 +20,6 @@ from typing import Any
 
 import geoarrow.pyarrow as ga
 import pyarrow as pa
-import pyarrow.compute as pc
 
 Bbox = tuple[float, float, float, float]
 logger = logging.getLogger(__name__)
@@ -187,8 +186,8 @@ def bbox_single(geom_col: pa.Array, idx: int) -> Bbox:
 def transform_coords(
     geom_col: pa.Array,
     idx: int,
-    src_crs: int,
-    dst_crs: int,
+    src_crs: int | str,
+    dst_crs: int | str,
 ) -> dict:
     """CRS-transform one Polygon/MultiPolygon and return as GeoJSON dict.
 
@@ -196,7 +195,9 @@ def transform_coords(
     """
     from pyproj import Transformer
 
-    transformer = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+    src = f"EPSG:{src_crs}" if isinstance(src_crs, int) else src_crs
+    dst = f"EPSG:{dst_crs}" if isinstance(dst_crs, int) else dst_crs
+    transformer = Transformer.from_crs(src, dst, always_xy=True)
     coords_py = geom_col.storage[idx].as_py()
 
     if not coords_py:
@@ -388,139 +389,23 @@ def ensure_point_geoarrow(
     y_column: str | None = None,
 ) -> pa.Array:
     """Normalize point inputs into a GeoArrow point array."""
-    if isinstance(points, pa.RecordBatchReader):
-        points = points.read_all()
+    from rasteret.core.aoi import prepare_point_input
 
-    if isinstance(points, pa.Table):
-        names = points.schema.names
-        if geometry_column is not None:
-            if geometry_column not in names:
-                raise _missing_geometry_column_error(
-                    geometry_column=geometry_column,
-                    names=names,
-                    container="table columns",
-                )
-            return coerce_to_geoarrow(points.column(geometry_column))
-        xy = resolve_xy_columns(names, x_column, y_column)
-        if xy is not None:
-            x_name, y_name = xy
-            x_values = pc.cast(points.column(x_name), pa.float64(), safe=False)
-            y_values = pc.cast(points.column(y_name), pa.float64(), safe=False)
-            return ga.make_point(x_values, y_values)
-        raise TypeError(
-            "Unsupported table input for point sampling. Provide geometry_column "
-            "(WKB/GeoArrow point column) or x_column/y_column."
-        )
-
-    to_arrow_table = getattr(points, "to_arrow_table", None)
-    if callable(to_arrow_table):
-        return ensure_point_geoarrow(
-            to_arrow_table(),
-            geometry_column=geometry_column,
-            x_column=x_column,
-            y_column=y_column,
-        )
-
-    arrow_export = getattr(points, "arrow", None)
-    if callable(arrow_export):
-        try:
-            return ensure_point_geoarrow(
-                arrow_export(),
-                geometry_column=geometry_column,
-                x_column=x_column,
-                y_column=y_column,
-            )
-        except Exception as exc:
-            logger.debug("Point input .arrow() export failed: %s", exc)
-
-    to_arrow = getattr(points, "to_arrow", None)
-    if callable(to_arrow):
-        try:
-            return ensure_point_geoarrow(
-                to_arrow(),
-                geometry_column=geometry_column,
-                x_column=x_column,
-                y_column=y_column,
-            )
-        except Exception as exc:
-            logger.debug("Point input .to_arrow() export failed: %s", exc)
-
-    try:
-        import polars as pl
-
-        if isinstance(points, pl.DataFrame):
-            names = points.columns
-            if geometry_column is not None:
-                if geometry_column not in names:
-                    raise _missing_geometry_column_error(
-                        geometry_column=geometry_column,
-                        names=names,
-                        container="DataFrame columns",
-                    )
-                return coerce_to_geoarrow(points[geometry_column].to_arrow())
-            xy = resolve_xy_columns(names, x_column, y_column)
-            if xy is not None:
-                x_name, y_name = xy
-                return ga.make_point(
-                    points[x_name].to_arrow(), points[y_name].to_arrow()
-                )
-            raise TypeError(
-                "Unsupported Polars DataFrame input for point sampling. Provide "
-                "geometry_column or x_column/y_column."
-            )
-    except ImportError:
-        pass
-
-    try:
-        import pandas as pd
-
-        if isinstance(points, pd.DataFrame):
-            names = list(points.columns)
-            if geometry_column is not None:
-                if geometry_column not in names:
-                    raise _missing_geometry_column_error(
-                        geometry_column=geometry_column,
-                        names=names,
-                        container="DataFrame columns",
-                    )
-                return coerce_to_geoarrow(points[geometry_column].tolist())
-
-            if (
-                hasattr(points, "geometry")
-                and getattr(points, "geometry", None) is not None
-            ):
-                try:
-                    geom_series = points.geometry
-                    if len(geom_series) > 0:
-                        return coerce_to_geoarrow(geom_series.tolist())
-                except Exception as exc:
-                    logger.debug("GeoDataFrame .geometry coercion failed: %s", exc)
-
-            xy = resolve_xy_columns(names, x_column, y_column)
-            if xy is not None:
-                x_name, y_name = xy
-                return ga.make_point(pa.array(points[x_name]), pa.array(points[y_name]))
-            raise TypeError(
-                "Unsupported pandas/GeoPandas DataFrame input for point sampling. "
-                "Provide geometry_column or x_column/y_column."
-            )
-    except ImportError:
-        pass
-
-    if isinstance(points, list) and len(points) == 0:
-        return ga.make_point(
-            pa.array([], type=pa.float64()),
-            pa.array([], type=pa.float64()),
-        )
-
-    return coerce_to_geoarrow(points)
+    return prepare_point_input(
+        points,
+        geometry_column=geometry_column,
+        x_column=x_column,
+        y_column=y_column,
+        geometry_crs=4326,
+        preserve_metadata=False,
+    ).geometries
 
 
 def transform_point_coords(
     points: pa.Array,
     *,
-    geometry_crs: int | None,
-    target_crs: int,
+    geometry_crs: int | str | None,
+    target_crs: int | str,
 ):
     """Return point coordinates in *target_crs* as numpy arrays."""
     import numpy as np
@@ -534,7 +419,9 @@ def transform_point_coords(
 
     from pyproj import Transformer
 
-    transformer = Transformer.from_crs(geometry_crs, target_crs, always_xy=True)
+    src = f"EPSG:{geometry_crs}" if isinstance(geometry_crs, int) else geometry_crs
+    dst = f"EPSG:{target_crs}" if isinstance(target_crs, int) else target_crs
+    transformer = Transformer.from_crs(src, dst, always_xy=True)
     x_coords, y_coords = transformer.transform(point_xs, point_ys)
     return np.asarray(x_coords), np.asarray(y_coords)
 

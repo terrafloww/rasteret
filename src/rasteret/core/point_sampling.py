@@ -12,8 +12,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from tqdm.asyncio import tqdm
 
+from rasteret.core.aoi import (
+    AUTO_CRS,
+    GeometryCrsInput,
+    fail_on_metadata_collisions,
+    prepare_point_input,
+)
 from rasteret.core.geometry import (
-    ensure_point_geoarrow,
     intersect_bbox,
 )
 from rasteret.core.point_sample_helpers import (
@@ -93,7 +98,7 @@ def get_collection_point_samples(
     max_concurrent: int = 50,
     progress: bool = False,
     backend: object | None = None,
-    geometry_crs: int | None = 4326,
+    geometry_crs: GeometryCrsInput = AUTO_CRS,
     match: Literal["all", "latest"] = "all",
     max_distance_pixels: int = 0,
     return_neighbourhood: Literal["off", "always", "if_center_nodata"] = "off",
@@ -135,15 +140,36 @@ def get_collection_point_samples(
             else empty_point_samples_table
         )
 
-        point_array = ensure_point_geoarrow(
+        point_plan = prepare_point_input(
             points,
             geometry_column=geometry_column,
             x_column=x_column,
             y_column=y_column,
+            geometry_crs=geometry_crs,
+            preserve_metadata=True,
         )
+        point_array = point_plan.geometries
+        resolved_geometry_crs = point_plan.geometry_crs
+        schema = (
+            POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
+            if include_neighbourhood
+            else POINT_SAMPLES_SCHEMA
+        )
+        fail_on_metadata_collisions(
+            point_plan.metadata,
+            output_columns=set(schema.names),
+            join_column="point_index",
+        )
+        if resolved_geometry_crs is not None and not isinstance(
+            resolved_geometry_crs, int
+        ):
+            raise ValueError(
+                "Point sampling output stores point_crs as an EPSG integer. "
+                "Provide a geometry_crs that resolves to an EPSG code."
+            )
         planned_point_xs, planned_point_ys, point_bbox = point_bounds_4326(
             point_array,
-            geometry_crs=geometry_crs,
+            geometry_crs=resolved_geometry_crs,
         )
 
         sample_filters = dict(filters)
@@ -235,7 +261,7 @@ def get_collection_point_samples(
                     point_indices=point_indices,
                     max_concurrent=max_concurrent,
                     reader=shared_reader,
-                    geometry_crs=geometry_crs,
+                    geometry_crs=resolved_geometry_crs,
                     max_distance_pixels=max_distance_pixels,
                     return_neighbourhood=return_neighbourhood,
                 ),
@@ -564,11 +590,18 @@ def get_collection_point_samples(
                 else empty_point_samples_table()
             )
 
-        schema = (
-            POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
-            if include_neighbourhood
-            else POINT_SAMPLES_SCHEMA
-        )
-        return pa.Table.from_batches(sample_batches, schema=schema)
+        sampled = pa.Table.from_batches(sample_batches, schema=schema)
+        point_metadata = point_plan.metadata
+        if point_metadata is None:
+            return sampled
+        point_indices = sampled.column("point_index")
+        for name in point_metadata.schema.names:
+            if name == "point_index":
+                continue
+            sampled = sampled.append_column(
+                name,
+                pc.take(point_metadata.column(name), point_indices),
+            )
+        return sampled
 
     return run_sync(_async_sample())

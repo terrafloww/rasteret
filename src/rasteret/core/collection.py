@@ -21,6 +21,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
+from rasteret.core.aoi import AUTO_CRS, GeometryCrsInput
 from rasteret.core.execution import (
     _derive_query_bbox,
     get_collection_gdf,
@@ -2642,7 +2643,8 @@ class Collection:
         data_source: str | None = None,
         backend: Any = None,
         target_crs: int | None = None,
-        geometry_crs: int | None = 4326,
+        geometry_crs: GeometryCrsInput = AUTO_CRS,
+        geometry_column: str | None = None,
         all_touched: bool = False,
         xr_combine: str = "combine_first",
         **filters: Any,
@@ -2651,7 +2653,7 @@ class Collection:
 
         Parameters
         ----------
-        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, GeoJSON dict, or table
             Area(s) of interest to load. Accepts ``(minx, miny, maxx, maxy)``
             bbox tuples, Arrow arrays (e.g. from GeoParquet), Shapely objects,
             raw WKB bytes, or GeoJSON dicts.
@@ -2667,6 +2669,8 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before merging.
+        geometry_column : str, optional
+            Geometry column to read when ``geometries`` is a tabular AOI input.
         all_touched : bool
             Passed through to polygon masking behavior. ``False`` matches
             rasterio default semantics.
@@ -2708,6 +2712,7 @@ class Collection:
             backend=backend,
             target_crs=target_crs,
             geometry_crs=geometry_crs,
+            geometry_column=geometry_column,
             all_touched=all_touched,
             xr_combine=xr_combine,
             **filters,
@@ -2724,7 +2729,8 @@ class Collection:
         data_source: str | None = None,
         backend: Any = None,
         target_crs: int | None = None,
-        geometry_crs: int | None = 4326,
+        geometry_crs: GeometryCrsInput = AUTO_CRS,
+        geometry_column: str | None = None,
         all_touched: bool = False,
         **filters: Any,
     ) -> gpd.GeoDataFrame:
@@ -2732,7 +2738,7 @@ class Collection:
 
         Parameters
         ----------
-        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, GeoJSON dict, or table
             Area(s) of interest to load. Accepts ``(minx, miny, maxx, maxy)``
             bbox tuples, Arrow arrays (e.g. from GeoParquet), Shapely objects,
             raw WKB bytes, or GeoJSON dicts.
@@ -2748,6 +2754,10 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before building the GeoDataFrame.
+        geometry_column : str, optional
+            Geometry column to read when ``geometries`` is a tabular AOI input.
+            Non-geometry AOI columns are joined back to the output by
+            ``geometry_id``.
         all_touched : bool
             Passed through to polygon masking behavior. ``False`` matches
             rasterio default semantics.
@@ -2781,6 +2791,7 @@ class Collection:
             backend=backend,
             target_crs=target_crs,
             geometry_crs=geometry_crs,
+            geometry_column=geometry_column,
             all_touched=all_touched,
             **filters,
         )
@@ -2796,7 +2807,8 @@ class Collection:
         data_source: str | None = None,
         backend: Any = None,
         target_crs: int | None = None,
-        geometry_crs: int | None = 4326,
+        geometry_crs: GeometryCrsInput = AUTO_CRS,
+        geometry_column: str | None = None,
         all_touched: bool = False,
         **filters: Any,
     ):
@@ -2804,7 +2816,7 @@ class Collection:
 
         Parameters
         ----------
-        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict
+        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, GeoJSON dict, or table
             Area(s) of interest to load.
         bands : list of str
             Band codes to load.
@@ -2818,6 +2830,8 @@ class Collection:
             Pluggable I/O backend.
         target_crs : int, optional
             Reproject all records to this CRS before assembly.
+        geometry_column : str, optional
+            Geometry column to read when ``geometries`` is a tabular AOI input.
         all_touched : bool
             Passed through to polygon masking behavior. ``False`` matches
             rasterio default semantics.
@@ -2850,6 +2864,7 @@ class Collection:
             backend=backend,
             target_crs=target_crs,
             geometry_crs=geometry_crs,
+            geometry_column=geometry_column,
             all_touched=all_touched,
             **filters,
         )
@@ -2867,7 +2882,7 @@ class Collection:
         cloud_config: Any = None,
         data_source: str | None = None,
         backend: Any = None,
-        geometry_crs: int | None = 4326,
+        geometry_crs: GeometryCrsInput = AUTO_CRS,
         match: str = "all",
         max_distance_pixels: int = 0,
         return_neighbourhood: Literal["off", "always", "if_center_nodata"] = "off",

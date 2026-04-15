@@ -97,6 +97,46 @@ def _add_bbox_struct(table: pa.Table) -> pa.Table:
         return table.append_column("bbox", nulls)
 
 
+def _drop_column_if_present(table: pa.Table, name: str) -> pa.Table:
+    if name not in table.schema.names:
+        return table
+    return table.drop_columns([name])
+
+
+def _ensure_footprint_geometry_crs84(table: pa.Table) -> tuple[pa.Table, bool]:
+    """Return a table whose collection footprint geometry is CRS84.
+
+    Rasteret's collection footprint is the index/filtering geometry and is
+    expected to be lon/lat CRS84. Raster CRS remains in row-level sidecars.
+    """
+    if "geometry" not in table.schema.names:
+        return table, False
+
+    from rasteret.core.aoi import geoarrow_crs_from_field
+
+    field = table.schema.field("geometry")
+    source_crs = geoarrow_crs_from_field(field)
+    if source_crs is None or source_crs == 4326:
+        return table, False
+
+    import geoarrow.pyarrow as ga
+    import shapely
+    from pyproj import Transformer
+    from shapely.ops import transform
+
+    transformer = Transformer.from_crs(source_crs, "OGC:CRS84", always_xy=True)
+    geom_wkb = ga.as_wkb(table.column("geometry").combine_chunks()).to_pylist()
+    geometries = shapely.from_wkb(geom_wkb)
+    transformed = [
+        transform(transformer.transform, geom) if geom is not None else None
+        for geom in geometries
+    ]
+    crs84_wkb = pa.array(list(shapely.to_wkb(transformed)), type=pa.binary())
+    index = table.schema.get_field_index("geometry")
+    table = table.set_column(index, pa.field("geometry", pa.binary()), crs84_wkb)
+    return table, True
+
+
 def build_collection_from_table(
     table: pa.Table,
     *,
@@ -139,6 +179,10 @@ def build_collection_from_table(
     missing = REQUIRED_COLUMNS - set(table.schema.names)
     if missing:
         raise ValueError(f"Table is missing required columns: {missing}")
+
+    table, transformed_geometry = _ensure_footprint_geometry_crs84(table)
+    if transformed_geometry:
+        table = _drop_column_if_present(table, "bbox")
 
     # Add canonical bbox if absent.
     if "bbox" not in table.schema.names:
