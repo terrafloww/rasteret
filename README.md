@@ -73,52 +73,56 @@ dataset = clear.to_torchgeo_dataset(
 
 ## Bring Your Own Geometry And Metadata
 
-Rasteret collections are Arrow tables. That means external labels, farm plots,
-asset locations, fire boundaries, or point samples can be joined to the
-collection before any pixels are read. Rasteret then uses the enriched table and
-the requested geometries to find the right COGs and fetch the needed pixels.
+Rasteret works well with the table tools you already use. External labels, farm
+plots, asset locations, fire boundaries, or point samples can stay in
+GeoPandas, DuckDB, Polars, or PyArrow until you need pixels.
 
 ```python
 import duckdb
 import geopandas as gpd
 import rasteret
+from shapely.geometry import box
 
-plots = gpd.read_file("assets/plots.geojson").to_crs("OGC:CRS84")
+plots = gpd.GeoDataFrame(
+    {
+        "plot_id": ["plot-a"],
+        "crop": ["rice"],
+    },
+    geometry=[box(77.55, 13.01, 77.58, 13.08)],
+    crs="OGC:CRS84",
+)
 plots_arrow = plots.to_arrow(geometry_encoding="WKB")
 
 con = duckdb.connect()
 con.sql("INSTALL spatial; LOAD spatial;")
-con.register("sen2_rasteret", sentinel2_collection)
+con.register("sen2_rasteret", clear)
 con.register("plots", plots_arrow)
 
 # Bring your own geometries
-plot_scenes = con.sql("""
+plot_aois = con.sql("""
     SELECT
-        sen2_rasteret.* EXCLUDE (geometry),
-        ST_AsWKB(sen2_rasteret.geometry) AS geometry,
         plots.plot_id,
         plots.crop,
-        ST_AsWKB(plots.geometry) AS plot_geometry
+        plots.geometry AS plot_geometry
     FROM sen2_rasteret, plots
     WHERE sen2_rasteret."eo:cloud_cover" < 10
-      AND ST_Intersects(sen2_rasteret.geometry, plots.geometry)
+      AND ST_Intersects(
+          ST_GeomFromWKB(sen2_rasteret.geometry),
+          ST_GeomFromWKB(plots.geometry)
+      )
 """)
 
-# convert enriched table to rasteret collection
-plot_collection = rasteret.as_collection(
-    plot_scenes,
-    data_source=sentinel2_collection.data_source,
-)
-
-plot_geometries = plot_collection.to_table(columns=["plot_geometry"])["plot_geometry"]
-plot_patches = plot_collection.get_gdf(
-    geometries=plot_geometries,
+plot_patches = clear.get_gdf(
+    geometries=plot_aois,
+    geometry_column="plot_geometry",
+    geometry_crs=4326,
     bands=["B04", "B08"],
 )
 ```
 
 The same pattern works with Polars or PyArrow for split/label columns, and with
-`sample_points(...)` when your external data is point-based.
+`sample_points(...)` when your external data is point-based. `get_gdf(...)` and
+`sample_points(...)` keep business columns such as `plot_id` in their outputs.
 
 ## What You Can Do
 
@@ -219,7 +223,7 @@ Rasteret requires Python 3.12 or later.
 
 - [Getting Started](https://terrafloww.github.io/rasteret/getting-started/)
 - [Build from Parquet and Arrow Tables](https://terrafloww.github.io/rasteret/how-to/build-from-tables/)
-- [Enriched Collection Workflows](https://terrafloww.github.io/rasteret/how-to/enriched-collection-workflows/)
+- [Bring Your Own AOIs, Points, And Metadata](https://terrafloww.github.io/rasteret/how-to/enriched-collection-workflows/)
 - [TorchGeo Integration](https://terrafloww.github.io/rasteret/how-to/torchgeo-integration/)
 - [Benchmarks](https://terrafloww.github.io/rasteret/explanation/benchmark/)
 - [API Reference](https://terrafloww.github.io/rasteret/reference/)

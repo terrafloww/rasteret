@@ -89,6 +89,8 @@ To opt into resampling bands onto a common grid in the TorchGeo adapter, pass
   rows with a valid center pixel have a NULL window.
 - Point outputs are tabular (`pyarrow.Table`) with explicit CRS columns
   (`point_crs`, `raster_crs`) for downstream joins and multi-CRS workflows.
+- Non-geometry point metadata columns are preserved unless they collide with
+  Rasteret output column names.
 
 ## What "fail loudly" means
 
@@ -97,6 +99,7 @@ For unsupported inputs, Rasteret raises explicit errors like:
 - "requires a tiled GeoTIFF"
 - "unsupported TIFF compression"
 - "chunky multi-sample TIFFs require an explicit band_index"
+- "Tabular Arrow geometry input is missing GeoArrow CRS metadata"
 
 These errors are preferred over partial reads or heuristic fallbacks that could
 silently produce wrong pixels.

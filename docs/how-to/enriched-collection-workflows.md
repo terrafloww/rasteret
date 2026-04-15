@@ -1,193 +1,211 @@
-# Enriched Collection Workflows
+# Bring Your Own AOIs, Points, And Metadata
 
-Rasteret Collections are Arrow/Parquet metadata tables. That means you can add
-experiment metadata into Collection and do lots of planning/filtering on the raster records without moving the pixels
-of the original COGs.
+Use this page when you already have business data and want imagery for it:
+farm plots, store locations, field visits, labels, train/validation/test
+splits, model outputs, or any other table with rows you care about.
 
-Use this pattern for:
+AOI means **area of interest**. In practice, an AOI is usually a field boundary,
+parcel, fire perimeter, district, grid cell, or other polygon.
 
-- train/validation/test splits
-- labels and quality flags
-- AI model output IDs
-- audit columns for reproducibility
-or anything else custom to you and related to your images!
+The practical rule is:
 
-The key pattern: keep the read-ready Rasteret columns intact. Add your own columns next to them.
+```text
+Rasteret collection = raster records and COG metadata
+Your AOI/point table = geometries, labels, IDs, splits, and business columns
+```
 
-## Start From A Read-Ready Collection
+Use the tool that already fits your data: GeoPandas, DuckDB, Polars, PyArrow,
+SedonaDB, or another table tool. When it is time to read pixels, pass that table
+to Rasteret.
+
+## Start With A Collection
+
+The examples below use the public AlphaEarth Foundation collection because it
+is already read-ready:
 
 ```python
 import rasteret
 
-collection = rasteret.build(
-    "earthsearch/sentinel-2-l2a",
-    name="bangalore",
-    bbox=(77.5, 12.9, 77.7, 13.1),
-    date_range=("2024-01-01", "2024-06-30"),
+collection = rasteret.load("aef/v1-annual").subset(
+    bbox=(11.3, -0.002, 11.5, 0.001),
+    date_range=("2023-01-01", "2023-12-31"),
 )
 ```
 
-The collection can be handed directly to Arrow-aware tools. Polars can consume
-Rasteret's Arrow interface without an intermediate file or pandas dataframe.
+For your own data, use any collection built with `rasteret.build(...)`,
+`rasteret.build_from_table(...)`, or reopened with `rasteret.load(...)`.
 
-## Add Splits And Labels With Polars
+## Polygon AOIs From GeoPandas
 
-```python
-import numpy as np
-import polars as pl
-
-frame = pl.from_arrow(collection)
-n = frame.height
-rng = np.random.default_rng(42)
-
-frame = frame.with_columns(
-    pl.Series(
-        "split",
-        rng.choice(["train", "val", "test"], size=n, p=[0.7, 0.15, 0.15]),
-    ),
-    pl.Series("label", rng.integers(0, 5, size=n), dtype=pl.Int32),
-)
-```
-
-Wrap the enriched table back as a collection:
+If your polygons are in GeoPandas, call `to_arrow()` and pass the result to
+Rasteret. Columns such as `plot_id`, `crop`, and `split` come back in the
+`get_gdf(...)` result.
 
 ```python
-experiment = rasteret.as_collection(
-    frame,
-    name="bangalore-experiment-v1",
-    data_source=collection.data_source,
-)
-```
-
-Passing `data_source` preserves source-specific band mapping and avoids relying
-on schema metadata that table engines may not round-trip exactly.
-
-## Join External GIS Data With DuckDB
-
-A common workflow starts with labels or plots in a GeoJSON, Shapefile,
-FlatGeoBuf, or GeoPackage. Load it with GeoPandas, pass it to DuckDB through
-Arrow, join it with Rasteret collection metadata, and wrap the result back as a
-collection.
-
-```python
-import duckdb
 import geopandas as gpd
-import rasteret
+from shapely.geometry import box
 
-# Example custom data: known farm plots, field visits, labels, or AOIs.
-plots_gdf = gpd.read_file("path/to/plots.geojson").to_crs("OGC:CRS84")
-plots = plots_gdf.to_arrow(geometry_encoding="WKB")
+plots = gpd.GeoDataFrame(
+    {
+        "plot_id": ["plot-a", "plot-b"],
+        "crop": ["cassava", "maize"],
+        "split": ["train", "val"],
+    },
+    geometry=[
+        box(11.35, -0.0018, 11.38, -0.0008),
+        box(11.42, -0.0012, 11.46, -0.0002),
+    ],
+    crs="OGC:CRS84",
+)
 
-con = duckdb.connect()
-con.sql("INSTALL spatial; LOAD spatial;")
-con.register("my_cog_collection", experiment)
-con.register("plots", plots)
+aoi_table = plots.to_arrow(geometry_encoding="WKB")
 
-joined = con.sql("""
-    SELECT
-        my_cog_collection.*,
-        plots.plot_id,
-        plots.crop,
-        plots.geometry AS plot_geometry
-    FROM my_cog_collection, plots
-    WHERE my_cog_collection."eo:cloud_cover" < 10
-      AND ST_Intersects(
-          my_cog_collection.geometry,
-          plots.geometry
-      )
-""")
-
-plot_experiment = rasteret.as_collection(
-    joined,
-    data_source=experiment.data_source,
+gdf = collection.get_gdf(
+    geometries=aoi_table,
+    geometry_column="geometry",
+    bands=["A00", "A01"],
 )
 ```
 
-The `plots` file is your own external GIS data. GeoPandas reads it, `to_arrow()`
-hands it to DuckDB without a CSV/export step, and the SQL query keeps the
-Rasteret collection columns while adding label and plot geometry columns next
-to them. The result stays read-ready because the query selected
-`my_cog_collection.*`.
+The returned GeoDataFrame includes Rasteret result columns plus the AOI metadata
+columns such as `plot_id`, `crop`, and `split`.
 
-## Read Pixels From The Enriched Collection
+## Point Tables
 
-Use the added columns for filtering or AOIs:
-
-```python
-train = plot_experiment.subset(split="train")
-plot_geometries = train.to_table(columns=["plot_geometry"]).column("plot_geometry")
-
-arr = train.get_numpy(
-    geometries=plot_geometries,
-    bands=["B04", "B08"],
-)
-```
-
-## Use Splits And Labels With TorchGeo
-
-If the enriched collection has `split` and `label` columns, pass them into the
-TorchGeo adapter:
+For point sampling, pass a table with coordinate columns and the columns you
+want to keep. Plain `x/y` or `lon/lat` columns do not say which CRS they use,
+so pass `geometry_crs`.
 
 ```python
-train_dataset = experiment.to_torchgeo_dataset(
-    bands=["B02", "B03", "B04", "B08"],
-    split="train",
-    label_field="label",
-    chip_size=256,
+import pyarrow as pa
+
+points = pa.table(
+    {
+        "sensor_id": ["s-001", "s-002"],
+        "plot_id": ["plot-a", "plot-b"],
+        "lon": [11.36, 11.44],
+        "lat": [-0.001, -0.0005],
+    }
 )
 
-val_dataset = experiment.to_torchgeo_dataset(
-    bands=["B02", "B03", "B04", "B08"],
-    split="val",
-    label_field="label",
-    chip_size=256,
-)
-```
-
-Everything after dataset creation is standard TorchGeo and PyTorch.
-
-Point sampling works the same way, use a geometry column that contains points:
-
-```python
-samples = train.sample_points(
-    points=train.to_table(columns=["plot_center_point"]),
-    geometry_column="plot_center_point",
-    bands=["B04"],
+samples = collection.sample_points(
+    points=points,
+    x_column="lon",
+    y_column="lat",
+    bands=["A00", "A01"],
     geometry_crs=4326,
 )
 ```
 
-## Export The Enriched Collection
+The result includes the sample values, raster metadata, and the point metadata
+columns such as `sensor_id`, `plot_id`, `lon`, and `lat`.
+
+## DuckDB Spatial Joins
+
+Use DuckDB when you want SQL joins before pixel reads. Copy the
+`ST_GeomFromWKB(...)` pattern below when joining Rasteret footprint geometry
+with a geometry column from another table.
 
 ```python
-experiment.export("./bangalore_experiment_v1")
-reloaded = rasteret.load("./bangalore_experiment_v1")
+import duckdb
+
+con = duckdb.connect()
+con.sql("INSTALL spatial; LOAD spatial;")
+con.register("records", collection)
+con.register("plots", aoi_table)
+
+matched_plots = con.sql("""
+    SELECT
+        plots.plot_id,
+        plots.crop,
+        plots.split,
+        plots.geometry AS plot_geometry
+    FROM records, plots
+    WHERE ST_Intersects(
+        ST_GeomFromWKB(records.geometry),
+        ST_GeomFromWKB(plots.geometry)
+    )
+""")
+
+gdf = collection.get_gdf(
+    geometries=matched_plots,
+    geometry_column="plot_geometry",
+    geometry_crs=4326,
+    bands=["A00"],
+)
 ```
 
-The exported collection contains metadata, labels, splits, assets, and COG
-header metadata. Pixel bytes still live in the source COGs.
+The DuckDB query can be passed directly to Rasteret. `geometry_crs=4326` is
+included because the SQL result no longer says which CRS the geometry uses.
 
-## Query With PyArrow Only
+## Add Metadata To Collection Rows
 
-You do not need DuckDB for simple filters, you can use the subset method:
+Sometimes your new columns describe the image rows themselves rather than the
+plots or points. Examples include scene labels, split assignments, quality
+flags, and model version IDs. In that case, add columns to the collection table
+and wrap it back as a collection.
 
 ```python
-import rasteret
+import pyarrow as pa
 
-# Load the collection
-collection = rasteret.load("bangalore-experiment-v1")
+table = collection.to_table()
+table = table.append_column("split", pa.array(["train"] * table.num_rows))
+table = table.append_column(
+    "experiment_id",
+    pa.array(["aef-demo"] * table.num_rows),
+)
 
-# Filter the collection
-train = collection.subset(split="train", cloud_cover_lt=15.0)
+experiment = rasteret.as_collection(
+    table,
+    name="aef-demo-experiment",
+    data_source=collection.data_source,
+)
+
+train = experiment.subset(split="train")
 ```
 
-## Notes
+Use `as_collection(...)` only for tables that still describe Rasteret image
+records. For ordinary plot, parcel, sensor, or label tables, pass the table
+directly to `get_gdf(...)` or `sample_points(...)`.
 
-- `as_collection(...)` is for tables that are already read-ready Rasteret
-  Collections.
-- `build_from_table(...)` is for first-time external record tables that still
-  need normalization or COG enrichment.
-- Keep Rasteret's required columns when you use SQL or dataframe tools.
-- Keep geometry columns in WKB/GeoArrow form when possible.
-- If your SQL engine drops schema metadata, pass `data_source=...` explicitly
-  when wrapping the table back with `as_collection(...)`.
+## Choose The Output Surface
+
+| Method | What happens to your columns |
+| --- | --- |
+| `get_gdf(...)` | Keeps AOI columns such as `plot_id`, `crop`, and `split`. |
+| `sample_points(...)` | Keeps point columns such as `sensor_id`, `plot_id`, `lon`, and `lat`. |
+| `get_numpy(...)` | Reads the pixels, but returns only arrays. |
+| `get_xarray(...)` | Reads the pixels, but returns an xarray Dataset. |
+| `to_torchgeo_dataset(...)` | Uses collection columns such as `split` and `label_field`. |
+
+Use `get_gdf(...)` or `sample_points(...)` when labels, IDs, folds, or audit
+columns need to stay attached to the pixel results.
+
+## CRS Rules
+
+- Rasteret collection footprints use longitude/latitude.
+- Rasters can still have their own native CRS. Rasteret handles that internally.
+- Your AOIs and points can be in longitude/latitude, UTM, or another CRS.
+- If the geometry column includes CRS information, Rasteret uses it.
+- If your table only has `lon` / `lat` columns, or a geometry column with no
+  CRS information, pass `geometry_crs=...`.
+
+Rasteret fails when it cannot know the input CRS. That error is useful: a silent
+CRS guess can return pixels from the wrong place.
+
+## Column Names
+
+Some column names are used by Rasteret outputs, such as `record_id`, `datetime`,
+`band`, `data`, `value`, `geometry_id`, and `point_index`. If your input table
+uses one of those names for something else, rename it before reading.
+
+For example:
+
+```python
+safe_points = points.rename_columns(
+    ["sensor_id", "input_plot_id", "lon", "lat"]
+)
+```
+
+Rasteret raises an error for these collisions instead of silently renaming or
+overwriting your columns.

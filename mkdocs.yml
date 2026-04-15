@@ -136,9 +136,9 @@ nav:
     - how-to/index.md
     - TorchGeo Integration: how-to/torchgeo-integration.md
     - Build from Parquet and Arrow Tables: how-to/build-from-tables.md
+    - Bring Your Own AOIs, Points, And Metadata: how-to/enriched-collection-workflows.md
     - Point Sampling and Masking: how-to/point-sampling-and-masking.md
     - AEF Embeddings: how-to/aef-embeddings.md
-    - Enriched Collection Workflows: how-to/enriched-collection-workflows.md
     - Multi-Dataset Training: how-to/multi-dataset-training.md
     - Collection Management: how-to/collection-management.md
     - Dataset Catalog: how-to/dataset-catalog.md

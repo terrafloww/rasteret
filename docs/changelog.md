@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.13
+
+### Added
+
+- **Tabular AOIs for polygon reads**: `get_numpy(...)`, `get_xarray(...)`,
+  and `get_gdf(...)` now accept `geometry_column=...` when `geometries` is an
+  Arrow/GeoArrow AOI table or Arrow C stream producer.
+- **Arrow-native point-table metadata**: `sample_points(...)` now preserves
+  non-geometry point-table columns in the returned Arrow table.
+- **GeoArrow CRS inference for AOIs and points**: Rasteret now uses GeoArrow CRS
+  metadata when available and requires `geometry_crs=...` for tabular geometry
+  inputs that do not carry CRS metadata.
+
+### Changed
+
+- **GeoDataFrame pixel outputs preserve AOI metadata**: `get_gdf(...)` joins
+  non-geometry AOI table columns back to results by `geometry_id`.
+- **Runtime geometry docs now focus on user tools**: the former enriched
+  collection workflow guide is now
+  [Bring Your Own AOIs, Points, And Metadata](how-to/enriched-collection-workflows.md).
+
 ## v0.3.12
 
 ### Fixed

@@ -208,5 +208,5 @@ arr = clear.get_numpy(
 )
 ```
 
-For labels, splits, AOI joins, and other experiment metadata, see
-[Enriched Collection Workflows](enriched-collection-workflows.md).
+For labels, splits, AOI joins, point tables, and other business metadata, see
+[Bring Your Own AOIs, Points, And Metadata](enriched-collection-workflows.md).

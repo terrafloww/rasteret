@@ -79,7 +79,7 @@ dataset = collection.to_torchgeo_dataset(
 Samples include the label under `sample["label"]`.
 
 For adding split and label columns before this step, see
-[Enriched Collection Workflows](enriched-collection-workflows.md).
+[Bring Your Own AOIs, Points, And Metadata](enriched-collection-workflows.md).
 For benchmark methodology and current numbers, see
 [Benchmarks](../explanation/benchmark.md) and the
 [TorchGeo Benchmark: Rasteret vs Native Rasterio notebook](../tutorials/05_torchgeo_benchmark_rasteret_vs_rasterio.ipynb).

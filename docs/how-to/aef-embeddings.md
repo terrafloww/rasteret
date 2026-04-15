@@ -76,6 +76,9 @@ samples = sub.sample_points(
 )
 ```
 
+The returned Arrow table includes the input `name`, `lon`, and `lat` columns
+beside the sampled embedding values.
+
 TorchGeo handoff:
 
 ```python

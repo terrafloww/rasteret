@@ -54,10 +54,19 @@ Because a collection is a table, you can treat metadata as data:
 - keep train/validation/test splits beside the asset metadata
 - keep labels, AOI IDs, or quality flags beside the imagery index
 - share an exported collection with another environment
-- pass collection metadata through Arrow-compatible tools
+- pass collection metadata through tools such as DuckDB, Polars, PyArrow, and
+  GeoPandas
 
 Rasteret still owns the raster read path. Other tools can help with metadata
 work, joins, and inspection.
+
+You will usually see three kinds of tables:
+
+| Table | What it describes | Common use |
+| --- | --- | --- |
+| Collection table | Raster records, assets, footprints, and COG metadata | Build once, filter, share, and reuse. |
+| AOI or point table | User geometries plus business columns | Pass plots, sensors, labels, or splits into reads. |
+| Output table | Pixel results plus preserved metadata | Continue analysis in GeoPandas, PyArrow, DuckDB, or Polars. |
 
 ## CRS In Rasteret
 
@@ -70,6 +79,9 @@ Rasteret stores two CRS ideas that should not be confused:
 The raster CRS is used when Rasteret transforms query geometries into raster
 space. The footprint CRS is what GeoPandas, DuckDB, and other Arrow consumers
 should use when reading the `geometry` column.
+
+User AOIs and points may be in another CRS. If Rasteret cannot read the CRS
+from the geometry column, pass `geometry_crs=...`.
 
 ## Read Planning
 

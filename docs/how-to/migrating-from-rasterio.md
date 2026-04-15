@@ -121,7 +121,7 @@ them as columns in the collection table. Rasteret keeps pixels in the COGs, so
 metadata joins can happen in Arrow-native tools without rewriting raster data.
 
 For the full GeoPandas -> DuckDB -> Rasteret pattern, see
-[Enriched Collection Workflows](enriched-collection-workflows.md).
+[Bring Your Own AOIs, Points, And Metadata](enriched-collection-workflows.md).
 
 ## When To Use Which Tool
 

@@ -33,7 +33,6 @@ Rasteret can add `bbox`, `year`, and `month` during normalization. Pass
 from datetime import datetime
 
 import geopandas as gpd
-import pandas as pd
 import rasteret
 from shapely.geometry import box
 
@@ -60,6 +59,11 @@ collection = rasteret.build_from_table(
 
 `build_from_table()` accepts direct file/cloud-storage paths to Parquet/Arrow
 tables and Arrow-compatible in-memory objects.
+
+Rasteret treats the collection footprint `geometry` as CRS84. If the input
+geometry is a GeoArrow field with CRS metadata, Rasteret can reproject the
+footprint before deriving `bbox`. The raster CRS still belongs in row-level
+sidecar columns such as `crs` and `proj:epsg`.
 
 ## Build From DuckDB
 
@@ -179,18 +183,34 @@ ds = collection.get_xarray(
 )
 ```
 
-You can also pass Arrow geometry columns directly:
+You can also pass AOI tables directly to pixel reads. Use this when the table
+describes user geometries such as parcels, plots, or labels rather than raster
+records:
 
 ```python
-import pyarrow.parquet as pq
+import geopandas as gpd
+from shapely.geometry import box
 
-parcels = pq.read_table("field_boundaries.geoparquet", columns=["geometry"])
+parcels = gpd.GeoDataFrame(
+    {
+        "parcel_id": ["parcel-001"],
+        "crop": ["rice"],
+    },
+    geometry=[box(77.55, 13.01, 77.58, 13.08)],
+    crs="OGC:CRS84",
+).to_arrow(geometry_encoding="WKB")
 
-arr = collection.get_numpy(
-    geometries=parcels.column("geometry"),
+gdf = collection.get_gdf(
+    geometries=parcels,
+    geometry_column="geometry",
     bands=["B04", "B08"],
 )
 ```
+
+`get_gdf(...)` preserves non-geometry AOI columns such as `parcel_id` and
+`crop`. For array-only outputs such as `get_numpy(...)` and `get_xarray(...)`,
+the same table geometry input works, but the returned object does not carry
+AOI metadata.
 
 ## Troubleshooting
 

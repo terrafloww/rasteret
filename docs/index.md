@@ -48,7 +48,7 @@ If you are new, read these in order:
 1. [Getting Started](getting-started/index.md): install Rasteret and build your first collection.
 2. [Concepts](explanation/concepts.md): understand the collection model and why Rasteret is not just another raster reader.
 3. [Migrating from Rasterio](how-to/migrating-from-rasterio.md): see the side-by-side workflow shift if you already know rasterio or GDAL.
-4. [How-To Guides](how-to/index.md): choose a task guide for Parquet/Arrow ingest, enrichment, point sampling, TorchGeo, catalog, or cloud access.
+4. [How-To Guides](how-to/index.md): choose a task guide for collection ingest, AOI/point tables, point sampling, TorchGeo, catalog, or cloud access.
 5. [Tutorials](tutorials/index.md): follow notebook walkthroughs after the core ideas are familiar.
 
 ## A Minimal Workflow
@@ -71,7 +71,13 @@ arr = filtered.get_numpy(
     bands=["B04", "B08"],
 )
 
-points = pa.table({"lon": [-122.40, -122.39], "lat": [37.79, 37.80]})
+points = pa.table(
+    {
+        "site_id": ["site-a", "site-b"],
+        "lon": [-122.40, -122.39],
+        "lat": [37.79, 37.80],
+    }
+)
 samples = filtered.sample_points(
     points=points,
     x_column="lon",
@@ -93,8 +99,8 @@ Common output surfaces:
 | --- | --- | --- |
 | `get_numpy()` | `numpy.ndarray` | You want raw arrays for ML or custom processing. |
 | `get_xarray()` | `xarray.Dataset` | You want labeled raster data, coordinates, and CRS metadata. |
-| `get_gdf()` | `geopandas.GeoDataFrame` | You want one row per geometry/record result with pixel arrays attached. |
-| `sample_points()` | `pyarrow.Table` | You want pixel values at points, including point/raster CRS columns. |
+| `get_gdf()` | `geopandas.GeoDataFrame` | You want one row per geometry/record result, with AOI metadata preserved. |
+| `sample_points()` | `pyarrow.Table` | You want pixel values at points, with point metadata preserved. |
 | `to_torchgeo_dataset()` | TorchGeo `GeoDataset` | You want a TorchGeo-compatible dataset backed by Rasteret reads. |
 
 ## Dataset Catalog

@@ -70,7 +70,7 @@ Rasteret-specific options for TorchGeo include:
 | `is_image=False` | Return `sample["mask"]` for mask-style datasets. |
 
 For workflow examples, see [TorchGeo Integration](../how-to/torchgeo-integration.md),
-[Enriched Collection Workflows](../how-to/enriched-collection-workflows.md), and
+[Bring Your Own AOIs, Points, And Metadata](../how-to/enriched-collection-workflows.md), and
 [Multi-Dataset Training](../how-to/multi-dataset-training.md).
 
 ## xarray, GeoPandas, NumPy, And Point Tables
@@ -84,6 +84,11 @@ Rasteret's main pixel output methods are:
 | `get_gdf(...)` | GeoPandas GeoDataFrame with pixel arrays attached. |
 | `sample_points(...)` | PyArrow table with point sample rows. |
 
+`get_gdf(...)` and `sample_points(...)` keep useful columns from your AOI or
+point tables, such as IDs, labels, or splits. `get_numpy(...)` and
+`get_xarray(...)` can read table geometries too, but they return array-style
+objects rather than business tables.
+
 xarray output uses pyproj/CF-style CRS metadata, including a `spatial_ref`
 coordinate and GDAL-compatible `GeoTransform` attribute. rioxarray is not
 required, but tools that understand CF grid mapping metadata can use those
@@ -93,7 +98,7 @@ Band arrays preserve the native COG dtype. For example, Sentinel-2 L2A data is
 typically `uint16`; AEF embeddings are `int8`. Cast or de-quantize when your
 analysis needs floats.
 
-Point sampling is Arrow-first:
+Point sampling returns a table:
 
 ```python
 samples = collection.sample_points(
@@ -105,8 +110,9 @@ samples = collection.sample_points(
 )
 ```
 
-The result remains a `pyarrow.Table`, so it can continue into PyArrow, DuckDB,
-Polars, pandas, or another Arrow-aware tool.
+The result can continue into PyArrow, DuckDB, Polars, pandas, or another table
+tool. Point-table columns are preserved unless they collide with Rasteret output
+column names.
 
 ## rasterio And pyproj
 

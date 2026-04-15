@@ -71,7 +71,7 @@ collection.compare_to_catalog()
 
 Useful mental model:
 
-- `geometry` is the scene footprint, stored as GeoArrow WKB.
+- `geometry` is the scene footprint.
 - `crs` / `proj:epsg` describe the native raster CRS for each row.
 - `*_metadata` columns store per-band COG header metadata used by the read path.
 - Extra columns such as splits, labels, AOI IDs, or experiment metadata can live
@@ -120,6 +120,30 @@ gdf = filtered.get_gdf(
 )
 ```
 
+If your AOIs already live in GeoPandas, pass them with `to_arrow()` and select
+the geometry column. Rasteret keeps columns such as `plot_id` and `crop` in
+`get_gdf(...)` output:
+
+```python
+import geopandas as gpd
+from shapely.geometry import box
+
+plots = gpd.GeoDataFrame(
+    {
+        "plot_id": ["plot-a"],
+        "crop": ["rice"],
+    },
+    geometry=[box(77.55, 13.01, 77.58, 13.08)],
+    crs="OGC:CRS84",
+)
+
+gdf = filtered.get_gdf(
+    geometries=plots.to_arrow(geometry_encoding="WKB"),
+    geometry_column="geometry",
+    bands=["B04", "B08"],
+)
+```
+
 For TorchGeo pipelines:
 
 ```python
@@ -137,7 +161,13 @@ DataLoader code.
 ```python
 import pyarrow as pa
 
-points = pa.table({"lon": [77.56, 77.57], "lat": [13.03, 13.04]})
+points = pa.table(
+    {
+        "plot_id": ["plot-a", "plot-b"],
+        "lon": [77.56, 77.57],
+        "lat": [13.03, 13.04],
+    }
+)
 
 samples = filtered.sample_points(
     points=points,
@@ -148,8 +178,7 @@ samples = filtered.sample_points(
 )
 ```
 
-`samples` is a `pyarrow.Table`, so it can move into Arrow-native tools without
-first becoming a pandas dataframe.
+`samples` is a table with the point values and input columns such as `plot_id`.
 
 ## What To Use When
 
@@ -173,10 +202,9 @@ If it is not in the catalog:
     user can reopen it with `rasteret.load("path/")`.
 
 !!! warning "CRS still matters"
-    Query geometries default to EPSG:4326 (`geometry_crs=4326`). If your input
-    points or polygons are in another CRS, pass the correct `geometry_crs`.
-    Rasteret uses the raster CRS metadata in the collection to transform reads
-    safely.
+    Some geometry columns tell Rasteret their CRS. Plain coordinate columns do
+    not, so pass `geometry_crs=...` for those inputs. Rasteret uses the raster
+    CRS metadata in the collection to transform reads safely.
 
 ## Next
 

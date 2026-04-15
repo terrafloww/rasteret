@@ -123,7 +123,7 @@ You can add columns beside Rasteret's columns. Common examples:
 | `quality_flag` | Custom filtering or audit value. |
 
 For examples, see
-[Enriched Collection Workflows](../how-to/enriched-collection-workflows.md).
+[Bring Your Own AOIs, Points, And Metadata](../how-to/enriched-collection-workflows.md).
 
 ## Arrow And GeoArrow Interop
 
@@ -138,6 +138,12 @@ Important CRS distinction:
 
 That means a collection can have footprints in CRS84 while the rasters
 themselves are in UTM or another projected CRS.
+
+AOI and point tables are separate from the collection table. They can carry
+their own geometry column, CRS, and business columns such as `plot_id`,
+`sensor_id`, `split`, or `label`. Rasteret keeps those business columns in
+`get_gdf(...)` and `sample_points(...)` outputs unless a column name collides
+with a Rasteret output field.
 
 ## Entry Points
 
