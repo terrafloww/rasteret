@@ -119,6 +119,40 @@ def _write_static_catalog_with_tiff(
     return root / "catalog.json", cog_path
 
 
+def _write_static_catalog_with_asset_sequence(
+    tmp_path,
+    asset_keys: list[str],
+    *,
+    collection_id: str = "mixed_catalog",
+) -> Path:
+    root = tmp_path / "catalog"
+    root.mkdir()
+    catalog = pystac.Catalog(id=collection_id, description="mixed static")
+
+    for idx, asset_key in enumerate(asset_keys):
+        item_dir = root / f"tile-{idx}"
+        item_dir.mkdir()
+        item = pystac.Item(
+            id=f"scene-{idx}",
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=[0, 0, 1, 1],
+            datetime=datetime(2024, 1, 1, 0, 0, 0),
+            properties={},
+            collection=collection_id,
+        )
+        item.add_asset(asset_key, pystac.Asset(href=f"{asset_key}.tif"))
+        item.set_self_href(str(item_dir / f"scene-{idx}.json"))
+        item.save_object()
+        catalog.add_item(item)
+
+    catalog.normalize_hrefs(str(root))
+    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    return root / "catalog.json"
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -293,7 +327,7 @@ class TestStacCollectionBuilder:
         catalog_path, _ = _write_static_catalog_with_tiff(tmp_path, asset_key="B01")
 
         with patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser") as parser:
-            with pytest.raises(ValueError, match="No STAC asset keys matched"):
+            with pytest.raises(ValueError, match="Missing asset keys: red"):
                 rasteret.build_from_stac(
                     name="local-static-mismatch",
                     stac_api=str(catalog_path),
@@ -305,6 +339,41 @@ class TestStacCollectionBuilder:
                     force=True,
                 )
             parser.assert_not_called()
+
+    def test_static_catalog_fails_fast_when_band_map_has_partial_typo(self, tmp_path):
+        import rasteret
+
+        catalog_path, _ = _write_static_catalog_with_tiff(tmp_path, asset_key="B01")
+
+        with patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser") as parser:
+            with pytest.raises(ValueError, match="Missing asset keys: B02"):
+                rasteret.build_from_stac(
+                    name="local-static-partial-mismatch",
+                    stac_api=str(catalog_path),
+                    collection="S2_L2A_catalog",
+                    static_catalog=True,
+                    band_map={"B01": "B01", "B02": "B02"},
+                    workspace_dir=tmp_path / "workspace",
+                    max_concurrent=1,
+                    force=True,
+                )
+            parser.assert_not_called()
+
+    def test_static_catalog_validates_against_full_selected_asset_union(self, tmp_path):
+        catalog_path = _write_static_catalog_with_asset_sequence(
+            tmp_path,
+            ["B01"] * 20 + ["B02"],
+        )
+        builder = StacCollectionBuilder(
+            data_source="mixed_catalog",
+            stac_api=str(catalog_path),
+            band_map={"B01": "B01", "B02": "B02"},
+            static_catalog=True,
+        )
+
+        items = builder._crawl_static_catalog(None, None)
+
+        assert len(items) == 21
 
     def test_sentinel2_registry_common_name_map_is_preserved(self):
         builder = StacCollectionBuilder(

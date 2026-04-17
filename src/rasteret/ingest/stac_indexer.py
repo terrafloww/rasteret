@@ -35,7 +35,6 @@ from rasteret.ingest.normalize import build_collection_from_table
 from rasteret.types import BoundingBox, DateRange
 
 logger = logging.getLogger(__name__)
-_STATIC_BAND_MAP_PREFLIGHT_ITEMS = 20
 
 
 def _is_retryable_stac_api_error(exc: Exception) -> bool:
@@ -471,7 +470,6 @@ class StacCollectionBuilder(CollectionBuilder):
                 )
 
         items: list[dict] = []
-        band_map_preflight_done = False
         for item in catalog.get_all_items():
             # Resolve relative hrefs to absolute URLs
             item.make_asset_hrefs_absolute()
@@ -496,16 +494,10 @@ class StacCollectionBuilder(CollectionBuilder):
                         continue
 
             items.append(item_dict)
-            if (
-                not band_map_preflight_done
-                and len(items) >= _STATIC_BAND_MAP_PREFLIGHT_ITEMS
-            ):
-                self._ensure_band_map_matches_assets(items)
-                band_map_preflight_done = True
             if max_items and len(items) >= max_items:
                 break
 
-        if items and not band_map_preflight_done:
+        if items:
             self._ensure_band_map_matches_assets(items)
 
         return items
@@ -516,8 +508,25 @@ class StacCollectionBuilder(CollectionBuilder):
         explicit_map = self._band_map is not None
         resolved = self.band_map
 
-        if resolved and self._mapped_asset_keys(resolved, asset_keys):
-            return
+        if resolved:
+            if explicit_map:
+                missing = set(resolved.values()) - asset_keys
+                if not missing:
+                    return
+                detected = self._format_asset_keys(asset_keys)
+                expected = self._format_asset_keys(set(resolved.values()))
+                missing_text = self._format_asset_keys(missing)
+                raise ValueError(
+                    "STAC band_map references asset keys not present in the "
+                    "selected STAC items. "
+                    f"Missing asset keys: {missing_text}. "
+                    f"Configured asset keys: {expected}. "
+                    f"Detected asset keys: {detected}. "
+                    "Individual items may omit valid bands, but every configured "
+                    "asset key must appear at least once in the selected result."
+                )
+            if self._mapped_asset_keys(resolved, asset_keys):
+                return
 
         if not explicit_map:
             inferred = self._infer_band_map_from_assets(asset_keys)
