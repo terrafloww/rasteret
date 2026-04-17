@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -164,6 +165,44 @@ class TestAutoObstoreBackendRouting:
         store, path = backend._store_for("https://example.com/data/file.tif")
         assert path == "data/file.tif"
         assert "https://example.com/" in backend._stores
+
+    def test_local_paths_read_through_obstore_buffers(self, tmp_path: Path):
+        payload = b"0123456789abcdef"
+        path = tmp_path / "payload.bin"
+        path.write_bytes(payload)
+        backend = _create_obstore_backend()
+
+        result = asyncio.run(backend.get_range(str(path), 2, 6))
+
+        assert not isinstance(result, bytes)
+        assert memoryview(result).tobytes() == payload[2:8]
+
+    def test_file_uri_paths_read_through_obstore_buffers(self, tmp_path: Path):
+        payload = b"0123456789abcdef"
+        path = tmp_path / "payload.bin"
+        path.write_bytes(payload)
+        backend = _create_obstore_backend()
+
+        result = asyncio.run(backend.get_range(path.as_uri(), 4, 5))
+
+        assert not isinstance(result, bytes)
+        assert memoryview(result).tobytes() == payload[4:9]
+
+    def test_local_multi_range_reads_return_buffer_protocol_objects(
+        self, tmp_path: Path
+    ):
+        payload = b"0123456789abcdef"
+        path = tmp_path / "payload.bin"
+        path.write_bytes(payload)
+        backend = _create_obstore_backend()
+
+        result = asyncio.run(backend.get_ranges(str(path), [(1, 3), (8, 4)]))
+
+        assert all(not isinstance(chunk, bytes) for chunk in result)
+        assert [memoryview(chunk).tobytes() for chunk in result] == [
+            payload[1:4],
+            payload[8:12],
+        ]
 
     def test_s3_overrides_applied(self):
         backend = _create_obstore_backend(

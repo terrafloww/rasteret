@@ -174,14 +174,16 @@ def test_cog_reader_reads_local_file_ranges(tmp_path: Path) -> None:
             return await reader._read_range(str(path), 2, 6)
 
     out = asyncio.run(_read())
-    assert out == payload[2:6]
+    assert not isinstance(out, bytes)
+    assert memoryview(out).tobytes() == payload[2:6]
 
     async def _read_file_uri() -> bytes:
         async with COGReader(max_concurrent=1) as reader:
             return await reader._read_range(path.as_uri(), 2, 6)
 
     out_uri = asyncio.run(_read_file_uri())
-    assert out_uri == payload[2:6]
+    assert not isinstance(out_uri, bytes)
+    assert memoryview(out_uri).tobytes() == payload[2:6]
 
 
 @pytest.mark.asyncio

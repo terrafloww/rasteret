@@ -19,6 +19,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pyarrow as pa
 import pystac_client
@@ -34,6 +35,7 @@ from rasteret.ingest.normalize import build_collection_from_table
 from rasteret.types import BoundingBox, DateRange
 
 logger = logging.getLogger(__name__)
+_STATIC_BAND_MAP_PREFLIGHT_ITEMS = 20
 
 
 def _is_retryable_stac_api_error(exc: Exception) -> bool:
@@ -136,6 +138,7 @@ class StacCollectionBuilder(CollectionBuilder):
                 "No STAC scenes matched the request "
                 f"(bbox={bbox}, date_range={date_range}, query={query})."
             )
+        self._ensure_band_map_matches_assets(stac_items)
 
         # 2. Process in batches, adding COG metadata
         processed_items = await self._enrich_with_cog_metadata(stac_items)
@@ -386,9 +389,6 @@ class StacCollectionBuilder(CollectionBuilder):
                 )
                 await asyncio.sleep(sleep_s)
 
-        # Planetary Computer SAS signing
-        from urllib.parse import urlparse
-
         host = urlparse(self.stac_api).netloc.lower()
         if "planetarycomputer.microsoft.com" in host:
             # If an obstore backend is provided, prefer native AzureStore reads
@@ -471,6 +471,7 @@ class StacCollectionBuilder(CollectionBuilder):
                 )
 
         items: list[dict] = []
+        band_map_preflight_done = False
         for item in catalog.get_all_items():
             # Resolve relative hrefs to absolute URLs
             item.make_asset_hrefs_absolute()
@@ -495,10 +496,112 @@ class StacCollectionBuilder(CollectionBuilder):
                         continue
 
             items.append(item_dict)
+            if (
+                not band_map_preflight_done
+                and len(items) >= _STATIC_BAND_MAP_PREFLIGHT_ITEMS
+            ):
+                self._ensure_band_map_matches_assets(items)
+                band_map_preflight_done = True
             if max_items and len(items) >= max_items:
                 break
 
+        if items and not band_map_preflight_done:
+            self._ensure_band_map_matches_assets(items)
+
         return items
+
+    def _ensure_band_map_matches_assets(self, stac_items: list[dict]) -> None:
+        """Resolve or validate band mapping before expensive COG header reads."""
+        asset_keys = self._collect_asset_keys(stac_items)
+        explicit_map = self._band_map is not None
+        resolved = self.band_map
+
+        if resolved and self._mapped_asset_keys(resolved, asset_keys):
+            return
+
+        if not explicit_map:
+            inferred = self._infer_band_map_from_assets(asset_keys)
+            if inferred:
+                self._band_map = inferred
+                logger.info(
+                    "Inferred STAC band map for %s from asset keys: %s",
+                    self.data_source,
+                    inferred,
+                )
+                return
+
+        detected = self._format_asset_keys(asset_keys)
+        if resolved:
+            expected = self._format_asset_keys(set(resolved.values()))
+            raise ValueError(
+                "No STAC asset keys matched the resolved band_map. "
+                f"Expected one of: {expected}. Detected asset keys: {detected}. "
+                "Pass band_map={band: asset_key} with asset keys present in the "
+                "STAC items, or use a registered data_source with matching asset "
+                "conventions."
+            )
+
+        raise ValueError(
+            "No band_map is configured for this STAC source, and Rasteret could "
+            f"not infer one from detected asset keys: {detected}. Pass "
+            "band_map={band: asset_key} explicitly or register a BandRegistry "
+            "mapping for this data_source."
+        )
+
+    @staticmethod
+    def _collect_asset_keys(stac_items: list[dict]) -> set[str]:
+        keys: set[str] = set()
+        for item in stac_items:
+            assets = item.get("assets") or {}
+            if isinstance(assets, dict):
+                keys.update(str(key) for key in assets.keys())
+        return keys
+
+    @staticmethod
+    def _mapped_asset_keys(band_map: dict[str, str], asset_keys: set[str]) -> set[str]:
+        return {asset for asset in band_map.values() if asset in asset_keys}
+
+    def _infer_band_map_from_assets(self, asset_keys: set[str]) -> dict[str, str]:
+        """Infer provider asset conventions from registered dataset band maps."""
+        if not asset_keys:
+            return {}
+
+        candidate_sources = [
+            self.data_source,
+            self.stac_collection,
+            *BandRegistry.list_registered(),
+        ]
+        seen: set[str] = set()
+        best: dict[str, str] = {}
+        for source in candidate_sources:
+            if not source or source in seen:
+                continue
+            seen.add(source)
+            registered = BandRegistry.get(source)
+            if not registered:
+                continue
+
+            provider_map = {
+                band: asset for band, asset in registered.items() if asset in asset_keys
+            }
+            if len(provider_map) > len(best):
+                best = provider_map
+
+            identity_map = {band: band for band in registered if band in asset_keys}
+            if len(identity_map) > len(best):
+                best = identity_map
+
+        return best
+
+    @staticmethod
+    def _format_asset_keys(asset_keys: set[str], limit: int = 20) -> str:
+        if not asset_keys:
+            return "<none>"
+        ordered = sorted(asset_keys)
+        shown = ", ".join(ordered[:limit])
+        if len(ordered) > limit:
+            shown = f"{shown}, ... (+{len(ordered) - limit} more)"
+        return shown
 
     def _rewrite_asset_url(self, asset: dict) -> None:
         """Rewrite a single asset URL in-place using cloud_config patterns."""

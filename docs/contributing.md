@@ -212,9 +212,9 @@ Before adding a dataset, work through this checklist:
 
 1. **Data source is reachable**: STAC API, static catalog, or GeoParquet
    file. Verify you can query it or read it with PyArrow.
-2. **Band map has at least one working COG**: Rasteret parses COG headers
-   during `build()`. If no asset can be parsed, Rasteret can't index or read
-   the dataset.
+2. **Band map points to real assets**: the values in `band_map` must match
+   asset names in the STAC items. For example, some Sentinel-2 catalogs use
+   asset names like `B02`, while others use names like `blue`.
 3. **End-to-end `build()` succeeds**: run `rasteret.build()` with a small
    scope and verify `len(col) > 0`.
 4. **License is verified from the authoritative source**: pull `license`,
@@ -227,7 +227,8 @@ Before adding a dataset, work through this checklist:
 
 For static STAC catalogs (no `/search` endpoint), set `static_catalog=True`
 on the descriptor. Rasteret uses `pystac.Catalog.from_file()` to traverse
-these catalogs with client-side bbox/date filtering.
+these catalogs with client-side bbox/date filtering. Static catalogs can point
+to cloud COGs or local tiled GeoTIFF/COG files.
 
 ## Public API discipline
 

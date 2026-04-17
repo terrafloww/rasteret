@@ -9,8 +9,10 @@ import contextlib
 import logging
 import math
 import re
+from collections.abc import Buffer
 from dataclasses import dataclass
 from datetime import timedelta as _timedelta
+from pathlib import Path
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
@@ -259,6 +261,10 @@ class _AutoObstoreBackend:
                 break
         parsed = urlparse(url)
 
+        # --- Local filesystem paths -> LocalStore ---
+        if parsed.scheme in {"", "file"}:
+            return self._get_local_store(), self._local_store_path(url, parsed)
+
         # --- s3:// scheme -> S3Store ---
         if parsed.scheme == "s3":
             bucket = parsed.netloc
@@ -325,6 +331,34 @@ class _AutoObstoreBackend:
             )
             self._stores[origin] = store
         return store, parsed.path.lstrip("/")
+
+    def _get_local_store(self) -> object:
+        """Return a root-scoped LocalStore for local filesystem reads."""
+        cache_key = "file:///"
+        store = self._stores.get(cache_key)
+        if store is None:
+            from obstore.store import LocalStore
+
+            store = LocalStore.from_url(cache_key)
+            self._stores[cache_key] = store
+        return store
+
+    @staticmethod
+    def _local_store_path(url: str, parsed) -> str:
+        """Convert a local path or file URI to a LocalStore path."""
+        if parsed.scheme == "file":
+            if parsed.netloc not in {"", "localhost"}:
+                raise ValueError(
+                    f"Unsupported non-local file URI host: {parsed.netloc!r}"
+                )
+            path = Path(unquote(parsed.path))
+        else:
+            path = Path(url)
+
+        if not path.is_absolute():
+            path = Path.cwd() / path
+
+        return str(path).lstrip("/")
 
     def _get_s3_store(self, bucket: str) -> object:
         """Return a cached ``S3Store`` for *bucket*."""
@@ -465,14 +499,15 @@ class _AutoObstoreBackend:
     async def _retry_backoff(self, attempt: int) -> None:
         await asyncio.sleep(_SHORT_READ_BACKOFF_BASE_S * (2**attempt))
 
-    async def get_range(self, url: str, start: int, length: int) -> bytes:
+    async def get_range(self, url: str, start: int, length: int) -> Buffer:
         import obstore as obs
 
         for attempt in range(_SHORT_READ_RETRY_ATTEMPTS):
             store, path = self._store_for(url)
             try:
-                buf = await obs.get_range_async(store, path, start=start, length=length)
-                data = bytes(buf)
+                data = await obs.get_range_async(
+                    store, path, start=start, length=length
+                )
                 if len(data) != length:
                     raise self._truncated_read_error(url, start, length, len(data))
                 return data
@@ -537,7 +572,7 @@ class _AutoObstoreBackend:
 
         raise RuntimeError("Unexpected range-read retry flow fell through")
 
-    async def get_ranges(self, url: str, ranges: list[tuple[int, int]]) -> list[bytes]:
+    async def get_ranges(self, url: str, ranges: list[tuple[int, int]]) -> list[Buffer]:
         if not ranges:
             return []
 
@@ -547,10 +582,9 @@ class _AutoObstoreBackend:
         for attempt in range(_SHORT_READ_RETRY_ATTEMPTS):
             store, path = self._store_for(url)
             try:
-                buffers = await obs.get_ranges_async(
+                data = await obs.get_ranges_async(
                     store, path, starts=list(starts), lengths=list(lengths)
                 )
-                data = [bytes(b) for b in buffers]
                 if len(data) != len(lengths):
                     raise IOError(
                         "Truncated multi-range response for "
@@ -791,31 +825,11 @@ class COGReader:
 
         return out
 
-    async def _read_range(self, url: str, start: int, end: int) -> bytes:
+    async def _read_range(self, url: str, start: int, end: int) -> Buffer:
         """Read a byte range via the storage backend."""
         length = end - start
         if length < 0:
             raise ValueError(f"Invalid range: start={start}, end={end}")
-        # Local file paths are handled directly, regardless of backend.
-        parsed = urlparse(url)
-        if parsed.scheme in {"", "file"}:
-            path = unquote(parsed.path) if parsed.scheme == "file" else url
-
-            def _read_local() -> bytes:
-                with open(path, "rb") as f:
-                    f.seek(start)
-                    return f.read(length)
-
-            async with self.sem:
-                data = await asyncio.to_thread(_read_local)
-                if len(data) != length:
-                    raise IOError(
-                        "Truncated local range response for "
-                        f"{path}: requested bytes={start}..{end}, "
-                        f"expected {length} bytes, got {len(data)}."
-                    )
-                return data
-
         async with self.sem:
             data = await self._backend.get_range(url, start, length)
             if len(data) != length:

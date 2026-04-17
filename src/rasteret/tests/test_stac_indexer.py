@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pystac
 import pytest
+import tifffile as tf
 from pystac_client.exceptions import APIError
 
 from rasteret.cloud import CloudConfig
@@ -75,6 +78,45 @@ def cloud_config():
         region="us-west-2",
         url_patterns={"https://test.com/": "s3://test-bucket/"},
     )
+
+
+def _write_static_catalog_with_tiff(
+    tmp_path,
+    *,
+    asset_key: str = "B01",
+    collection_id: str = "S2_L2A_catalog",
+) -> tuple[Path, Path]:
+    root = tmp_path / "catalog"
+    item_dir = root / "tile"
+    item_dir.mkdir(parents=True)
+    cog_path = item_dir / f"{asset_key}.tif"
+    data = np.zeros((128, 128), dtype=np.uint16)
+    extratags = [
+        (33550, "d", 3, (1.0, 1.0, 0.0), False),
+        (33922, "d", 6, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0), False),
+    ]
+    tf.imwrite(cog_path, data, tile=(64, 64), extratags=extratags)
+
+    item = pystac.Item(
+        id="scene-1",
+        geometry={
+            "type": "Polygon",
+            "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+        },
+        bbox=[0, 0, 1, 1],
+        datetime=datetime(2024, 1, 1, 0, 0, 0),
+        properties={},
+        collection=collection_id,
+    )
+    item.add_asset(asset_key, pystac.Asset(href=f"{asset_key}.tif"))
+    item.set_self_href(str(item_dir / "scene-1.json"))
+    item.save_object()
+
+    catalog = pystac.Catalog(id=collection_id, description="local static")
+    catalog.add_item(item)
+    catalog.normalize_hrefs(str(root))
+    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    return root / "catalog.json", cog_path
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +247,73 @@ class TestStacCollectionBuilder:
 
         url = builder._get_asset_url({"href": "https://other.com/asset.tif"})
         assert url == "https://other.com/asset.tif"
+
+    def test_static_catalog_build_enriches_relative_local_asset(self, tmp_path):
+        import rasteret
+
+        catalog_path, _ = _write_static_catalog_with_tiff(tmp_path)
+
+        collection = rasteret.build_from_stac(
+            name="local-static",
+            stac_api=str(catalog_path),
+            collection="S2_L2A_catalog",
+            static_catalog=True,
+            workspace_dir=tmp_path / "workspace",
+            max_concurrent=1,
+            force=True,
+        )
+
+        out = collection.dataset.to_table(columns=["B01_metadata"])
+        metadata = out.column("B01_metadata").to_pylist()[0]
+        assert metadata is not None
+        assert metadata["image_width"] == 128
+        assert metadata["tile_offsets"]
+
+    def test_static_catalog_explicit_band_map_subset(self, tmp_path):
+        import rasteret
+
+        catalog_path, _ = _write_static_catalog_with_tiff(tmp_path)
+
+        collection = rasteret.build_from_stac(
+            name="local-static-subset",
+            stac_api=str(catalog_path),
+            collection="S2_L2A_catalog",
+            static_catalog=True,
+            band_map={"B01": "B01"},
+            workspace_dir=tmp_path / "workspace",
+            max_concurrent=1,
+            force=True,
+        )
+
+        assert "B01_metadata" in collection.dataset.schema.names
+
+    def test_static_catalog_fails_fast_when_band_map_matches_no_assets(self, tmp_path):
+        import rasteret
+
+        catalog_path, _ = _write_static_catalog_with_tiff(tmp_path, asset_key="B01")
+
+        with patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser") as parser:
+            with pytest.raises(ValueError, match="No STAC asset keys matched"):
+                rasteret.build_from_stac(
+                    name="local-static-mismatch",
+                    stac_api=str(catalog_path),
+                    collection="S2_L2A_catalog",
+                    static_catalog=True,
+                    band_map={"B04": "red"},
+                    workspace_dir=tmp_path / "workspace",
+                    max_concurrent=1,
+                    force=True,
+                )
+            parser.assert_not_called()
+
+    def test_sentinel2_registry_common_name_map_is_preserved(self):
+        builder = StacCollectionBuilder(
+            data_source="sentinel-2-l2a",
+            stac_api="https://example.com",
+            stac_collection="sentinel-2-l2a",
+        )
+
+        assert builder.band_map["B02"] == "blue"
 
 
 def test_retryable_stac_api_error_detection() -> None:

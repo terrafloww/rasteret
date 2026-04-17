@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Buffer
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, runtime_checkable
 
@@ -67,11 +68,11 @@ class StorageBackend(Protocol):
     fsspec, or a mocked reader for tests).
     """
 
-    async def get_range(self, url: str, start: int, length: int) -> bytes: ...
+    async def get_range(self, url: str, start: int, length: int) -> Buffer: ...
 
     async def get_ranges(
         self, url: str, ranges: list[tuple[int, int]]
-    ) -> list[bytes]: ...
+    ) -> list[Buffer]: ...
 
 
 class ObstoreBackend:
@@ -111,22 +112,20 @@ class ObstoreBackend:
             return url[len(self._url_prefix) :]
         return url
 
-    async def get_range(self, url: str, start: int, length: int) -> bytes:
+    async def get_range(self, url: str, start: int, length: int) -> Buffer:
         import obstore as obs
 
         path = self._resolve_path(url)
-        buf = await obs.get_range_async(self._store, path, start=start, length=length)
-        return bytes(buf)
+        return await obs.get_range_async(self._store, path, start=start, length=length)
 
-    async def get_ranges(self, url: str, ranges: list[tuple[int, int]]) -> list[bytes]:
+    async def get_ranges(self, url: str, ranges: list[tuple[int, int]]) -> list[Buffer]:
         import obstore as obs
 
         path = self._resolve_path(url)
         starts, lengths = zip(*ranges)
-        buffers = await obs.get_ranges_async(
+        return await obs.get_ranges_async(
             self._store, path, starts=list(starts), lengths=list(lengths)
         )
-        return [bytes(b) for b in buffers]
 
 
 def rewrite_url(url: str, config: CloudConfig | None) -> str:

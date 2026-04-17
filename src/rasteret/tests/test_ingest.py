@@ -457,6 +457,42 @@ class TestBuildFromTable:
         ids = collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
         assert ids == ["scene-2"]
 
+    def test_build_from_table_enriches_local_tiff_without_custom_backend(
+        self, tmp_path
+    ):
+        import numpy as np
+
+        import rasteret
+
+        cog_path = tmp_path / "local.tif"
+        data = np.zeros((128, 128), dtype=np.uint16)
+        extratags = [
+            (33550, "d", 3, (1.0, 1.0, 0.0), False),
+            (33922, "d", 6, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0), False),
+        ]
+        tf.imwrite(cog_path, data, tile=(64, 64), extratags=extratags)
+
+        table = pa.table(
+            {
+                "id": pa.array(["scene-1"]),
+                "datetime": pa.array([datetime(2024, 1, 1)], type=pa.timestamp("us")),
+                "geometry": pa.array([None], type=pa.null()),
+                "assets": pa.array([{"B01": {"href": str(cog_path)}}]),
+            }
+        )
+
+        collection = rasteret.build_from_table(
+            table,
+            enrich_cog=True,
+            band_codes=["B01"],
+        )
+
+        out = collection.dataset.to_table(columns=["B01_metadata"])
+        metadata = out.column("B01_metadata").to_pylist()[0]
+        assert metadata is not None
+        assert metadata["image_width"] == 128
+        assert metadata["tile_offsets"]
+
     def test_build_from_table_hf_uri_uses_hf_reader(self):
         import rasteret
 
@@ -620,12 +656,6 @@ async def test_enrich_slices_tile_tables_for_planar_separate_multisample(tmp_pat
     """
     import numpy as np
 
-    class LocalFileBackend:
-        async def get_range(self, url: str, start: int, length: int) -> bytes:
-            with open(url, "rb") as f:
-                f.seek(start)
-                return f.read(length)
-
     path = tmp_path / "planar_separate.tif"
     data = np.zeros((2, 128, 128), dtype=np.int8)
     extratags = [
@@ -674,7 +704,6 @@ async def test_enrich_slices_tile_tables_for_planar_separate_multisample(tmp_pat
         ["A0", "A1"],
         max_concurrent=1,
         batch_size=10,
-        backend=LocalFileBackend(),
     )
 
     m0 = enriched.column("A0_metadata").to_pylist()[0]

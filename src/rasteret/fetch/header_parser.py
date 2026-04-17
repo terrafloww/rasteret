@@ -80,6 +80,16 @@ def _parse_nodata(raw: str) -> float | int | None:
     return value
 
 
+def _decode_buffer(value: Any, encoding: str, errors: str = "replace") -> str:
+    """Decode bytes-like TIFF tag payloads without requiring Python ``bytes``."""
+    if isinstance(value, str):
+        return value
+    try:
+        return memoryview(value).tobytes().decode(encoding, errors=errors)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return ""
+
+
 def get_crs_from_tiff_tags(tags: dict[int, Any]) -> int | None:
     """Extract CRS (EPSG code) from GeoTIFF tags.
 
@@ -383,11 +393,8 @@ class AsyncCOGHeaderParser:
                 nodata_str = (
                     raw_nodata[0] if isinstance(raw_nodata, tuple) else raw_nodata
                 )
-                if isinstance(nodata_str, (bytes, bytearray)):
-                    try:
-                        nodata_str = nodata_str.decode("ascii", errors="ignore")
-                    except (UnicodeDecodeError, AttributeError):
-                        nodata_str = ""
+                if not isinstance(nodata_str, str):
+                    nodata_str = _decode_buffer(nodata_str, "ascii", errors="ignore")
                 if isinstance(nodata_str, str) and nodata_str:
                     nodata = _parse_nodata(nodata_str)
             else:
@@ -395,11 +402,8 @@ class AsyncCOGHeaderParser:
                 # instead of the dedicated GDAL_NODATA tag.
                 raw_xml = tags.get(TAG_GDAL_METADATA)
                 xml_str = raw_xml[0] if isinstance(raw_xml, tuple) else raw_xml
-                if isinstance(xml_str, (bytes, bytearray)):
-                    try:
-                        xml_str = xml_str.decode("utf-8", errors="ignore")
-                    except (UnicodeDecodeError, AttributeError):
-                        xml_str = ""
+                if not isinstance(xml_str, str):
+                    xml_str = _decode_buffer(xml_str, "utf-8", errors="ignore")
                 if isinstance(xml_str, str) and xml_str.strip():
                     try:
                         import xml.etree.ElementTree as ET
@@ -622,7 +626,9 @@ class AsyncCOGHeaderParser:
             return struct.unpack(f"{endian}{count}B", data[:total_size])
         if type_id == 2:  # ASCII
             raw = data[:total_size]
-            return (raw[: max(0, count - 1)].decode("ascii", errors="replace"),)
+            return (
+                _decode_buffer(raw[: max(0, count - 1)], "ascii", errors="replace"),
+            )
         if type_id == 3:  # SHORT
             return struct.unpack(f"{endian}{count}H", data[:total_size])
         if type_id == 4:  # LONG
