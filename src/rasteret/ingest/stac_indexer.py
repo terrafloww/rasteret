@@ -82,6 +82,7 @@ class StacCollectionBuilder(CollectionBuilder):
         max_concurrent: int = 300,
         backend: StorageBackend | None = None,
         static_catalog: bool = False,
+        strict_band_map_validation: bool = False,
     ):
         super().__init__(
             name=name or "",
@@ -97,6 +98,7 @@ class StacCollectionBuilder(CollectionBuilder):
         self.batch_size = 100
         self._backend = backend
         self.static_catalog = static_catalog
+        self.strict_band_map_validation = strict_band_map_validation
 
     @property
     def band_map(self) -> dict[str, str]:
@@ -580,7 +582,7 @@ class StacCollectionBuilder(CollectionBuilder):
         resolved = self.band_map
 
         if resolved:
-            if explicit_map:
+            if explicit_map and self.strict_band_map_validation:
                 missing = set(resolved.values()) - asset_keys
                 if not missing:
                     return

@@ -186,6 +186,7 @@ def build_from_stac(
         max_concurrent=max_concurrent,
         backend=backend,
         static_catalog=static_catalog,
+        strict_band_map_validation=band_map is not None,
     )
 
     async def _build() -> Collection:
@@ -532,7 +533,6 @@ def build(
             stac_api=api,
             collection=descriptor.stac_collection or descriptor.id,
             data_source=descriptor.id,
-            band_map=descriptor.band_map,
             band_index_map=descriptor.band_index_map,
             bbox=bbox,
             date_range=date_range,
