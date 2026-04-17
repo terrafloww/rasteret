@@ -33,8 +33,7 @@ from rasteret.cloud import StorageBackend
 from rasteret.ingest.base import CollectionBuilder
 from rasteret.ingest.normalize import (
     build_collection_from_table,
-    normalize_crs_code,
-    parse_epsg,
+    normalize_raster_crs_sidecars,
 )
 from rasteret.integrations.huggingface import is_hf_dataset_uri, load_hf_parquet_table
 
@@ -133,25 +132,7 @@ def prepare_record_table(
             )
         table = table.append_column("assets", pa.array(assets_list))
 
-    # --- crs/proj:epsg: normalize CRS sidecars ---
-    if (
-        "proj:epsg" not in names
-        and "crs" in names
-        and (required is None or "proj:epsg" in required)
-    ):
-        crs_values = table.column("crs").to_pylist()
-        epsg_array = pa.array([parse_epsg(v) for v in crs_values], type=pa.int32())
-        table = table.append_column("proj:epsg", epsg_array)
-        names.add("proj:epsg")
-
-    if "crs" in names and (required is None or "crs" in required):
-        crs_values = table.column("crs").to_pylist()
-        crs_array = pa.array(
-            [normalize_crs_code(v) for v in crs_values], type=pa.string()
-        )
-        table = table.set_column(table.schema.get_field_index("crs"), "crs", crs_array)
-
-    return table
+    return normalize_raster_crs_sidecars(table, required_columns=required_columns)
 
 
 def _apply_column_map_aliases(

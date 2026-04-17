@@ -10,6 +10,7 @@ construct a :class:`~rasteret.core.collection.Collection`.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from datetime import datetime
@@ -52,6 +53,24 @@ def parse_epsg(crs_value: object) -> int | None:
                 return int(s.split(":", 1)[1])
             except ValueError:
                 return None
+        if s.isdigit():
+            try:
+                return int(s)
+            except ValueError:
+                return None
+        try:
+            from pyproj import CRS
+
+            return CRS.from_user_input(crs_value).to_epsg()
+        except Exception:
+            return None
+    if isinstance(crs_value, dict):
+        try:
+            from pyproj import CRS
+
+            return CRS.from_json_dict(crs_value).to_epsg()
+        except Exception:
+            return None
     return None
 
 
@@ -67,10 +86,103 @@ def normalize_crs_code(crs_value: object) -> str | None:
     epsg = parse_epsg(crs_value)
     if epsg is not None:
         return crs_code_from_epsg(epsg)
+    if isinstance(crs_value, dict):
+        try:
+            from pyproj import CRS
+
+            crs = CRS.from_json_dict(crs_value)
+            authority = crs.to_authority()
+            if authority is not None:
+                return f"{authority[0]}:{authority[1]}"
+            return crs.to_string()
+        except Exception:
+            return json.dumps(crs_value, sort_keys=True)
     if isinstance(crs_value, str):
         value = crs_value.strip()
+        if not value:
+            return None
+        try:
+            from pyproj import CRS
+
+            crs = CRS.from_user_input(value)
+            authority = crs.to_authority()
+            if authority is not None:
+                return f"{authority[0]}:{authority[1]}"
+            return crs.to_string()
+        except Exception:
+            pass
         return value or None
     return None
+
+
+def normalize_raster_crs_sidecars(
+    table: pa.Table,
+    *,
+    required_columns: Sequence[str] | None = None,
+) -> pa.Table:
+    """Normalize row-level raster CRS sidecars from common source fields.
+
+    Priority per row:
+    1. ``proj:code``
+    2. ``proj:epsg``
+    3. ``crs``
+    4. ``proj:wkt2``
+    5. ``proj:projjson``
+    """
+    required = set(required_columns) if required_columns is not None else None
+    names = set(table.schema.names)
+    if required is not None and "proj:epsg" not in required and "crs" not in required:
+        return table
+
+    candidate_columns = [
+        name
+        for name in ("proj:code", "proj:epsg", "crs", "proj:wkt2", "proj:projjson")
+        if name in names
+    ]
+    if not candidate_columns:
+        return table
+
+    candidate_values = {
+        name: table.column(name).to_pylist() for name in candidate_columns
+    }
+    row_count = len(table)
+    epsg_values: list[int | None] = []
+    crs_values: list[str | None] = []
+
+    for idx in range(row_count):
+        epsg_value: int | None = None
+        crs_value: str | None = None
+        for name in ("proj:code", "proj:epsg", "crs", "proj:wkt2", "proj:projjson"):
+            values = candidate_values.get(name)
+            if values is None:
+                continue
+            raw = values[idx]
+            if epsg_value is None:
+                epsg_value = parse_epsg(raw)
+            if crs_value is None:
+                crs_value = normalize_crs_code(raw)
+            if epsg_value is not None and crs_value is not None:
+                break
+        epsg_values.append(epsg_value)
+        crs_values.append(crs_value or crs_code_from_epsg(epsg_value))
+
+    if required is None or "proj:epsg" in required:
+        epsg_col = pa.array(epsg_values, type=pa.int32())
+        if "proj:epsg" in names:
+            idx = table.schema.get_field_index("proj:epsg")
+            table = table.set_column(idx, "proj:epsg", epsg_col)
+        else:
+            table = table.append_column("proj:epsg", epsg_col)
+
+    if required is None or "crs" in required:
+        crs_col = pa.array(crs_values, type=pa.string())
+        if "crs" in names:
+            idx = table.schema.get_field_index("crs")
+            table = table.set_column(idx, "crs", crs_col)
+        else:
+            table = table.append_column("crs", crs_col)
+
+    return table
 
 
 def _add_bbox_struct(table: pa.Table) -> pa.Table:
@@ -183,6 +295,8 @@ def build_collection_from_table(
     table, transformed_geometry = _ensure_footprint_geometry_crs84(table)
     if transformed_geometry:
         table = _drop_column_if_present(table, "bbox")
+
+    table = normalize_raster_crs_sidecars(table)
 
     # Add canonical bbox if absent.
     if "bbox" not in table.schema.names:

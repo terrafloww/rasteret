@@ -31,7 +31,11 @@ from rasteret.core.geometry import geojson_dicts_to_wkb
 from rasteret.fetch.header_parser import AsyncCOGHeaderParser
 from rasteret.ingest.base import CollectionBuilder
 from rasteret.ingest.enrich import add_band_metadata_columns, slice_tile_tables_for_band
-from rasteret.ingest.normalize import build_collection_from_table
+from rasteret.ingest.normalize import (
+    build_collection_from_table,
+    crs_code_from_epsg,
+    parse_epsg,
+)
 from rasteret.types import BoundingBox, DateRange
 
 logger = logging.getLogger(__name__)
@@ -234,18 +238,24 @@ class StacCollectionBuilder(CollectionBuilder):
                 "band_index": band_index,
             }
 
+        record_crs_by_id = self._resolve_record_crs_by_id(stac_items, processed_items)
+
         rows = []
         geojson_geoms = []
         for item in stac_items:
             props = item.get("properties", {})
+            record_id = item["id"]
+            record_epsg = record_crs_by_id.get(record_id)
             row = {
-                "id": item["id"],
-                "assets": assets_by_id.get(item["id"], {}),
+                "id": record_id,
+                "assets": assets_by_id.get(record_id, {}),
             }
             geojson_geoms.append(item["geometry"])
             # Flatten STAC properties to top-level columns
             for key, value in props.items():
                 row[key] = value
+            row["proj:epsg"] = record_epsg
+            row["crs"] = crs_code_from_epsg(record_epsg)
             row["collection"] = item.get("collection") or self.stac_collection
             rows.append(row)
 
@@ -321,6 +331,67 @@ class StacCollectionBuilder(CollectionBuilder):
         )
 
         return table
+
+    def _resolve_record_crs_by_id(
+        self,
+        stac_items: list[dict],
+        processed_items: list[dict],
+    ) -> dict[str, int]:
+        """Resolve one raster CRS per STAC record.
+
+        Priority:
+        1. STAC ``proj:code`` when parseable
+        2. Legacy STAC ``proj:epsg`` when parseable
+        3. COG-header CRS parsed during enrichment
+        """
+        header_crs_by_id: dict[str, int] = {}
+        for item in processed_items:
+            record_id = item.get("record_id")
+            raw_crs = item.get("crs")
+            if not record_id or raw_crs is None:
+                continue
+            crs_val = int(raw_crs)
+            prev = header_crs_by_id.get(record_id)
+            if prev is None:
+                header_crs_by_id[record_id] = crs_val
+            elif prev != crs_val:
+                raise ValueError(
+                    "Conflicting CRS values detected during STAC enrichment for "
+                    f"record '{record_id}' ({prev} vs {crs_val}). "
+                    "Ensure all assets in a record share the same proj:epsg."
+                )
+
+        record_crs_by_id: dict[str, int] = {}
+        missing_ids: list[str] = []
+        for item in stac_items:
+            record_id = str(item["id"])
+            props = item.get("properties") or {}
+            resolved_epsg = (
+                parse_epsg(props.get("proj:code"))
+                or parse_epsg(props.get("proj:epsg"))
+                or parse_epsg(props.get("crs"))
+                or parse_epsg(props.get("proj:wkt2"))
+                or parse_epsg(props.get("proj:projjson"))
+                or header_crs_by_id.get(record_id)
+            )
+            if resolved_epsg is None:
+                missing_ids.append(record_id)
+                continue
+            record_crs_by_id[record_id] = resolved_epsg
+
+        if missing_ids:
+            sample = ", ".join(missing_ids[:5])
+            extra = f" (+{len(missing_ids) - 5} more)" if len(missing_ids) > 5 else ""
+            raise ValueError(
+                "Raster CRS could not be resolved for selected STAC items. "
+                "Rasteret requires one raster CRS per record for spatial reads. "
+                "Provide STAC projection metadata (`proj:code` preferred, legacy "
+                "`proj:epsg` also accepted), or use assets whose GeoTIFF headers "
+                "expose CRS metadata. Missing CRS record ids: "
+                f"{sample}{extra}."
+            )
+
+        return record_crs_by_id
 
     # ------------------------------------------------------------------
     # STAC search + URL signing
@@ -723,6 +794,7 @@ class StacCollectionBuilder(CollectionBuilder):
                     "extra_samples": list(metadata.extra_samples)
                     if metadata.extra_samples
                     else None,
+                    "crs": metadata.crs,
                     "href": href,
                     "band_index": band_index,
                 }

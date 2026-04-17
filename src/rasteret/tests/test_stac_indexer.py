@@ -14,6 +14,7 @@ import numpy as np
 import pystac
 import pytest
 import tifffile as tf
+from pyproj import CRS
 from pystac_client.exceptions import APIError
 
 from rasteret.cloud import CloudConfig
@@ -105,7 +106,7 @@ def _write_static_catalog_with_tiff(
         },
         bbox=[0, 0, 1, 1],
         datetime=datetime(2024, 1, 1, 0, 0, 0),
-        properties={},
+        properties={"proj:code": "EPSG:4326"},
         collection=collection_id,
     )
     item.add_asset(asset_key, pystac.Asset(href=f"{asset_key}.tif"))
@@ -383,6 +384,168 @@ class TestStacCollectionBuilder:
         )
 
         assert builder.band_map["B02"] == "blue"
+
+    @patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser")
+    @patch("rasteret.ingest.stac_indexer.pystac_client")
+    def test_build_uses_proj_code_for_record_crs(
+        self, mock_pystac, mock_parser, mock_cog_metadata, tmp_path
+    ):
+        item = pystac.Item(
+            id="test_scene_1",
+            datetime=datetime(2023, 1, 1, 0, 0, 0),
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=[0, 0, 1, 1],
+            properties={
+                "datetime": datetime(2023, 1, 1, 0, 0, 0),
+                "proj:code": "EPSG:32632",
+                "proj:epsg": 32631,
+            },
+            assets={"B1": pystac.Asset(href="s3://test-bucket/test1_B1.tif")},
+        )
+        mock_client = MagicMock()
+        mock_search = MagicMock()
+        mock_pystac.Client.open.return_value = mock_client
+        mock_client.search.return_value = mock_search
+        mock_search.items_as_dicts.return_value = [item.to_dict()]
+
+        mock_parser_instance = AsyncMock()
+        mock_parser.return_value.__aenter__.return_value = mock_parser_instance
+        meta = CogMetadata(**{**mock_cog_metadata.__dict__, "crs": None})
+        mock_parser_instance.process_cog_headers_batch.return_value = [meta]
+
+        builder = StacCollectionBuilder(
+            data_source="test-source",
+            stac_api="https://test-stac.com",
+            workspace_dir=tmp_path / "test_output",
+            band_map={"B1": "B1"},
+        )
+
+        collection = asyncio.run(builder.build_index())
+        out = collection.dataset.to_table(columns=["proj:epsg", "crs"])
+        assert out.column("proj:epsg").to_pylist() == [32632]
+        assert out.column("crs").to_pylist() == ["EPSG:32632"]
+
+    @patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser")
+    @patch("rasteret.ingest.stac_indexer.pystac_client")
+    def test_build_falls_back_to_cog_header_crs_when_projection_property_missing(
+        self, mock_pystac, mock_parser, mock_cog_metadata, tmp_path
+    ):
+        item = pystac.Item(
+            id="test_scene_1",
+            datetime=datetime(2023, 1, 1, 0, 0, 0),
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=[0, 0, 1, 1],
+            properties={"datetime": datetime(2023, 1, 1, 0, 0, 0)},
+            assets={"B1": pystac.Asset(href="s3://test-bucket/test1_B1.tif")},
+        )
+        mock_client = MagicMock()
+        mock_search = MagicMock()
+        mock_pystac.Client.open.return_value = mock_client
+        mock_client.search.return_value = mock_search
+        mock_search.items_as_dicts.return_value = [item.to_dict()]
+
+        mock_parser_instance = AsyncMock()
+        mock_parser.return_value.__aenter__.return_value = mock_parser_instance
+        mock_parser_instance.process_cog_headers_batch.return_value = [
+            mock_cog_metadata
+        ]
+
+        builder = StacCollectionBuilder(
+            data_source="test-source",
+            stac_api="https://test-stac.com",
+            workspace_dir=tmp_path / "test_output",
+            band_map={"B1": "B1"},
+        )
+
+        collection = asyncio.run(builder.build_index())
+        out = collection.dataset.to_table(columns=["proj:epsg", "crs"])
+        assert out.column("proj:epsg").to_pylist() == [4326]
+        assert out.column("crs").to_pylist() == ["EPSG:4326"]
+
+    @patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser")
+    @patch("rasteret.ingest.stac_indexer.pystac_client")
+    def test_build_uses_proj_wkt2_for_record_crs(
+        self, mock_pystac, mock_parser, mock_cog_metadata, tmp_path
+    ):
+        item = pystac.Item(
+            id="test_scene_1",
+            datetime=datetime(2023, 1, 1, 0, 0, 0),
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=[0, 0, 1, 1],
+            properties={
+                "datetime": datetime(2023, 1, 1, 0, 0, 0),
+                "proj:wkt2": CRS.from_epsg(32632).to_wkt(),
+            },
+            assets={"B1": pystac.Asset(href="s3://test-bucket/test1_B1.tif")},
+        )
+        mock_client = MagicMock()
+        mock_search = MagicMock()
+        mock_pystac.Client.open.return_value = mock_client
+        mock_client.search.return_value = mock_search
+        mock_search.items_as_dicts.return_value = [item.to_dict()]
+
+        mock_parser_instance = AsyncMock()
+        mock_parser.return_value.__aenter__.return_value = mock_parser_instance
+        meta = CogMetadata(**{**mock_cog_metadata.__dict__, "crs": None})
+        mock_parser_instance.process_cog_headers_batch.return_value = [meta]
+
+        builder = StacCollectionBuilder(
+            data_source="test-source",
+            stac_api="https://test-stac.com",
+            workspace_dir=tmp_path / "test_output",
+            band_map={"B1": "B1"},
+        )
+
+        collection = asyncio.run(builder.build_index())
+        out = collection.dataset.to_table(columns=["proj:epsg", "crs"])
+        assert out.column("proj:epsg").to_pylist() == [32632]
+        assert out.column("crs").to_pylist() == ["EPSG:32632"]
+
+    @patch("rasteret.ingest.stac_indexer.AsyncCOGHeaderParser")
+    @patch("rasteret.ingest.stac_indexer.pystac_client")
+    def test_build_raises_early_when_record_crs_cannot_be_resolved(
+        self, mock_pystac, mock_parser, mock_cog_metadata, tmp_path
+    ):
+        item = pystac.Item(
+            id="test_scene_1",
+            datetime=datetime(2023, 1, 1, 0, 0, 0),
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=[0, 0, 1, 1],
+            properties={"datetime": datetime(2023, 1, 1, 0, 0, 0)},
+            assets={"B1": pystac.Asset(href="s3://test-bucket/test1_B1.tif")},
+        )
+        mock_client = MagicMock()
+        mock_search = MagicMock()
+        mock_pystac.Client.open.return_value = mock_client
+        mock_client.search.return_value = mock_search
+        mock_search.items_as_dicts.return_value = [item.to_dict()]
+
+        mock_parser_instance = AsyncMock()
+        mock_parser.return_value.__aenter__.return_value = mock_parser_instance
+        meta = CogMetadata(**{**mock_cog_metadata.__dict__, "crs": None})
+        mock_parser_instance.process_cog_headers_batch.return_value = [meta]
+
+        builder = StacCollectionBuilder(
+            data_source="test-source",
+            stac_api="https://test-stac.com",
+            workspace_dir=tmp_path / "test_output",
+            band_map={"B1": "B1"},
+        )
+
+        with pytest.raises(ValueError, match="Raster CRS could not be resolved"):
+            asyncio.run(builder.build_index())
 
 
 def test_retryable_stac_api_error_detection() -> None:
