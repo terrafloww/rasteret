@@ -116,7 +116,11 @@ def _minimal_item(
             "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
         },
         "bbox": [0.0, 0.0, 1.0, 1.0],
-        "properties": {"datetime": "2024-01-10T00:00:00Z", "eo:cloud_cover": 0.0},
+        "properties": {
+            "datetime": "2024-01-10T00:00:00Z",
+            "eo:cloud_cover": 0.0,
+            "proj:code": "EPSG:4326",
+        },
         "assets": {k: {"href": v} for k, v in hrefs.items()},
     }
 

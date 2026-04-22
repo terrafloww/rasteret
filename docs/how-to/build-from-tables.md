@@ -154,7 +154,8 @@ Rasteret uses that to build an `assets` value like:
 
 If your table already has separate URLs for separate single-band COGs, build an
 `assets` column instead. For example, `B04` and `B08` should point to different
-`href` values when they live in different files.
+`href` values when they live in different files. The `href` values can point to
+cloud files or local tiled GeoTIFF/COG files.
 
 ## When Enrichment Is Needed
 
@@ -223,6 +224,7 @@ If a requested band cannot be resolved, check:
 
 If COG header parsing fails for all assets, check whether the URLs require
 credentials, requester-pays configuration, URL rewriting, or a custom backend.
+For local files, a normal path like `/data/scene_B04.tif` is enough.
 
 For the exact runtime schema, see
 [Schema Contract](../explanation/schema-contract.md).

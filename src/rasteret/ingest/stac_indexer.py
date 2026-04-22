@@ -19,6 +19,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pyarrow as pa
 import pystac_client
@@ -30,7 +31,11 @@ from rasteret.core.geometry import geojson_dicts_to_wkb
 from rasteret.fetch.header_parser import AsyncCOGHeaderParser
 from rasteret.ingest.base import CollectionBuilder
 from rasteret.ingest.enrich import add_band_metadata_columns, slice_tile_tables_for_band
-from rasteret.ingest.normalize import build_collection_from_table
+from rasteret.ingest.normalize import (
+    build_collection_from_table,
+    crs_code_from_epsg,
+    parse_epsg,
+)
 from rasteret.types import BoundingBox, DateRange
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,7 @@ class StacCollectionBuilder(CollectionBuilder):
         max_concurrent: int = 300,
         backend: StorageBackend | None = None,
         static_catalog: bool = False,
+        strict_band_map_validation: bool = False,
     ):
         super().__init__(
             name=name or "",
@@ -92,6 +98,7 @@ class StacCollectionBuilder(CollectionBuilder):
         self.batch_size = 100
         self._backend = backend
         self.static_catalog = static_catalog
+        self.strict_band_map_validation = strict_band_map_validation
 
     @property
     def band_map(self) -> dict[str, str]:
@@ -136,6 +143,7 @@ class StacCollectionBuilder(CollectionBuilder):
                 "No STAC scenes matched the request "
                 f"(bbox={bbox}, date_range={date_range}, query={query})."
             )
+        self._ensure_band_map_matches_assets(stac_items)
 
         # 2. Process in batches, adding COG metadata
         processed_items = await self._enrich_with_cog_metadata(stac_items)
@@ -232,18 +240,24 @@ class StacCollectionBuilder(CollectionBuilder):
                 "band_index": band_index,
             }
 
+        record_crs_by_id = self._resolve_record_crs_by_id(stac_items, processed_items)
+
         rows = []
         geojson_geoms = []
         for item in stac_items:
             props = item.get("properties", {})
+            record_id = item["id"]
+            record_epsg = record_crs_by_id.get(record_id)
             row = {
-                "id": item["id"],
-                "assets": assets_by_id.get(item["id"], {}),
+                "id": record_id,
+                "assets": assets_by_id.get(record_id, {}),
             }
             geojson_geoms.append(item["geometry"])
             # Flatten STAC properties to top-level columns
             for key, value in props.items():
                 row[key] = value
+            row["proj:epsg"] = record_epsg
+            row["crs"] = crs_code_from_epsg(record_epsg)
             row["collection"] = item.get("collection") or self.stac_collection
             rows.append(row)
 
@@ -320,6 +334,67 @@ class StacCollectionBuilder(CollectionBuilder):
 
         return table
 
+    def _resolve_record_crs_by_id(
+        self,
+        stac_items: list[dict],
+        processed_items: list[dict],
+    ) -> dict[str, int]:
+        """Resolve one raster CRS per STAC record.
+
+        Priority:
+        1. STAC ``proj:code`` when parseable
+        2. Legacy STAC ``proj:epsg`` when parseable
+        3. COG-header CRS parsed during enrichment
+        """
+        header_crs_by_id: dict[str, int] = {}
+        for item in processed_items:
+            record_id = item.get("record_id")
+            raw_crs = item.get("crs")
+            if not record_id or raw_crs is None:
+                continue
+            crs_val = int(raw_crs)
+            prev = header_crs_by_id.get(record_id)
+            if prev is None:
+                header_crs_by_id[record_id] = crs_val
+            elif prev != crs_val:
+                raise ValueError(
+                    "Conflicting CRS values detected during STAC enrichment for "
+                    f"record '{record_id}' ({prev} vs {crs_val}). "
+                    "Ensure all assets in a record share the same proj:epsg."
+                )
+
+        record_crs_by_id: dict[str, int] = {}
+        missing_ids: list[str] = []
+        for item in stac_items:
+            record_id = str(item["id"])
+            props = item.get("properties") or {}
+            resolved_epsg = (
+                parse_epsg(props.get("proj:code"))
+                or parse_epsg(props.get("proj:epsg"))
+                or parse_epsg(props.get("crs"))
+                or parse_epsg(props.get("proj:wkt2"))
+                or parse_epsg(props.get("proj:projjson"))
+                or header_crs_by_id.get(record_id)
+            )
+            if resolved_epsg is None:
+                missing_ids.append(record_id)
+                continue
+            record_crs_by_id[record_id] = resolved_epsg
+
+        if missing_ids:
+            sample = ", ".join(missing_ids[:5])
+            extra = f" (+{len(missing_ids) - 5} more)" if len(missing_ids) > 5 else ""
+            raise ValueError(
+                "Raster CRS could not be resolved for selected STAC items. "
+                "Rasteret requires one raster CRS per record for spatial reads. "
+                "Provide STAC projection metadata (`proj:code` preferred, legacy "
+                "`proj:epsg` also accepted), or use assets whose GeoTIFF headers "
+                "expose CRS metadata. Missing CRS record ids: "
+                f"{sample}{extra}."
+            )
+
+        return record_crs_by_id
+
     # ------------------------------------------------------------------
     # STAC search + URL signing
     # ------------------------------------------------------------------
@@ -385,9 +460,6 @@ class StacCollectionBuilder(CollectionBuilder):
                     sleep_s,
                 )
                 await asyncio.sleep(sleep_s)
-
-        # Planetary Computer SAS signing
-        from urllib.parse import urlparse
 
         host = urlparse(self.stac_api).netloc.lower()
         if "planetarycomputer.microsoft.com" in host:
@@ -498,7 +570,120 @@ class StacCollectionBuilder(CollectionBuilder):
             if max_items and len(items) >= max_items:
                 break
 
+        if items:
+            self._ensure_band_map_matches_assets(items)
+
         return items
+
+    def _ensure_band_map_matches_assets(self, stac_items: list[dict]) -> None:
+        """Resolve or validate band mapping before expensive COG header reads."""
+        asset_keys = self._collect_asset_keys(stac_items)
+        explicit_map = self._band_map is not None
+        resolved = self.band_map
+
+        if resolved:
+            if explicit_map and self.strict_band_map_validation:
+                missing = set(resolved.values()) - asset_keys
+                if not missing:
+                    return
+                detected = self._format_asset_keys(asset_keys)
+                expected = self._format_asset_keys(set(resolved.values()))
+                missing_text = self._format_asset_keys(missing)
+                raise ValueError(
+                    "STAC band_map references asset keys not present in the "
+                    "selected STAC items. "
+                    f"Missing asset keys: {missing_text}. "
+                    f"Configured asset keys: {expected}. "
+                    f"Detected asset keys: {detected}. "
+                    "Individual items may omit valid bands, but every configured "
+                    "asset key must appear at least once in the selected result."
+                )
+            if self._mapped_asset_keys(resolved, asset_keys):
+                return
+
+        if not explicit_map:
+            inferred = self._infer_band_map_from_assets(asset_keys)
+            if inferred:
+                self._band_map = inferred
+                logger.info(
+                    "Inferred STAC band map for %s from asset keys: %s",
+                    self.data_source,
+                    inferred,
+                )
+                return
+
+        detected = self._format_asset_keys(asset_keys)
+        if resolved:
+            expected = self._format_asset_keys(set(resolved.values()))
+            raise ValueError(
+                "No STAC asset keys matched the resolved band_map. "
+                f"Expected one of: {expected}. Detected asset keys: {detected}. "
+                "Pass band_map={band: asset_key} with asset keys present in the "
+                "STAC items, or use a registered data_source with matching asset "
+                "conventions."
+            )
+
+        raise ValueError(
+            "No band_map is configured for this STAC source, and Rasteret could "
+            f"not infer one from detected asset keys: {detected}. Pass "
+            "band_map={band: asset_key} explicitly or register a BandRegistry "
+            "mapping for this data_source."
+        )
+
+    @staticmethod
+    def _collect_asset_keys(stac_items: list[dict]) -> set[str]:
+        keys: set[str] = set()
+        for item in stac_items:
+            assets = item.get("assets") or {}
+            if isinstance(assets, dict):
+                keys.update(str(key) for key in assets.keys())
+        return keys
+
+    @staticmethod
+    def _mapped_asset_keys(band_map: dict[str, str], asset_keys: set[str]) -> set[str]:
+        return {asset for asset in band_map.values() if asset in asset_keys}
+
+    def _infer_band_map_from_assets(self, asset_keys: set[str]) -> dict[str, str]:
+        """Infer provider asset conventions from registered dataset band maps."""
+        if not asset_keys:
+            return {}
+
+        candidate_sources = [
+            self.data_source,
+            self.stac_collection,
+            *BandRegistry.list_registered(),
+        ]
+        seen: set[str] = set()
+        best: dict[str, str] = {}
+        for source in candidate_sources:
+            if not source or source in seen:
+                continue
+            seen.add(source)
+            registered = BandRegistry.get(source)
+            if not registered:
+                continue
+
+            provider_map = {
+                band: asset for band, asset in registered.items() if asset in asset_keys
+            }
+            if len(provider_map) > len(best):
+                best = provider_map
+
+            identity_map = {band: band for band in registered if band in asset_keys}
+            if len(identity_map) > len(best):
+                best = identity_map
+
+        return best
+
+    @staticmethod
+    def _format_asset_keys(asset_keys: set[str], limit: int = 20) -> str:
+        if not asset_keys:
+            return "<none>"
+        ordered = sorted(asset_keys)
+        shown = ", ".join(ordered[:limit])
+        if len(ordered) > limit:
+            shown = f"{shown}, ... (+{len(ordered) - limit} more)"
+        return shown
 
     def _rewrite_asset_url(self, asset: dict) -> None:
         """Rewrite a single asset URL in-place using cloud_config patterns."""
@@ -611,6 +796,7 @@ class StacCollectionBuilder(CollectionBuilder):
                     "extra_samples": list(metadata.extra_samples)
                     if metadata.extra_samples
                     else None,
+                    "crs": metadata.crs,
                     "href": href,
                     "band_index": band_index,
                 }

@@ -15,6 +15,13 @@
 
 ### Changed
 
+- **Local COG files work in custom builds**: `build_from_stac()` and
+  `build_from_table(..., enrich_cog=True)` can now index local tiled
+  GeoTIFF/COG files referenced by normal paths or `file://` URLs.
+- **Clearer STAC band-map checks**: `build_from_stac()` now catches missing or
+  mismatched STAC asset names before reading raster headers. For common
+  Sentinel-2-style catalogs with `B01`/`B02` asset names, Rasteret can infer the
+  map when no provider-specific map is registered.
 - **GeoDataFrame pixel outputs preserve AOI metadata**: `get_gdf(...)` joins
   non-geometry AOI table columns back to results by `geometry_id`.
 - **Runtime geometry docs now focus on user tools**: the former enriched

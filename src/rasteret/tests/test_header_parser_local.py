@@ -56,6 +56,33 @@ async def test_header_parser_matches_tiled_fixture_metadata(
 
 
 @pytest.mark.asyncio
+async def test_header_parser_reads_local_paths_without_custom_backend(
+    tmp_path: Path,
+) -> None:
+    import numpy as np
+
+    fixture = tmp_path / "local-default-backend.tif"
+    data = np.zeros((128, 128), dtype=np.uint16)
+    extratags = [
+        (33550, "d", 3, (1.0, 1.0, 0.0), False),
+        (33922, "d", 6, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0), False),
+    ]
+    tf.imwrite(fixture, data, tile=(64, 64), extratags=extratags)
+
+    parser = AsyncCOGHeaderParser(max_concurrent=1, batch_size=1)
+    meta = await parser.parse_cog_header(str(fixture))
+    assert meta is not None
+    assert meta.width == 128
+    assert meta.tile_offsets
+
+    parser_uri = AsyncCOGHeaderParser(max_concurrent=1, batch_size=1)
+    meta_uri = await parser_uri.parse_cog_header(fixture.as_uri())
+    assert meta_uri is not None
+    assert meta_uri.width == 128
+    assert meta_uri.tile_byte_counts == meta.tile_byte_counts
+
+
+@pytest.mark.asyncio
 async def test_header_parser_skips_non_tiled_bigtiff(
     async_tiff_bigtiff_fixtures: Path,
 ) -> None:
