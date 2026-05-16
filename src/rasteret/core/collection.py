@@ -252,6 +252,24 @@ def _bbox_struct_field(schema: pa.Schema, field_name: str = "bbox") -> pa.Field 
     return field
 
 
+def _validate_datetime_is_timestamp(schema: pa.Schema, *, context: str) -> None:
+    """Raise when the canonical datetime column is not Arrow timestamp-typed."""
+    if "datetime" not in schema.names:
+        return
+    dt_type = schema.field("datetime").type
+    if not pa.types.is_timestamp(dt_type):
+        raise ValueError(
+            f"{context} has non-timestamp 'datetime' column ({dt_type}). "
+            "Rebuild with build_from_table(...) so datetime is normalized."
+        )
+    tz = dt_type.tz
+    if tz not in (None, "UTC", "Etc/UTC", "+00:00"):
+        raise ValueError(
+            f"{context} has non-UTC 'datetime' timezone ({tz!r}). "
+            "Rasteret requires UTC datetime semantics."
+        )
+
+
 def _bbox_value_to_list(value: Any) -> list[float] | None:
     if value is None:
         return None
@@ -601,6 +619,10 @@ class Collection:
         if self._collection_path is None:
             return None
         self.dataset = _open_parquet_dataset(self._collection_path)
+        _validate_datetime_is_timestamp(
+            self.dataset.schema,
+            context=f"Parquet at {self._collection_path}",
+        )
         return self.dataset
 
     def _source_part_data_dataset(self, source_parts: set[str]) -> ds.Dataset | None:
@@ -627,11 +649,20 @@ class Collection:
                 path = f"{base}/{path}"
             paths.append(path)
 
-        return ds.dataset(
+        dataset = ds.dataset(
             paths,
             format="parquet",
             filesystem=filesystem,
         )
+        _validate_datetime_is_timestamp(
+            dataset.schema,
+            context=(
+                f"Parquet source parts under {self._collection_path}"
+                if self._collection_path is not None
+                else "Parquet source parts"
+            ),
+        )
+        return dataset
 
     def _record_index_required_raw_columns(
         self, columns: list[str] | None = None
@@ -880,6 +911,11 @@ class Collection:
         except Exception as exc:
             raise FileNotFoundError(f"Cannot open Parquet at {path_str}") from exc
 
+        _validate_datetime_is_timestamp(
+            dataset.schema,
+            context=f"Cached collection at {path_str}",
+        )
+
         meta = cls._metadata_from_schema(dataset)
         stem = _stem_from_path(path_str)
         name = meta.get("name") or stem.removesuffix("_stac").removesuffix("_records")
@@ -946,6 +982,10 @@ class Collection:
                     f"Parquet is missing required columns: {missing or {'bbox'}}. "
                     "See the Schema Contract page in docs for the expected schema."
                 )
+            _validate_datetime_is_timestamp(
+                hf_streaming.schema,
+                context=f"Parquet at {path_str}",
+            )
 
             return cls(
                 hf_streaming=hf_streaming,
@@ -979,6 +1019,10 @@ class Collection:
                     f"Parquet is missing required columns: {missing or {'bbox'}}. "
                     "See the Schema Contract page in docs for the expected schema."
                 )
+            _validate_datetime_is_timestamp(
+                dataset.schema,
+                context=f"Parquet at {path_str}",
+            )
 
             meta = cls._metadata_from_schema(dataset)
         resolved_name = name or meta.get("name") or _stem_from_path(path_str)

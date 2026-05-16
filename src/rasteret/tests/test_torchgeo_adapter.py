@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import numpy as np
@@ -144,3 +144,42 @@ def test_rasteret_geodataset_uses_filtered_dataset_not_raw_dataset() -> None:
     ds = RasteretGeoDataset(collection=collection, bands=["B04"])
 
     assert len(ds.index) == 1
+
+
+def test_rasteret_geodataset_normalizes_tz_aware_datetime_index() -> None:
+    meta = {
+        "transform": [10.0, 500000.0, -10.0, 1000000.0],
+        "image_width": 128,
+        "image_height": 128,
+        "tile_width": 64,
+        "tile_height": 64,
+        "dtype": "uint16",
+        "compress": 8,
+        "predictor": 1,
+        "tile_offsets": [0],
+        "tile_byte_counts": [1],
+    }
+    table = pa.table(
+        {
+            "id": pa.array(["scene-1"]),
+            "datetime": pa.array(
+                [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+                type=pa.timestamp("us", tz="UTC"),
+            ),
+            "assets": pa.array(
+                [{"B04": {"href": "s3://example-bucket/test.tif", "band_index": 0}}]
+            ),
+            "proj:epsg": pa.array([32615], type=pa.int32()),
+            "B04_metadata": pa.array([meta]),
+        }
+    )
+    dataset = pads.dataset(table)
+    collection = SimpleNamespace(
+        dataset=dataset,
+        data_source="demo/torchgeo-tz-aware",
+        _filtered_data_dataset=lambda: dataset,
+    )
+
+    ds = RasteretGeoDataset(collection=collection, bands=["B04"])
+
+    assert str(ds.index.index.left.dtype) == "datetime64[ns]"

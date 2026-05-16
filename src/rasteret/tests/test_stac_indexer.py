@@ -376,6 +376,52 @@ class TestStacCollectionBuilder:
 
         assert len(items) == 21
 
+    def test_static_catalog_date_filter_respects_rfc3339_offsets(self, tmp_path):
+        inside = MagicMock()
+        inside.make_asset_hrefs_absolute.return_value = None
+        inside.to_dict.return_value = {
+            "id": "inside",
+            "bbox": [0, 0, 1, 1],
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            "properties": {"datetime": "2024-01-01T00:30:00+00:30"},
+            "assets": {"B01": {"href": "inside.tif"}},
+            "collection": "dated_catalog",
+        }
+        outside = MagicMock()
+        outside.make_asset_hrefs_absolute.return_value = None
+        outside.to_dict.return_value = {
+            "id": "outside",
+            "bbox": [0, 0, 1, 1],
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            "properties": {"datetime": "2023-12-31T23:30:00+02:00"},
+            "assets": {"B01": {"href": "outside.tif"}},
+            "collection": "dated_catalog",
+        }
+        fake_catalog = MagicMock()
+        fake_catalog.get_child.return_value = None
+        fake_catalog.get_all_items.return_value = [inside, outside]
+
+        builder = StacCollectionBuilder(
+            data_source="dated_catalog",
+            stac_api=str(tmp_path / "catalog.json"),
+            static_catalog=True,
+            band_map={"B01": "B01"},
+        )
+
+        with patch("pystac.Catalog.from_file", return_value=fake_catalog):
+            items = builder._crawl_static_catalog(
+                None,
+                ["2024-01-01", "2024-01-01"],
+            )
+
+        assert [item["id"] for item in items] == ["inside"]
+
     def test_sentinel2_registry_common_name_map_is_preserved(self):
         builder = StacCollectionBuilder(
             data_source="sentinel-2-l2a",

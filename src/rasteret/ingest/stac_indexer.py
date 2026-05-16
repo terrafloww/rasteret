@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -58,6 +59,19 @@ def _is_retryable_stac_api_error(exc: Exception) -> bool:
         "service unavailable",
     )
     return any(marker in message for marker in transient_markers)
+
+
+def _parse_rfc3339_utc(value: str) -> datetime:
+    """Parse an RFC3339 datetime string and normalize to UTC."""
+    text = value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise ValueError(
+            f"Expected RFC3339 datetime with explicit offset, got '{value}'."
+        )
+    return parsed.astimezone(timezone.utc)
 
 
 class StacCollectionBuilder(CollectionBuilder):
@@ -218,8 +232,6 @@ class StacCollectionBuilder(CollectionBuilder):
         Generic normalisation (year/month/bbox/validation) is
         delegated to :func:`build_collection_from_table`.
         """
-        from datetime import datetime as dt
-
         logger.info("Creating GeoParquet table with metadata...")
 
         # Build a normalized assets mapping from processed_items:
@@ -267,28 +279,10 @@ class StacCollectionBuilder(CollectionBuilder):
         geom_wkb = geojson_dicts_to_wkb(geojson_geoms)
         table = table.append_column("geometry", geom_wkb)
 
-        # Ensure datetime is timestamp type
-        if "datetime" in table.schema.names and not pa.types.is_timestamp(
-            table["datetime"].type
-        ):
-            dt_idx = table.schema.get_field_index("datetime")
-            dt_vals = []
-            for d in table.column("datetime"):
-                raw = d.as_py()
-                if raw is None:
-                    dt_vals.append(None)
-                    continue
-                if isinstance(raw, dt):
-                    dt_vals.append(raw)
-                    continue
-                s = str(raw)
-                # Common STAC form: "2024-01-10T00:00:00Z"
-                if s.endswith("Z"):
-                    s = f"{s[:-1]}+00:00"
-                dt_vals.append(dt.fromisoformat(s))
-            table = table.set_column(
-                dt_idx, "datetime", pa.array(dt_vals, type=pa.timestamp("us"))
-            )
+        # Canonicalize datetime via the shared table normalization path.
+        from rasteret.ingest.parquet_record_table import prepare_record_table
+
+        table = prepare_record_table(table, required_columns=("datetime",))
 
         # Add canonical bbox struct from original STAC geometries
         item_bboxes = {}
@@ -543,6 +537,12 @@ class StacCollectionBuilder(CollectionBuilder):
                 )
 
         items: list[dict] = []
+        range_start = None
+        range_end = None
+        if date_range:
+            range_start = datetime.fromisoformat(f"{date_range[0]}T00:00:00+00:00")
+            range_end = datetime.fromisoformat(f"{date_range[1]}T23:59:59.999999+00:00")
+
         for item in catalog.get_all_items():
             # Resolve relative hrefs to absolute URLs
             item.make_asset_hrefs_absolute()
@@ -560,10 +560,11 @@ class StacCollectionBuilder(CollectionBuilder):
                     continue
 
             # Client-side date filter
-            if date_range:
+            if range_start is not None and range_end is not None:
                 dt_str = (item_dict.get("properties") or {}).get("datetime")
                 if dt_str:
-                    if dt_str < date_range[0] or dt_str > f"{date_range[1]}T23:59:59Z":
+                    item_dt = _parse_rfc3339_utc(str(dt_str))
+                    if item_dt < range_start or item_dt > range_end:
                         continue
 
             items.append(item_dict)

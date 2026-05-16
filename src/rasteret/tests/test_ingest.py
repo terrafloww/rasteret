@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pyarrow as pa
@@ -71,6 +71,13 @@ class TestBuildCollectionFromTable:
     def test_missing_required_columns_raises(self):
         table = pa.table({"id": pa.array(["s1"]), "foo": pa.array([1])})
         with pytest.raises(ValueError, match="missing required columns"):
+            build_collection_from_table(table)
+
+    def test_non_timestamp_datetime_raises(self):
+        table = _minimal_table(
+            datetime=pa.array(["2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z"])
+        )
+        with pytest.raises(ValueError, match="datetime.*Arrow timestamp"):
             build_collection_from_table(table)
 
     def test_auto_adds_year_month(self):
@@ -289,6 +296,77 @@ class TestPrepareTable:
         dt_values = out.column("datetime").to_pylist()
         assert dt_values[0].year == 2023
         assert dt_values[1].year == 2024
+
+    def test_rfc3339_offset_strings_coerced_to_utc_timestamp(self, tmp_path):
+        table = pa.table(
+            {
+                "id": pa.array(["s1", "s2"]),
+                "datetime": pa.array(
+                    ["2024-01-01T00:00:00Z", "2024-01-01T03:30:00+03:30"]
+                ),
+                "geometry": pa.array([None, None], type=pa.null()),
+                "assets": pa.array(
+                    [
+                        {"B04": {"href": "https://example.com/a.tif"}},
+                        {"B04": {"href": "https://example.com/b.tif"}},
+                    ]
+                ),
+            }
+        )
+        path = tmp_path / "dt_offset_str.parquet"
+        pq.write_table(table, str(path))
+        builder = RecordTableBuilder(path)
+        collection = builder.build()
+        out = collection.dataset.to_table(columns=["datetime"])
+        assert out.schema.field("datetime").type == pa.timestamp("us")
+        assert out.column("datetime").to_pylist() == [
+            datetime(2024, 1, 1, 0, 0),
+            datetime(2024, 1, 1, 0, 0),
+        ]
+
+    def test_tz_aware_timestamps_are_normalized_to_utc(self, tmp_path):
+        table = pa.table(
+            {
+                "id": pa.array(["s1"]),
+                "datetime": pa.array(
+                    [
+                        datetime(
+                            2024,
+                            1,
+                            1,
+                            0,
+                            0,
+                            tzinfo=timezone(timedelta(hours=-5)),
+                        )
+                    ],
+                    type=pa.timestamp("us", tz="America/New_York"),
+                ),
+                "geometry": pa.array([None], type=pa.null()),
+                "assets": pa.array([{"B04": {"href": "https://example.com/a.tif"}}]),
+            }
+        )
+        path = tmp_path / "dt_tz_aware.parquet"
+        pq.write_table(table, str(path))
+        builder = RecordTableBuilder(path)
+        collection = builder.build()
+        out = collection.dataset.to_table(columns=["datetime"])
+        assert out.schema.field("datetime").type == pa.timestamp("us")
+        assert out.column("datetime").to_pylist() == [datetime(2024, 1, 1, 5, 0)]
+
+    def test_naive_datetime_strings_raise_clear_error(self, tmp_path):
+        table = pa.table(
+            {
+                "id": pa.array(["s1"]),
+                "datetime": pa.array(["2024-01-01T00:00:00"]),
+                "geometry": pa.array([None], type=pa.null()),
+                "assets": pa.array([{"B04": {"href": "https://example.com/a.tif"}}]),
+            }
+        )
+        path = tmp_path / "dt_naive_str.parquet"
+        pq.write_table(table, str(path))
+        builder = RecordTableBuilder(path)
+        with pytest.raises(ValueError, match="explicit UTC offset"):
+            builder.build()
 
     def test_assets_constructed_from_href_column_and_band_index_map(self, tmp_path):
         table = pa.table(

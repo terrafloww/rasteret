@@ -580,7 +580,12 @@ if GeoDataset is not None and GeoSlice is not None and torch is not None:
                         geom = transform_polygon(geom, source_epsg, self.epsg)
                 footprints.append(geom)
 
-                timestamp = pd.Timestamp(dt).to_pydatetime()
+                ts = pd.Timestamp(dt)
+                if ts.tzinfo is not None:
+                    # Keep TorchGeo interval index timezone-naive for compatibility
+                    # with GeoDataset composition paths that use numpy datetime ops.
+                    ts = ts.tz_convert("UTC").tz_localize(None)
+                timestamp = ts.to_pydatetime()
                 intervals.append((timestamp, timestamp))
                 valid_rows.append(i)
 

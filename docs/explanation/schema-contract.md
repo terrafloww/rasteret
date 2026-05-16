@@ -27,6 +27,11 @@ Every Rasteret collection starts from four record fields:
 The normalisation layer validates these fields and raises `ValueError` when any
 are missing.
 
+For reliable temporal filtering (`subset(date_range=...)`), keep `datetime` as
+a true timestamp dtype in Arrow/Pandas. Converting source values with
+`pd.to_datetime(..., utc=True)` before `build_from_table(...)` is the lowest
+friction path for mixed upstream inputs.
+
 An `assets` value usually looks like:
 
 ```python

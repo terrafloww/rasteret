@@ -302,16 +302,18 @@ def build_collection_from_table(
     if "bbox" not in table.schema.names:
         table = _add_bbox_struct(table)
 
-    # Add year/month partition columns if absent.
     datetime_col = table.column("datetime")
+    if not pa.types.is_timestamp(datetime_col.type):
+        raise ValueError(
+            "Column 'datetime' must be an Arrow timestamp. "
+            "Use build_from_table() normalization or convert values with "
+            "pd.to_datetime(..., utc=True) before ingest."
+        )
+
+    # Add year/month partition columns if absent.
     if "year" not in table.schema.names:
-        # Ensure the column is a timestamp type.
-        if not pa.types.is_timestamp(datetime_col.type):
-            datetime_col = pc.cast(datetime_col, pa.timestamp("us"))
         table = table.append_column("year", pc.year(datetime_col))
     if "month" not in table.schema.names:
-        if not pa.types.is_timestamp(datetime_col.type):
-            datetime_col = pc.cast(datetime_col, pa.timestamp("us"))
         table = table.append_column("month", pc.month(datetime_col))
 
     start_date = datetime.fromisoformat(date_range[0]) if date_range else None
