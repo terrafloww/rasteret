@@ -105,6 +105,48 @@ def prepare_record_table(
             timestamps,
         )
 
+    # --- datetime: canonicalize to UTC instant semantics ---
+    if "datetime" in names and (required is None or "datetime" in required):
+        dt_idx = table.schema.get_field_index("datetime")
+        dt_col = table.column("datetime")
+        dt_type = table.schema.field("datetime").type
+
+        if pa.types.is_timestamp(dt_type):
+            # Canonical internal representation: microsecond timestamp.
+            table = table.set_column(
+                dt_idx,
+                "datetime",
+                pc.cast(dt_col, pa.timestamp("us")),
+            )
+        elif pa.types.is_string(dt_type) or pa.types.is_large_string(dt_type):
+            # Accept RFC3339 datetime strings only when they carry an explicit
+            # zone offset (e.g. trailing "Z"), then normalize to UTC instant.
+            try:
+                aware = pc.cast(dt_col, pa.timestamp("us", tz="UTC"))
+            except (pa.ArrowInvalid, pa.ArrowTypeError, ValueError) as exc:
+                raise ValueError(
+                    "Column 'datetime' string values must be RFC3339 datetimes "
+                    "with an explicit UTC offset (for example, "
+                    "'2024-01-01T00:00:00Z'). Naive datetime strings are not "
+                    "accepted; convert first with pd.to_datetime(..., utc=True)."
+                ) from exc
+            table = table.set_column(
+                dt_idx,
+                "datetime",
+                pc.cast(aware, pa.timestamp("us")),
+            )
+        elif pa.types.is_null(dt_type):
+            table = table.set_column(
+                dt_idx,
+                "datetime",
+                pa.nulls(len(table), type=pa.timestamp("us")),
+            )
+        elif not pa.types.is_integer(dt_type):
+            raise ValueError(
+                "Column 'datetime' must be a timestamp (preferred), integer year, "
+                "or RFC3339 datetime string with explicit offset."
+            )
+
     # --- assets: construct from href_column + band_index_map ---
     if (
         "assets" not in names

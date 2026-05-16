@@ -1135,6 +1135,136 @@ def test_build_geoparquet_descriptor_uses_datetime_field_role_even_when_named_da
     assert "2024-12-31" in expr_str
 
 
+def test_build_geoparquet_descriptor_without_cloud_config_still_builds(
+    monkeypatch,
+) -> None:
+    descriptor = DatasetDescriptor(
+        id="demo/indexed-build-no-cloud-config",
+        name="Demo Indexed Build No Cloud Config",
+        record_table_uri="s3://example-bucket/demo/index.parquet",
+        field_roles={
+            "id": "fid",
+            "geometry": "geom",
+            "datetime": "datetime",
+            "bbox": "bbox",
+            "href": "path",
+        },
+        band_index_map={"A00": 0},
+        requires_auth=False,
+    )
+    DatasetRegistry.register(descriptor)
+    captured: dict[str, object] = {}
+
+    def _fake_build_from_table(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return "ok"
+
+    fake_schema = pa.schema(
+        [
+            pa.field("datetime", pa.timestamp("us")),
+            pa.field(
+                "bbox",
+                pa.struct(
+                    [
+                        pa.field("xmin", pa.float64()),
+                        pa.field("ymin", pa.float64()),
+                        pa.field("xmax", pa.float64()),
+                        pa.field("ymax", pa.float64()),
+                    ]
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "pyarrow.dataset.dataset",
+        lambda *args, **kwargs: SimpleNamespace(schema=fake_schema),
+    )
+    monkeypatch.setattr(rasteret, "build_from_table", _fake_build_from_table)
+    try:
+        result = rasteret.build(
+            "demo/indexed-build-no-cloud-config",
+            name="demo",
+            bbox=(-95.5, 38.4, -95.0, 38.8),
+            date_range=("2024-01-01", "2024-12-31"),
+        )
+    finally:
+        DatasetRegistry.unregister("demo/indexed-build-no-cloud-config")
+
+    assert result == "ok"
+    assert captured["args"][0] == "example-bucket/demo/index.parquet"
+    assert captured["kwargs"]["url_rewrite_patterns"] is None
+
+
+def test_build_geoparquet_descriptor_applies_post_build_date_filter_for_string_datetime(
+    monkeypatch,
+) -> None:
+    descriptor = DatasetDescriptor(
+        id="demo/indexed-build-datetime-string",
+        name="Demo Indexed Build Datetime String",
+        record_table_uri="s3://example-bucket/demo/index.parquet",
+        field_roles={
+            "id": "fid",
+            "geometry": "geom",
+            "datetime": "datetime",
+            "bbox": "bbox",
+            "href": "path",
+        },
+        band_index_map={"A00": 0},
+        requires_auth=False,
+        cloud_config={"provider": "aws", "region": "us-west-2"},
+    )
+    DatasetRegistry.register(descriptor)
+    captured: dict[str, object] = {}
+
+    class _FakeCollection:
+        def subset(self, **kwargs):
+            captured["subset_kwargs"] = kwargs
+            return self
+
+    def _fake_build_from_table(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeCollection()
+
+    fake_schema = pa.schema(
+        [
+            pa.field("datetime", pa.string()),
+            pa.field(
+                "bbox",
+                pa.struct(
+                    [
+                        pa.field("xmin", pa.float64()),
+                        pa.field("ymin", pa.float64()),
+                        pa.field("xmax", pa.float64()),
+                        pa.field("ymax", pa.float64()),
+                    ]
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "pyarrow.dataset.dataset",
+        lambda *args, **kwargs: SimpleNamespace(schema=fake_schema),
+    )
+    monkeypatch.setattr(rasteret, "build_from_table", _fake_build_from_table)
+    try:
+        rasteret.build(
+            "demo/indexed-build-datetime-string",
+            name="demo",
+            bbox=(-95.5, 38.4, -95.0, 38.8),
+            date_range=("2024-01-01", "2024-12-31"),
+        )
+    finally:
+        DatasetRegistry.unregister("demo/indexed-build-datetime-string")
+
+    expr_str = str(captured["kwargs"]["filter_expr"])
+    assert "datetime >=" not in expr_str
+    assert "datetime <=" not in expr_str
+    assert captured["subset_kwargs"] == {"date_range": ("2024-01-01", "2024-12-31")}
+
+
 def test_collection_head_returns_table() -> None:
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "test.parquet"
@@ -1154,6 +1284,93 @@ def test_load_rejects_missing_columns() -> None:
         pq.write_table(table, str(path))
         with pytest.raises(ValueError, match="missing required columns"):
             rasteret.load(path)
+
+
+def test_load_rejects_non_timestamp_datetime() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "bad_datetime.parquet"
+        table = pa.table(
+            {
+                "id": pa.array(["scene-1"]),
+                "datetime": pa.array(["2024-01-01T00:00:00Z"]),
+                "geometry": pa.array([None], type=pa.null()),
+                "assets": pa.array([{"B04": {"href": "https://example.com/test.tif"}}]),
+                "bbox": pa.array(
+                    [{"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}],
+                    type=pa.struct(
+                        [
+                            pa.field("xmin", pa.float64()),
+                            pa.field("ymin", pa.float64()),
+                            pa.field("xmax", pa.float64()),
+                            pa.field("ymax", pa.float64()),
+                        ]
+                    ),
+                ),
+            }
+        )
+        pq.write_table(table, str(path))
+        with pytest.raises(ValueError, match="non-timestamp 'datetime'"):
+            rasteret.load(path)
+
+
+def test_load_rejects_non_utc_timestamp_timezone() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "bad_datetime_timezone.parquet"
+        table = pa.table(
+            {
+                "id": pa.array(["scene-1"]),
+                "datetime": pa.array(
+                    [datetime(2024, 1, 1)],
+                    type=pa.timestamp("us", tz="America/New_York"),
+                ),
+                "geometry": pa.array([None], type=pa.null()),
+                "assets": pa.array([{"B04": {"href": "https://example.com/test.tif"}}]),
+                "bbox": pa.array(
+                    [{"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}],
+                    type=pa.struct(
+                        [
+                            pa.field("xmin", pa.float64()),
+                            pa.field("ymin", pa.float64()),
+                            pa.field("xmax", pa.float64()),
+                            pa.field("ymax", pa.float64()),
+                        ]
+                    ),
+                ),
+            }
+        )
+        pq.write_table(table, str(path))
+        with pytest.raises(ValueError, match="non-UTC 'datetime' timezone"):
+            rasteret.load(path)
+
+
+def test_from_parquet_deferred_open_rejects_non_timestamp_datetime_on_first_open() -> (
+    None
+):
+    with TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "bad_datetime_deferred.parquet"
+        table = pa.table(
+            {
+                "id": pa.array(["scene-1"]),
+                "datetime": pa.array(["2024-01-01T00:00:00Z"]),
+                "geometry": pa.array([None], type=pa.null()),
+                "assets": pa.array([{"B04": {"href": "https://example.com/test.tif"}}]),
+                "bbox": pa.array(
+                    [{"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}],
+                    type=pa.struct(
+                        [
+                            pa.field("xmin", pa.float64()),
+                            pa.field("ymin", pa.float64()),
+                            pa.field("xmax", pa.float64()),
+                            pa.field("ymax", pa.float64()),
+                        ]
+                    ),
+                ),
+            }
+        )
+        pq.write_table(table, str(path))
+        collection = Collection.from_parquet(path, defer_dataset_open=True)
+        with pytest.raises(ValueError, match="non-timestamp 'datetime'"):
+            collection._filtered_data_dataset()
 
 
 def test_load_rejects_missing_file() -> None:
@@ -1477,6 +1694,29 @@ def test_arrow_array_capsule_handles_empty_non_empty_schema() -> None:
 def test_as_collection_requires_bbox() -> None:
     table = _minimal_read_ready_table().drop_columns(["bbox"])
     with pytest.raises(ValueError, match="missing required columns"):
+        rasteret.as_collection(table)
+
+
+def test_as_collection_requires_timestamp_datetime() -> None:
+    table = _minimal_read_ready_table().set_column(
+        1,
+        "datetime",
+        pa.array(["2024-01-01T00:00:00Z"]),
+    )
+    with pytest.raises(ValueError, match="non-timestamp 'datetime'"):
+        rasteret.as_collection(table)
+
+
+def test_as_collection_rejects_non_utc_timestamp_timezone() -> None:
+    table = _minimal_read_ready_table().set_column(
+        1,
+        "datetime",
+        pa.array(
+            [datetime(2024, 1, 1)],
+            type=pa.timestamp("us", tz="America/New_York"),
+        ),
+    )
+    with pytest.raises(ValueError, match="non-UTC 'datetime' timezone"):
         rasteret.as_collection(table)
 
 

@@ -19,7 +19,7 @@ At minimum, Rasteret needs these record fields:
 | Column | Meaning |
 | --- | --- |
 | `id` | Stable record id. |
-| `datetime` | Acquisition or record time. Integer years are accepted and normalized. |
+| `datetime` | Acquisition or record time. Use a real datetime/timestamp dtype (recommended: UTC). Integer years are accepted and normalized. |
 | `geometry` | Footprint geometry, usually WKB/GeoArrow or GeoPandas geometry. |
 | `assets` | Mapping from band key to asset info, including `href`. |
 
@@ -64,6 +64,32 @@ Rasteret treats the collection footprint `geometry` as CRS84. If the input
 geometry is a GeoArrow field with CRS metadata, Rasteret can reproject the
 footprint before deriving `bbox`. The raster CRS still belongs in row-level
 sidecar columns such as `crs` and `proj:epsg`.
+
+## Datetime Input (Recommended)
+
+For least friction across `build_from_table(...)`, `subset(date_range=...)`,
+and downstream reads:
+
+- keep `datetime` as a real Arrow/Pandas datetime dtype, not `object` strings
+- prefer UTC timestamps
+- avoid raw ISO strings such as `"2024-01-01T00:00:00Z"` unless you convert
+  them first
+
+Pandas pattern:
+
+```python
+df["datetime"] = pd.to_datetime(df["datetime"], utc=True, errors="raise")
+```
+
+Epoch microseconds pattern:
+
+```python
+df["datetime"] = pd.to_datetime(df["datetime"], unit="us", utc=True, errors="raise")
+```
+
+If your table uses a year column (for example `2023`, `2024`), map it with
+`column_map={"year": "datetime"}`. Rasteret normalizes integer years to
+timestamps at January 1st of each year.
 
 ## Build From DuckDB
 
@@ -221,6 +247,12 @@ If a requested band cannot be resolved, check:
 - the available `{band}_metadata` columns
 - whether you need `data_source=...` for a registered band mapping
 - whether the table was built with `enrich_cog=True`
+
+If date filtering fails or behaves unexpectedly, check:
+
+- `datetime` is timestamp-typed in Arrow (not `string` / `date32`)
+- `datetime` is not a mixed `object` column in pandas
+- ISO strings were converted with `pd.to_datetime(..., utc=True)` before build
 
 If COG header parsing fails for all assets, check whether the URLs require
 credentials, requester-pays configuration, URL rewriting, or a custom backend.

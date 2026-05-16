@@ -436,8 +436,8 @@ def build(
         if fs is not None and record_table_uri.startswith("s3://"):
             read_path = record_table_uri[len("s3://") :]
 
-        # Date range filter: inspect the actual source field type so Rasteret
-        # can fail clearly instead of silently assuming integer years.
+        # Date range filter: inspect source datetime type for safe pushdown.
+        apply_post_build_date_filter = False
         if date_range:
             datetime_source = descriptor.source_field("datetime")
             if datetime_source:
@@ -469,6 +469,10 @@ def build(
                     end_scalar = pa.scalar(end.to_pydatetime(), type=dt_type)
                     filter_parts.append(pads.field(datetime_source) >= start_scalar)
                     filter_parts.append(pads.field(datetime_source) <= end_scalar)
+                elif pa.types.is_string(dt_type) or pa.types.is_large_string(dt_type):
+                    # External tables with RFC3339 datetime strings are normalized
+                    # by build_from_table(); apply date filtering after normalization.
+                    apply_post_build_date_filter = True
                 elif pa.types.is_date32(dt_type) or pa.types.is_date64(dt_type):
                     start_scalar = pa.scalar(start.to_pydatetime().date(), type=dt_type)
                     end_scalar = pa.scalar(end.to_pydatetime().date(), type=dt_type)
@@ -493,7 +497,7 @@ def build(
         if descriptor.cloud_config:
             url_rewrite_patterns = descriptor.cloud_config.get("url_patterns")
 
-        return build_from_table(
+        collection = build_from_table(
             read_path,
             name=name,
             data_source=descriptor.stac_collection or descriptor.id,
@@ -513,6 +517,9 @@ def build(
             force=force,
             backend=resolved_backend,
         )
+        if apply_post_build_date_filter and date_range:
+            collection = collection.subset(date_range=date_range)
+        return collection
 
     # GeoParquet-first path: descriptors that have no STAC API, or user
     # explicitly prefers GeoParquet.
@@ -812,7 +819,7 @@ def as_collection(
     """
     import pyarrow as pa
 
-    from rasteret.core.collection import Collection
+    from rasteret.core.collection import Collection, _validate_datetime_is_timestamp
     from rasteret.core.utils import infer_data_source_from_dataset
 
     dataset, materialized_table = _arrow_object_to_dataset(table)
@@ -854,6 +861,7 @@ def as_collection(
             "Use build_from_table(...) for external tables that still need "
             "normalization."
         )
+    _validate_datetime_is_timestamp(dataset.schema, context="as_collection() input")
 
     if require_band_metadata:
         metadata_columns = [

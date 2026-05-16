@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.14
+
+### Changed
+
+- **UTC-strict datetime contract across build/load paths**:
+  `build_from_table()` and STAC table normalization now accept RFC3339 datetime
+  strings only when they carry explicit offsets, normalize them to UTC instants,
+  and reject naive datetime strings. `as_collection()` and `load()` now fail
+  fast when `datetime` is not an Arrow timestamp column or uses a non-UTC
+  timezone.
+- **GeoParquet build date filtering now stays correct for string datetimes**:
+  when a dataset descriptor points at a source table whose datetime column is
+  stored as RFC3339 strings, `build(..., date_range=...)` now normalizes the
+  table first and applies the date filter afterward instead of silently relying
+  on unsafe string pushdown semantics.
+- **Static STAC date filtering now parses real RFC3339 timestamps**:
+  local/static catalog builds compare item datetimes as UTC instants instead of
+  lexicographic strings, so offset-bearing timestamps filter correctly.
+- **TorchGeo index creation keeps UTC-compatible datetime semantics**:
+  tz-aware collection datetimes are normalized before TorchGeo interval index
+  creation, avoiding mixed timezone behavior in dataset composition.
+
 ## v0.3.13
 
 ### Added
