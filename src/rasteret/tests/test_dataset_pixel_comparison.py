@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright Terrafloww Labs, Inc.
 
-"""Pixel-level comparison: Rasteret (GDF, xarray, torchgeo) vs rasterio.
+"""Pixel-level comparison: Rasteret (GDF, xarray) vs rasterio.
 
-For every catalog dataset, compare pixel values from three Rasteret output
+For every catalog dataset, compare pixel values from two Rasteret output
 paths against a pure rasterio read (ground truth):
 
 1. ``collection.get_gdf()`` -> numpy array from ``gdf["data"]``
 2. ``collection.get_xarray()`` -> numpy array from ``xr_ds[band].values.squeeze()``
-3. ``collection.to_torchgeo_dataset()`` -> numpy array from ``sample["image"].numpy()``
 
 Ground truth: ``rasterio.mask.mask(src, [geom], crop=True, all_touched=False, filled=True)``
 with ``nodata=src.nodata`` when present, otherwise ``nodata=0``.
@@ -34,6 +33,7 @@ from shapely.geometry import box
 
 import rasteret
 from rasteret.catalog import DatasetDescriptor, DatasetRegistry
+from rasteret.core.utils import normalize_transform, transform_bbox
 
 pytestmark = pytest.mark.network
 
@@ -55,14 +55,6 @@ _SKIP_DATASETS: set[str] = {
     # keep local dev and CI cycles reasonable; enable explicitly when needed.
     "aef/v1-annual",
 }
-
-# Datasets where torchgeo dataset creation fails (datetime parsing, etc.).
-# GDF + xarray comparisons still run for these.
-_SKIP_TORCHGEO: set[str] = {
-    "pc/io-lulc-annual-v02",
-    "pc/usda-cdl",
-}
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -156,6 +148,27 @@ def _extract_href_and_band_number(
         href = planetary_computer.sign(href)
 
     return href, band_number
+
+
+def _extract_read_window_query(
+    collection: rasteret.Collection,
+    band: str,
+    bbox_4326: tuple[float, float, float, float],
+) -> tuple[str, int, tuple[float, float, float, float], tuple[float, float]]:
+    """Resolve the first-row read_window query in the source CRS."""
+    row = collection.to_table(
+        columns=["id", "proj:epsg", f"{band}_metadata"]
+    ).to_pylist()[0]
+    metadata = row.get(f"{band}_metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Missing {band}_metadata for read_window parity test")
+    epsg = row.get("proj:epsg")
+    if epsg is None:
+        raise ValueError("Missing proj:epsg for read_window parity test")
+    scale_x, _tx, scale_y, _ty = normalize_transform(metadata.get("transform"))
+    res = (abs(float(scale_x)), abs(float(scale_y)))
+    bounds_native = transform_bbox(bbox_4326, 4326, int(epsg))
+    return row["id"], int(epsg), bounds_native, res
 
 
 def _get_bbox_and_dates(
@@ -418,46 +431,24 @@ def test_pixel_values_match_rasterio(tmp_path: Path, dataset_id: str) -> None:
         dataset_id,
     )
 
-    # --- 8. Compare torchgeo output ---
-    if dataset_id in _SKIP_TORCHGEO:
-        return  # GDF + xarray passed; torchgeo has known issues for this dataset
-
-    try:
-        import torchgeo  # noqa: F401
-    except ImportError:
-        pytest.skip("torchgeo not installed, skipping torchgeo comparison")
-
-    try:
-        with _timeout(180):
-            tg_ds = collection.to_torchgeo_dataset(bands=[band], geometries=bbox)
-    except ValueError as exc:
-        pytest.skip(f"torchgeo dataset creation failed: {exc}")
-
-    # Construct a GeoSlice matching the query bbox in dataset's native CRS.
-    from rasteret.core.utils import transform_bbox
-
-    tg_epsg = tg_ds.epsg
-    tg_bbox = transform_bbox(bbox, 4326, tg_epsg) if tg_epsg != 4326 else bbox
-    res_x, res_y = tg_ds._res
-    _, _, bt = tg_ds.bounds
-    sample = tg_ds[
-        slice(tg_bbox[0], tg_bbox[2], res_x),
-        slice(tg_bbox[1], tg_bbox[3], res_y),
-        bt,
-    ]
-    rasteret_tg_arr = sample["image"].squeeze().numpy()
-    assert (
-        rasteret_tg_arr.ndim == 2
-    ), f"torchgeo data is not 2D after squeeze: {rasteret_tg_arr.shape}"
-
-    with _timeout(120):
-        rasterio_tg_arr = _rasterio_ground_truth_native_bbox(
-            href, tg_bbox, band_number, gdal_env, res=(res_x, res_y)
+    # --- 8. Compare fixed-grid read_window output against rasterio.merge.merge ---
+    with _timeout(180):
+        record_id, source_epsg, native_bbox, native_res = _extract_read_window_query(
+            collection, band, bbox
         )
-    _compare_arrays(
-        rasteret_tg_arr,
-        rasterio_tg_arr,
-        "torchgeo",
-        band,
-        dataset_id,
+        rasteret_window = collection.read_window(
+            record_ids=[record_id],
+            bounds=native_bbox,
+            res=native_res,
+            bands=[band],
+            target_crs=source_epsg,
+        ).squeeze()
+
+    rasterio_window = _rasterio_ground_truth_native_bbox(
+        href,
+        native_bbox,
+        band_number,
+        gdal_env,
+        res=native_res,
     )
+    _compare_arrays(rasteret_window, rasterio_window, "read_window", band, dataset_id)

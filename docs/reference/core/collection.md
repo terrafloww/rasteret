@@ -8,6 +8,7 @@ Most-used read APIs on `Collection`:
 - `get_xarray(...)` -> `xarray.Dataset`
 - `get_gdf(...)` -> `geopandas.GeoDataFrame`
 - `sample_points(...)` -> `pyarrow.Table` (point-value table)
-- `to_torchgeo_dataset(...)` -> TorchGeo-compatible dataset
+- `to_table(...)` -> Arrow/GeoArrow collection metadata
+- `read_window(...)` -> fixed-grid window read for selected records
 
 ::: rasteret.core.collection

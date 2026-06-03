@@ -814,8 +814,8 @@ def as_collection(
     -------
     Collection
         A wrapped Collection ready for ``get_numpy()``, ``get_xarray()``, and
-        ``to_torchgeo_dataset()`` when the necessary band metadata columns are
-        present.
+        other downstream read surfaces when the necessary band metadata
+        columns are present.
     """
     import pyarrow as pa
 
@@ -948,7 +948,7 @@ def build_from_table(
 
     When ``enrich_cog=True``, COG headers are parsed from the asset URLs
     and cached as ``{band}_metadata`` struct columns in the Parquet index,
-    enabling fast tiled reads and TorchGeo integration.
+    enabling fast tiled reads and downstream chip-based dataset integration.
 
     When *name* is provided and *workspace_dir* is omitted, the collection
     is persisted to ``~/rasteret_workspace/{name}_records/`` so that it is

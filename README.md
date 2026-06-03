@@ -62,12 +62,11 @@ arr = clear.get_numpy(
 )
 ```
 
-The same collection can feed TorchGeo:
+The same collection can feed a downstream chip-based dataset:
 
 ```python
-dataset = clear.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02", "B08"],
-    chip_size=256,
+metadata = clear.to_table(
+    columns=["id", "datetime", "geometry", "proj:epsg", "B04_metadata", "B03_metadata", "B02_metadata", "B08_metadata"],
 )
 ```
 
@@ -136,7 +135,7 @@ The same pattern works with Polars or PyArrow for split/label columns, and with
 | Get xarray dataset | `Collection.get_xarray(...)` |
 | Get GeoPandas rows with pixel arrays | `Collection.get_gdf(...)` |
 | Sample pixels at points | `Collection.sample_points(...)` |
-| Train/infer with TorchGeo | `Collection.to_torchgeo_dataset(...)` |
+| Build a downstream TorchGeo dataset | `Collection.to_table(...)` + `Collection.read_window(...)` |
 
 ## Dataset Catalog
 
@@ -211,7 +210,6 @@ uv pip install rasteret
 Optional integrations:
 
 ```bash
-uv pip install "rasteret[torchgeo]"
 uv pip install "rasteret[aws]"
 uv pip install "rasteret[azure]"
 uv pip install "rasteret[all]"  # all optional integrations for exploration

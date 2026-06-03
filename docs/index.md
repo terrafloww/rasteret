@@ -101,7 +101,7 @@ Common output surfaces:
 | `get_xarray()` | `xarray.Dataset` | You want labeled raster data, coordinates, and CRS metadata. |
 | `get_gdf()` | `geopandas.GeoDataFrame` | You want one row per geometry/record result, with AOI metadata preserved. |
 | `sample_points()` | `pyarrow.Table` | You want pixel values at points, with point metadata preserved. |
-| `to_torchgeo_dataset()` | TorchGeo `GeoDataset` | You want a TorchGeo-compatible dataset backed by Rasteret reads. |
+| `to_table()` + `read_window()` | downstream dataset boundary | You want to build a chip-based dataset on top of Rasteret reads. |
 
 ## Dataset Catalog
 

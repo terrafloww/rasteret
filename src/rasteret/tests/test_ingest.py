@@ -22,7 +22,10 @@ from rasteret.ingest.enrich import (
     enrich_table_with_cog_metadata,
 )
 from rasteret.ingest.normalize import build_collection_from_table
-from rasteret.ingest.parquet_record_table import RecordTableBuilder
+from rasteret.ingest.parquet_record_table import (
+    RecordTableBuilder,
+    prepare_record_table,
+)
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -91,6 +94,16 @@ class TestBuildCollectionFromTable:
         assert "month" in out.schema.names
         assert out.column("year").to_pylist() == [2024, 2024]
         assert out.column("month").to_pylist() == [1, 3]
+
+    def test_rejects_non_timestamp_datetime(self):
+        table = _minimal_table(
+            datetime=pa.array(
+                ["2024-01-01T00:00:00Z", "2024-03-20T00:00:00Z"],
+                type=pa.string(),
+            )
+        )
+        with pytest.raises(ValueError, match="must be an Arrow timestamp"):
+            build_collection_from_table(table)
 
     def test_auto_adds_bbox(self):
         table = _minimal_table()
@@ -368,6 +381,35 @@ class TestPrepareTable:
         with pytest.raises(ValueError, match="explicit UTC offset"):
             builder.build()
 
+    def test_rfc3339_datetime_strings_normalized_to_utc_timestamp(self):
+        table = _minimal_table(
+            datetime=pa.array(
+                [
+                    "2024-01-01T00:00:00Z",
+                    "2024-01-01T05:30:00+05:30",
+                ],
+                type=pa.string(),
+            )
+        )
+        out = prepare_record_table(table, required_columns=("datetime",))
+        assert out.schema.field("datetime").type == pa.timestamp("us")
+        assert out.column("datetime").to_pylist() == [
+            datetime(2024, 1, 1, 0, 0, 0),
+            datetime(2024, 1, 1, 0, 0, 0),
+        ]
+
+    def test_naive_datetime_string_rejected(self):
+        table = pa.table(
+            {
+                "id": pa.array(["scene-1"]),
+                "datetime": pa.array(["2024-01-01T00:00:00"], type=pa.string()),
+                "geometry": pa.array([None], type=pa.null()),
+                "assets": pa.array([{"B04": {"href": "https://example.com/s1.tif"}}]),
+            }
+        )
+        with pytest.raises(ValueError, match="explicit UTC offset"):
+            prepare_record_table(table, required_columns=("datetime",))
+
     def test_assets_constructed_from_href_column_and_band_index_map(self, tmp_path):
         table = pa.table(
             {
@@ -634,6 +676,38 @@ class TestBuildFromTable:
         assert captured["path"] == "hf://datasets/terrafloww/example/index.parquet"
         assert captured["columns"] == ["id", "datetime", "geometry", "assets"]
         assert captured["filter_expr"] is filter_expr
+
+
+class TestCollectionLoadValidation:
+    def test_from_parquet_rejects_string_datetime(self, tmp_path):
+        path = tmp_path / "bad_datetime.parquet"
+        table = _minimal_table(
+            datetime=pa.array(
+                ["2024-01-01T00:00:00Z", "2024-03-20T00:00:00Z"],
+                type=pa.string(),
+            )
+        )
+        table = table.append_column(
+            "bbox",
+            pa.array(
+                [
+                    {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0},
+                    {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0},
+                ],
+                type=pa.struct(
+                    [
+                        pa.field("xmin", pa.float64()),
+                        pa.field("ymin", pa.float64()),
+                        pa.field("xmax", pa.float64()),
+                        pa.field("ymax", pa.float64()),
+                    ]
+                ),
+            ),
+        )
+        _write_manifest(path, table)
+
+        with pytest.raises(ValueError, match="non-timestamp 'datetime' column"):
+            Collection.from_parquet(path)
 
 
 # ---------------------------------------------------------------------------
