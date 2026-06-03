@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import struct
 import threading
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal
 from urllib.parse import urlparse
 
+import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -23,15 +26,15 @@ import pyarrow.parquet as pq
 
 from rasteret.core.aoi import AUTO_CRS, GeometryCrsInput
 from rasteret.core.execution import (
-    _derive_query_bbox,
     get_collection_gdf,
     get_collection_numpy,
     get_collection_xarray,
 )
-from rasteret.core.geometry import intersect_bbox
 from rasteret.core.parquet_read_planner import ParquetReadPlanner
 from rasteret.core.point_sampling import get_collection_point_samples
 from rasteret.core.raster_accessor import RasterAccessor
+from rasteret.core.reader_pool import AsyncCOGReaderPool
+from rasteret.core.window_read import read_collection_window
 from rasteret.integrations.huggingface import (
     HFStreamingSource,
     head_hf_streaming_source,
@@ -44,11 +47,9 @@ from rasteret.integrations.huggingface import (
 from rasteret.types import RasterInfo
 
 if TYPE_CHECKING:
-    import geopandas as gpd
     import xarray as xr
 
     from rasteret.core.display import DescribeResult
-    from rasteret.integrations.torchgeo import RasteretGeoDataset
 
 logger = logging.getLogger(__name__)
 _UNSET_RECORD_INDEX_FILTER = object()
@@ -390,12 +391,52 @@ class Collection:
             wide_filter_expr=wide_filter_expr,
         )
         self._record_index_dataset: ds.Dataset | None = None
+        self._reader_pool: AsyncCOGReaderPool | None = None
+        self._reader_pool_pid: int | None = None
+        self._reader_pool_backend_id: int | None = None
+        self._reader_pool_max_concurrent: int | None = None
         if self.dataset is not None and self._hf_streaming is not None:
             raise ValueError(
                 "Collection cannot use both Dataset and HF streaming backends"
             )
         if self.dataset is not None:
             self._validate_parquet_dataset()
+
+    def _ensure_reader_pool(
+        self,
+        *,
+        max_concurrent: int,
+        backend: object | None,
+    ) -> AsyncCOGReaderPool:
+        pid = os.getpid()
+        backend_id = id(backend)
+        if (
+            self._reader_pool is None
+            or self._reader_pool_pid != pid
+            or self._reader_pool_backend_id != backend_id
+            or self._reader_pool_max_concurrent != max_concurrent
+        ):
+            self._close_reader_pool()
+            self._reader_pool = AsyncCOGReaderPool(
+                max_concurrent=max_concurrent,
+                backend=backend,
+            )
+            self._reader_pool_pid = pid
+            self._reader_pool_backend_id = backend_id
+            self._reader_pool_max_concurrent = max_concurrent
+        return self._reader_pool
+
+    def _close_reader_pool(self) -> None:
+        pool = self._reader_pool
+        self._reader_pool = None
+        self._reader_pool_pid = None
+        self._reader_pool_backend_id = None
+        self._reader_pool_max_concurrent = None
+        if pool is not None:
+            pool.close()
+
+    def __del__(self) -> None:
+        self._close_reader_pool()
 
     def _view(
         self,
@@ -910,6 +951,10 @@ class Collection:
             dataset = _open_parquet_dataset(path_str)
         except Exception as exc:
             raise FileNotFoundError(f"Cannot open Parquet at {path_str}") from exc
+        _validate_datetime_is_timestamp(
+            dataset.schema,
+            context=f"Parquet at {path_str}",
+        )
 
         _validate_datetime_is_timestamp(
             dataset.schema,
@@ -984,7 +1029,7 @@ class Collection:
                 )
             _validate_datetime_is_timestamp(
                 hf_streaming.schema,
-                context=f"Parquet at {path_str}",
+                context=f"Hugging Face Parquet at {path_str}",
             )
 
             return cls(
@@ -2520,142 +2565,34 @@ class Collection:
             logger.debug("Failed to parse collection name %r: %s", name, e)
             return {"name": name, "custom_name": name, "data_source": None}
 
-    def to_torchgeo_dataset(
+    def read_window(
         self,
         *,
+        record_ids: Sequence[str] | pa.Array,
+        bounds: tuple[float, float, float, float],
+        res: tuple[float, float],
         bands: list[str],
-        chip_size: int | None = None,
-        is_image: bool = True,
-        allow_resample: bool = False,
-        cloud_cover_lt: float | None = None,
-        date_range: tuple[str, str] | None = None,
-        bbox: tuple[float, float, float, float] | None = None,
-        split: str | Sequence[str] | None = None,
-        split_column: str = "split",
-        label_field: str | None = None,
-        geometries: Any = None,
-        geometries_crs: int = 4326,
-        transforms: Any = None,
-        max_concurrent: int = 50,
-        cloud_config: Any = None,
-        backend: Any = None,
-        time_series: bool = False,
         target_crs: int | None = None,
-    ) -> RasteretGeoDataset:
-        """Create a TorchGeo GeoDataset backed by this Collection.
-
-        This integration is optional and requires ``torchgeo`` and its
-        dependencies.
-
-        Parameters
-        ----------
-        bands : list of str
-            Band codes to load (e.g. ``["B04", "B03", "B02"]``).
-        chip_size : int, optional
-            Spatial extent of each chip in pixels.
-        is_image : bool
-            If ``True`` (default), return chips as ``sample[\"image\"]``.
-            If ``False``, return chips as ``sample[\"mask\"]`` (single-band data
-            will have its channel dimension squeezed to match TorchGeo
-            ``RasterDataset`` behavior).
-        allow_resample : bool
-            If ``True``, Rasteret will resample bands to the dataset grid when
-            requested bands have different resolutions. This is opt-in because
-            it may change pixel values (resampling) and can be slow.
-        cloud_cover_lt : float, optional
-            Keep only records with ``eo:cloud_cover`` below this value before
-            constructing the TorchGeo dataset.
-        date_range : tuple of str, optional
-            Keep only records whose ``datetime`` falls within
-            ``(start, end)`` before constructing the TorchGeo dataset.
-        bbox : tuple of float, optional
-            Spatial bbox filter applied before constructing the TorchGeo
-            dataset.
-        split : str or sequence of str, optional
-            Filter to the given split(s) before creating the dataset.
-        split_column : str
-            Column holding split labels. Defaults to ``"split"``.
-        label_field : str, optional
-            Column name to include as ``sample["label"]``.
-        geometries : bbox tuple, pa.Array, Shapely, WKB bytes, or GeoJSON dict, optional
-            Spatial extent for the dataset. Accepts ``(minx, miny, maxx, maxy)``
-            bbox tuples, Arrow arrays (e.g. from GeoParquet), Shapely objects,
-            raw WKB bytes, or GeoJSON dicts.
-        geometries_crs : int
-            EPSG code for *geometries*. Defaults to ``4326``.
-        transforms : callable, optional
-            TorchGeo-compatible transforms applied to each sample.
-        max_concurrent : int
-            Maximum concurrent HTTP requests.
-        cloud_config : CloudConfig, optional
-            Cloud configuration for URL rewriting.
-        backend : StorageBackend, optional
-            Pluggable I/O backend (e.g. ``ObstoreBackend``).
-        time_series : bool
-            When ``True``, stack all timesteps as ``[T, C, H, W]``.
-        target_crs : int, optional
-            Reproject all records to this EPSG code at read time.
-
-        Returns
-        -------
-        RasteretGeoDataset
-            A standard TorchGeo ``GeoDataset``. Pixel data is in the
-            native COG dtype (e.g. ``uint16`` for Sentinel-2).
-        """
-        from rasteret.integrations.torchgeo import RasteretGeoDataset
-
+        max_concurrent: int = 50,
+        backend: Any = None,
+    ) -> np.ndarray:
+        """Read selected records onto a fixed output grid and mosaic overlaps."""
         self._validate_bands(bands)
-
-        selected_collection = self
-        explicit_prefilter_kwargs: dict[str, Any] = {}
-        if cloud_cover_lt is not None:
-            explicit_prefilter_kwargs["cloud_cover_lt"] = cloud_cover_lt
-        if date_range is not None:
-            explicit_prefilter_kwargs["date_range"] = date_range
-        if bbox is not None:
-            explicit_prefilter_kwargs["bbox"] = bbox
-        if split is not None:
-            explicit_prefilter_kwargs["split"] = split
-            explicit_prefilter_kwargs["split_column"] = split_column
-
-        if explicit_prefilter_kwargs:
-            selected_collection = self.subset(**explicit_prefilter_kwargs)
-
-        if geometries is not None:
-            derived_bbox = _derive_query_bbox(geometries, geometry_crs=geometries_crs)
-            if derived_bbox is not None:
-                merged_bbox = intersect_bbox(bbox, derived_bbox)
-                if bbox is not None and merged_bbox is None:
-                    selected_collection = selected_collection._view(
-                        selected_collection.dataset.filter(ds.scalar(False))
-                    )
-                else:
-                    try:
-                        selected_collection = selected_collection.subset(
-                            bbox=merged_bbox or derived_bbox
-                        )
-                    except ValueError as exc:
-                        logger.debug(
-                            "TorchGeo prefilter could not apply derived bbox %s: %s",
-                            merged_bbox or derived_bbox,
-                            exc,
-                        )
-
-        return RasteretGeoDataset(
-            collection=selected_collection,
-            bands=bands,
-            chip_size=chip_size,
-            is_image=is_image,
-            allow_resample=allow_resample,
-            label_field=label_field,
-            geometries=geometries,
-            geometries_crs=geometries_crs,
-            transforms=transforms,
-            cloud_config=cloud_config,
+        reader_backend = backend if backend is not None else self._auto_backend()
+        reader_pool = self._ensure_reader_pool(
             max_concurrent=max_concurrent,
-            backend=backend,
-            time_series=time_series,
+            backend=reader_backend,
+        )
+        return read_collection_window(
+            collection=self,
+            record_ids=record_ids,
+            bounds=bounds,
+            res=res,
+            bands=bands,
             target_crs=target_crs,
+            max_concurrent=max_concurrent,
+            backend=reader_backend,
+            reader_pool=reader_pool,
         )
 
     def _auto_backend(
@@ -2746,6 +2683,9 @@ class Collection:
             from rasteret.options import get_options
 
             progress = get_options().progress
+        reader_pool = self._ensure_reader_pool(
+            max_concurrent=max_concurrent, backend=backend
+        )
         return get_collection_xarray(
             collection=self,
             geometries=geometries,
@@ -2759,6 +2699,7 @@ class Collection:
             geometry_column=geometry_column,
             all_touched=all_touched,
             xr_combine=xr_combine,
+            reader_pool=reader_pool,
             **filters,
         )
 
@@ -2825,6 +2766,9 @@ class Collection:
             from rasteret.options import get_options
 
             progress = get_options().progress
+        reader_pool = self._ensure_reader_pool(
+            max_concurrent=max_concurrent, backend=backend
+        )
         return get_collection_gdf(
             collection=self,
             geometries=geometries,
@@ -2837,6 +2781,7 @@ class Collection:
             geometry_crs=geometry_crs,
             geometry_column=geometry_column,
             all_touched=all_touched,
+            reader_pool=reader_pool,
             **filters,
         )
 
@@ -2898,6 +2843,9 @@ class Collection:
             from rasteret.options import get_options
 
             progress = get_options().progress
+        reader_pool = self._ensure_reader_pool(
+            max_concurrent=max_concurrent, backend=backend
+        )
         return get_collection_numpy(
             collection=self,
             geometries=geometries,
@@ -2910,6 +2858,7 @@ class Collection:
             geometry_crs=geometry_crs,
             geometry_column=geometry_column,
             all_touched=all_touched,
+            reader_pool=reader_pool,
             **filters,
         )
 

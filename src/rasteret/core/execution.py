@@ -34,7 +34,8 @@ from rasteret.core.aoi import (
     prepare_geometry_input,
 )
 from rasteret.core.geometry import bbox_array, intersect_bbox
-from rasteret.core.utils import infer_data_source, run_sync
+from rasteret.core.utils import infer_data_source
+from rasteret.fetch.cog import COGReader
 
 if TYPE_CHECKING:  # pragma: no cover
     import xarray as xr
@@ -221,6 +222,7 @@ async def _load_collection_data(
     target_crs: int | None = None,
     geometry_crs: int | str | None = 4326,
     all_touched: bool = False,
+    reader: Any = None,
     **filters: Any,
 ) -> tuple[list[gpd.GeoDataFrame] | list, list[tuple[str, Exception]]]:
     """Core loading loop: iterate records, fetch tiles."""
@@ -254,45 +256,57 @@ async def _load_collection_data(
     iterable = (
         tqdm(raster_batches, desc="Loading rasters") if progress else raster_batches
     )
-    for batch in iterable:
-        tasks = [
-            raster.load_bands(
-                geometries=geometries,
-                band_codes=bands,
-                max_concurrent=max_concurrent,
-                for_xarray=for_xarray,
-                for_numpy=for_numpy,
-                progress=progress,
-                backend=backend,
-                target_crs=target_crs,
-                geometry_crs=geometry_crs,
-                all_touched=all_touched,
-            )
-            for raster in batch
-        ]
 
-        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-        for raster, result in zip(batch, batch_results):
-            if isinstance(result, Exception):
-                errors.append((getattr(raster, "id", "<unknown>"), result))
-                logger.error("Record load failed (id=%s): %s", errors[-1][0], result)
-            elif result is not None:
-                if (
-                    for_xarray
-                    and hasattr(result, "data_vars")
-                    and len(result.data_vars) == 0
-                ):
-                    continue
-                if for_numpy and len(result) == 0:
-                    continue
-                if (
-                    not for_xarray
-                    and not for_numpy
-                    and hasattr(result, "empty")
-                    and result.empty
-                ):
-                    continue
-                results.append(result)
+    async def _run_batches(active_reader: Any) -> None:
+        for batch in iterable:
+            tasks = [
+                raster.load_bands(
+                    geometries=geometries,
+                    band_codes=bands,
+                    max_concurrent=max_concurrent,
+                    for_xarray=for_xarray,
+                    for_numpy=for_numpy,
+                    progress=progress,
+                    backend=backend,
+                    reader=active_reader,
+                    target_crs=target_crs,
+                    geometry_crs=geometry_crs,
+                    all_touched=all_touched,
+                )
+                for raster in batch
+            ]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            for raster, result in zip(batch, batch_results):
+                if isinstance(result, Exception):
+                    errors.append((getattr(raster, "id", "<unknown>"), result))
+                    logger.error(
+                        "Record load failed (id=%s): %s", errors[-1][0], result
+                    )
+                elif result is not None:
+                    if (
+                        for_xarray
+                        and hasattr(result, "data_vars")
+                        and len(result.data_vars) == 0
+                    ):
+                        continue
+                    if for_numpy and len(result) == 0:
+                        continue
+                    if (
+                        not for_xarray
+                        and not for_numpy
+                        and hasattr(result, "empty")
+                        and result.empty
+                    ):
+                        continue
+                    results.append(result)
+
+    if reader is not None:
+        await _run_batches(reader)
+    else:
+        async with COGReader(
+            max_concurrent=max_concurrent, backend=backend
+        ) as shared_reader:
+            await _run_batches(shared_reader)
 
     return results, errors
 
@@ -318,6 +332,7 @@ def _load_and_merge(
     geometry_crs: GeometryCrsInput = AUTO_CRS,
     geometry_column: str | None = None,
     all_touched: bool = False,
+    reader_pool: Any = None,
     **filters: Any,
 ):
     """Load collection data and merge via *merge_fn*.
@@ -368,6 +383,7 @@ def _load_and_merge(
             progress=bool(progress),
             geometry_crs=aoi.geometry_crs,
             all_touched=all_touched,
+            reader=reader_pool.reader if reader_pool is not None else None,
             **filters,
         )
         if errors and results:
@@ -390,7 +406,7 @@ def _load_and_merge(
             raise ValueError("No valid data found")
         return merge_fn(results, aoi.metadata)
 
-    return run_sync(_async_load())
+    return reader_pool.run(_async_load())
 
 
 def _detect_target_crs(
@@ -470,6 +486,7 @@ def get_collection_xarray(
     all_touched: bool = False,
     progress: bool = False,
     xr_combine: str = "combine_first",
+    reader_pool: Any = None,
     **filters: Any,
 ) -> xr.Dataset:
     """Load selected bands as an ``xarray.Dataset``.
@@ -563,6 +580,7 @@ def get_collection_xarray(
         geometry_column=geometry_column,
         all_touched=all_touched,
         progress=bool(progress),
+        reader_pool=reader_pool,
         **filters,
     )
 
@@ -580,6 +598,7 @@ def get_collection_gdf(
     geometry_column: str | None = None,
     all_touched: bool = False,
     progress: bool = False,
+    reader_pool: Any = None,
     **filters: Any,
 ) -> gpd.GeoDataFrame:
     """Load selected bands as a ``geopandas.GeoDataFrame``.
@@ -656,6 +675,7 @@ def get_collection_gdf(
         geometry_column=geometry_column,
         all_touched=all_touched,
         progress=bool(progress),
+        reader_pool=reader_pool,
         **filters,
     )
 
@@ -673,6 +693,7 @@ def get_collection_numpy(
     geometry_crs: GeometryCrsInput = AUTO_CRS,
     geometry_column: str | None = None,
     all_touched: bool = False,
+    reader_pool: Any = None,
     **filters: Any,
 ):
     """Load selected bands as NumPy arrays without xarray merge overhead.
@@ -804,8 +825,6 @@ def get_collection_numpy(
         geometry_crs=geometry_crs,
         geometry_column=geometry_column,
         all_touched=all_touched,
+        reader_pool=reader_pool,
         **filters,
     )
-
-
-# Backwards-compatible import path (internal). Prefer `Collection.sample_points`.
