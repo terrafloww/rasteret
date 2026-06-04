@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import warnings
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any
 
@@ -23,6 +24,9 @@ from rasteret.fetch.cog import read_cog
 from rasteret.types import CogMetadata
 
 logger = logging.getLogger(__name__)
+
+# (row_id, row_crs, per-band read specs, start-index into flat request list, stop-index)
+RecordRequest = tuple[str, Any, list[tuple[str, CogMetadata, Any]], int, int]
 
 
 def _valid_data_mask(
@@ -111,8 +115,19 @@ def read_collection_window(
     max_concurrent: int = 50,
     backend: Any = None,
     reader_pool: AsyncCOGReaderPool | None = None,
+    group_by: str | None = None,
 ) -> np.ndarray:
-    """Read selected records onto a fixed output grid and mosaic overlaps."""
+    """Read selected records onto a fixed output grid and mosaic overlaps.
+
+    Parameters
+    ----------
+    group_by : str, optional
+        When ``"datetime"``, records are grouped by acquisition date and each
+        group is mosaicked independently.  All groups are read concurrently in
+        a single pool submission, returning ``[T, C, H, W]`` instead of
+        ``[C, H, W]``.  This is the correct mode for time-series chip reads
+        (e.g. TorchGeo ``time_series=True``).
+    """
     if reader_pool is None:
         raise ValueError("read_collection_window requires a reader_pool")
 
@@ -167,13 +182,15 @@ def read_collection_window(
                 band_meta_col[band] = col
                 break
 
-    # Read only the three columns we actually need (plus resolved metadata columns).
-    # This skips datetime, geometry, bbox, cloud_cover — everything iterate_rasters
-    # would have materialized but window reads never use.
+    # Read only the columns we actually need (plus resolved metadata columns).
+    # This skips geometry, bbox, cloud_cover — everything iterate_rasters would
+    # have materialized but window reads never use.
+    # datetime is included when group_by="datetime" for time-series stacking.
     needed_meta_cols = list(dict.fromkeys(band_meta_col.values()))  # deduped, ordered
-    read_cols = [
-        c for c in ["id", "assets", "proj:epsg", *needed_meta_cols] if c in schema_names
-    ]
+    base_cols = ["id", "assets", "proj:epsg"]
+    if group_by == "datetime" and "datetime" in schema_names:
+        base_cols = ["id", "datetime", "assets", "proj:epsg"]
+    read_cols = [c for c in [*base_cols, *needed_meta_cols] if c in schema_names]
 
     selected_dataset = scan_dataset.filter(ds.field("id").isin(ids_array))
     table = selected_dataset.to_table(columns=read_cols)
@@ -196,71 +213,52 @@ def read_collection_window(
     assets_col = table.column("assets")
     crs_col = table.column("proj:epsg") if "proj:epsg" in table.schema.names else None
     meta_cols = {col: table.column(col) for col in needed_meta_cols}
+    datetime_col = (
+        table.column("datetime")
+        if group_by == "datetime" and "datetime" in table.schema.names
+        else None
+    )
 
-    async def _read() -> np.ndarray:
-        patch = coerce_to_geoarrow(bounds)
+    # ---------------------------------------------------------------------------
+    # Inner helpers shared by the single-mosaic and time-series paths.
+    # ---------------------------------------------------------------------------
 
-        if target_crs is not None:
-            output_crs = int(target_crs)
-        else:
-            output_crs = None
-            for row_idx in ordered_row_indices:
-                if crs_col is not None and crs_col[row_idx].is_valid:
-                    crs_val = crs_col[row_idx].as_py()
-                    if crs_val is not None:
-                        output_crs = int(crs_val)
-                        break
-            if output_crs is None:
-                raise ValueError(
-                    "read_window requires record CRS metadata (`proj:epsg`) when "
-                    "target_crs is not provided."
-                )
+    def _plan_rows(
+        row_indices: list[int],
+        all_requests: list[tuple[str, CogMetadata, Any]],
+        first_error_ref: list[BaseException | None],
+    ) -> list[RecordRequest]:
+        """Populate *all_requests* with band read specs for *row_indices*.
 
-        query_grid = MergeGrid(
-            bounds=bounds,
-            res=(abs(float(res[0])), abs(float(res[1]))),
-        )
-
-        reader = reader_pool.reader  # type: ignore[union-attr]
-
-        # Plan all band reads across all records before firing any IO.
-        # record_requests: (row_id, row_crs, per_band_request_list, slice_start, slice_stop)
-        record_requests: list[
-            tuple[str, int | None, list[tuple[str, CogMetadata, int | None]], int, int]
-        ] = []
-        all_requests: list[tuple[str, CogMetadata, int | None]] = []
-        skipped_records = 0
-        first_error: BaseException | None = None
-
-        for row_idx in ordered_row_indices:
+        Returns a list of ``(row_id, row_crs, requests, start, stop)`` tuples
+        for the rows that could be planned.  Unreadable rows are skipped with a
+        warning.
+        """
+        record_requests: list[RecordRequest] = []
+        for row_idx in row_indices:
             row_id = str(id_col[row_idx].as_py())
             row_crs: int | None = None
             if crs_col is not None and crs_col[row_idx].is_valid:
-                crs_val = crs_col[row_idx].as_py()
-                if crs_val is not None:
-                    row_crs = int(crs_val)
+                v = crs_col[row_idx].as_py()
+                if v is not None:
+                    row_crs = int(v)
 
             assets_dict: dict = assets_col[row_idx].as_py() or {}
-
             requests: list[tuple[str, CogMetadata, int | None]] = []
             failed = False
 
             for band in bands:
-                # Find the asset key for this band in this row's assets dict.
-                asset_key: str | None = None
-                for candidate in band_asset_candidates[band]:
-                    if candidate in assets_dict:
-                        asset_key = candidate
-                        break
-
+                asset_key: str | None = next(
+                    (c for c in band_asset_candidates[band] if c in assets_dict), None
+                )
                 if asset_key is None:
-                    err = ValueError(
+                    err: BaseException = ValueError(
                         f"Band {band!r} not found in assets for record {row_id!r}"
                     )
-                    if first_error is None:
-                        first_error = err
+                    if first_error_ref[0] is None:
+                        first_error_ref[0] = err
                     logger.warning(
-                        "Skipping record %s: band %s not found in assets", row_id, band
+                        "Skipping record %s: band %s not found", row_id, band
                     )
                     failed = True
                     break
@@ -268,11 +266,9 @@ def read_collection_window(
                 asset = assets_dict[asset_key]
                 url = _extract_asset_href(asset)
                 if url is None:
-                    err = ValueError(
-                        f"No href for band {band!r} asset in record {row_id!r}"
-                    )
-                    if first_error is None:
-                        first_error = err
+                    err = ValueError(f"No href for band {band!r} in record {row_id!r}")
+                    if first_error_ref[0] is None:
+                        first_error_ref[0] = err
                     logger.warning(
                         "Skipping record %s: no href for band %s", row_id, band
                     )
@@ -290,36 +286,30 @@ def read_collection_window(
 
                 meta_col_name = band_meta_col.get(band)
                 if meta_col_name is None:
-                    err = ValueError(f"No metadata column found for band {band!r}")
-                    if first_error is None:
-                        first_error = err
+                    err = ValueError(f"No metadata column for band {band!r}")
+                    if first_error_ref[0] is None:
+                        first_error_ref[0] = err
                     logger.warning(
-                        "Skipping record %s: no metadata column for band %s",
-                        row_id,
-                        band,
+                        "Skipping record %s: no metadata col for %s", row_id, band
                     )
                     failed = True
                     break
 
                 raw_meta_val = meta_cols[meta_col_name][row_idx]
                 if not raw_meta_val.is_valid:
-                    err = ValueError(
-                        f"Null metadata for band {band!r} in record {row_id!r}"
-                    )
-                    if first_error is None:
-                        first_error = err
+                    err = ValueError(f"Null metadata for band {band!r} in {row_id!r}")
+                    if first_error_ref[0] is None:
+                        first_error_ref[0] = err
                     logger.warning(
-                        "Skipping record %s: null metadata for band %s", row_id, band
+                        "Skipping record %s: null metadata for %s", row_id, band
                     )
                     failed = True
                     break
 
-                raw_meta = raw_meta_val.as_py()
-                cog_meta = CogMetadata.from_dict(raw_meta, crs=row_crs)
+                cog_meta = CogMetadata.from_dict(raw_meta_val.as_py(), crs=row_crs)
                 requests.append((url, cog_meta, band_index))
 
             if failed:
-                skipped_records += 1
                 continue
 
             start = len(all_requests)
@@ -328,29 +318,17 @@ def read_collection_window(
                 (row_id, row_crs, requests, start, len(all_requests))
             )
 
-        if not record_requests:
-            raise ValueError(
-                "No readable records were available for the requested window."
-            ) from first_error
+        return record_requests
 
-        raw_results = await asyncio.gather(
-            *[
-                read_cog(
-                    url,
-                    meta,
-                    band_index=band_index,
-                    geom_array=patch,
-                    geom_idx=0,
-                    geometry_crs=output_crs,
-                    max_concurrent=max_concurrent,
-                    reader=reader,
-                    mode="window",
-                )
-                for url, meta, band_index in all_requests
-            ],
-            return_exceptions=True,
-        )
-
+    def _assemble_mosaic(
+        raw_results: list[Any],
+        record_requests: list[RecordRequest],
+        output_crs: int,
+        query_grid: MergeGrid,
+        skipped_ref: list[int],
+        first_error_ref: list[BaseException | None],
+    ) -> tuple[list[np.ndarray], list[list[float | int | None]]]:
+        """Turn raw read_cog results into per-record band arrays ready for mosaicking."""
         per_record_arrays: list[np.ndarray] = []
         per_record_nodata: list[list[float | int | None]] = []
 
@@ -360,36 +338,32 @@ def read_collection_window(
             nodata_values: list[float | int | None] = []
             record_failed = False
 
-            for result, (_url, meta, _band_index) in zip(
+            for result, (_url, meta, _bi) in zip(
                 record_results, requests, strict=False
             ):
                 if isinstance(result, Exception):
-                    skipped_records += 1
-                    if first_error is None:
-                        first_error = result
+                    skipped_ref[0] += 1
+                    if first_error_ref[0] is None:
+                        first_error_ref[0] = result
                     logger.warning(
-                        "Skipping record %s after COG read failure: %s", row_id, result
+                        "Skipping record %s after read failure: %s", row_id, result
                     )
                     record_failed = True
                     break
 
                 data = getattr(result, "data", None)
                 if not isinstance(data, np.ndarray) or data.ndim != 2 or data.size == 0:
-                    skipped_records += 1
-                    empty_error = ValueError(
-                        "COG read returned empty/non-2D data "
-                        f"(shape={getattr(data, 'shape', None)})"
+                    skipped_ref[0] += 1
+                    empty_err: BaseException = ValueError(
+                        f"COG read returned empty/non-2D data (shape={getattr(data,'shape',None)})"
                     )
-                    if first_error is None:
-                        first_error = empty_error
-                    logger.warning(
-                        "Skipping record %s after empty COG read result", row_id
-                    )
+                    if first_error_ref[0] is None:
+                        first_error_ref[0] = empty_err
+                    logger.warning("Skipping record %s after empty COG result", row_id)
                     record_failed = True
                     break
 
                 nodata_values.append(meta.nodata)
-
                 if row_crs is not None and row_crs != output_crs:
                     arrays.append(
                         reproject_array(
@@ -419,22 +393,154 @@ def read_collection_window(
 
             if record_failed or len(arrays) != len(bands):
                 continue
-
             per_record_arrays.append(np.stack(arrays, axis=0))
             per_record_nodata.append(nodata_values)
 
-        if skipped_records and per_record_arrays and first_error is not None:
+        return per_record_arrays, per_record_nodata
+
+    # ---------------------------------------------------------------------------
+    # Main coroutine.
+    # ---------------------------------------------------------------------------
+
+    async def _read() -> np.ndarray:
+        patch = coerce_to_geoarrow(bounds)
+
+        if target_crs is not None:
+            output_crs = int(target_crs)
+        else:
+            output_crs = None
+            for row_idx in ordered_row_indices:
+                if crs_col is not None and crs_col[row_idx].is_valid:
+                    v = crs_col[row_idx].as_py()
+                    if v is not None:
+                        output_crs = int(v)
+                        break
+            if output_crs is None:
+                raise ValueError(
+                    "read_window requires record CRS metadata (`proj:epsg`) when "
+                    "target_crs is not provided."
+                )
+
+        query_grid = MergeGrid(
+            bounds=bounds,
+            res=(abs(float(res[0])), abs(float(res[1]))),
+        )
+        reader = reader_pool.reader  # type: ignore[union-attr]
+
+        first_error_ref: list[BaseException | None] = [None]
+        skipped_ref: list[int] = [0]
+
+        if group_by == "datetime" and datetime_col is not None:
+            # Time-series path: group rows by acquisition datetime, plan all
+            # requests across all timesteps, fire ONE asyncio.gather for
+            # maximum concurrency, then assemble [T, C, H, W].
+            dt_to_rows: dict[Any, list[int]] = defaultdict(list)
+            for row_idx in ordered_row_indices:
+                dt_to_rows[datetime_col[row_idx].as_py()].append(row_idx)
+
+            sorted_groups = sorted(dt_to_rows.items())  # ascending datetime
+
+            all_requests: list[tuple[str, CogMetadata, Any]] = []
+            per_group_record_requests: list[list[RecordRequest]] = []
+            for _, grp_rows in sorted_groups:
+                per_group_record_requests.append(
+                    _plan_rows(grp_rows, all_requests, first_error_ref)
+                )
+
+            if not any(per_group_record_requests):
+                raise ValueError(
+                    "No readable records were available for any timestep."
+                ) from first_error_ref[0]
+
+            raw_results = await asyncio.gather(
+                *[
+                    read_cog(
+                        url,
+                        meta,
+                        band_index=band_index,
+                        geom_array=patch,
+                        geom_idx=0,
+                        geometry_crs=output_crs,
+                        max_concurrent=max_concurrent,
+                        reader=reader,
+                        mode="window",
+                    )
+                    for url, meta, band_index in all_requests
+                ],
+                return_exceptions=True,
+            )
+
+            group_arrays: list[np.ndarray] = []
+            for grp_record_requests in per_group_record_requests:
+                if not grp_record_requests:
+                    continue
+                per_rec, per_nd = _assemble_mosaic(
+                    raw_results,
+                    grp_record_requests,
+                    output_crs,
+                    query_grid,
+                    skipped_ref,
+                    first_error_ref,
+                )
+                if per_rec:
+                    group_arrays.append(_mosaic_window_records(per_rec, per_nd))
+
+            if not group_arrays:
+                raise ValueError(
+                    "No valid timestep data after reading."
+                ) from first_error_ref[0]
+            return np.stack(group_arrays, axis=0)
+
+        # Single-mosaic path (no group_by): mosaic all records into [C, H, W].
+        all_requests_single: list[tuple[str, CogMetadata, Any]] = []
+        record_requests = _plan_rows(
+            ordered_row_indices, all_requests_single, first_error_ref
+        )
+
+        if not record_requests:
+            raise ValueError(
+                "No readable records were available for the requested window."
+            ) from first_error_ref[0]
+
+        raw_results_single = await asyncio.gather(
+            *[
+                read_cog(
+                    url,
+                    meta,
+                    band_index=band_index,
+                    geom_array=patch,
+                    geom_idx=0,
+                    geometry_crs=output_crs,
+                    max_concurrent=max_concurrent,
+                    reader=reader,
+                    mode="window",
+                )
+                for url, meta, band_index in all_requests_single
+            ],
+            return_exceptions=True,
+        )
+
+        per_record_arrays, per_record_nodata = _assemble_mosaic(
+            raw_results_single,
+            record_requests,
+            output_crs,
+            query_grid,
+            skipped_ref,
+            first_error_ref,
+        )
+
+        if skipped_ref[0] and per_record_arrays and first_error_ref[0] is not None:
             warnings.warn(
                 f"read_window skipped unreadable records "
-                f"({skipped_records}/{len(ordered_row_indices)} failure(s)); "
-                f"first failure: {first_error}",
+                f"({skipped_ref[0]}/{len(ordered_row_indices)} failure(s)); "
+                f"first failure: {first_error_ref[0]}",
                 RuntimeWarning,
                 stacklevel=2,
             )
         if not per_record_arrays:
             raise ValueError(
                 "No readable records were available for the requested window."
-            ) from first_error
+            ) from first_error_ref[0]
 
         return _mosaic_window_records(per_record_arrays, per_record_nodata)
 

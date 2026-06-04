@@ -2575,8 +2575,17 @@ class Collection:
         target_crs: int | None = None,
         max_concurrent: int = 50,
         backend: Any = None,
+        group_by: str | None = None,
     ) -> np.ndarray:
-        """Read selected records onto a fixed output grid and mosaic overlaps."""
+        """Read selected records onto a fixed output grid and mosaic overlaps.
+
+        Parameters
+        ----------
+        group_by : str, optional
+            When ``"datetime"``, records are grouped by acquisition datetime and
+            each group is mosaicked independently.  All groups fire concurrently,
+            returning ``[T, C, H, W]`` instead of ``[C, H, W]``.
+        """
         self._validate_bands(bands)
         reader_backend = backend if backend is not None else self._auto_backend()
         reader_pool = self._ensure_reader_pool(
@@ -2593,6 +2602,7 @@ class Collection:
             max_concurrent=max_concurrent,
             backend=reader_backend,
             reader_pool=reader_pool,
+            group_by=group_by,
         )
 
     def _auto_backend(
