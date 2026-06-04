@@ -332,7 +332,7 @@ def _load_and_merge(
     geometry_crs: GeometryCrsInput = AUTO_CRS,
     geometry_column: str | None = None,
     all_touched: bool = False,
-    reader_pool: Any = None,
+    reader_pool: Any,
     **filters: Any,
 ):
     """Load collection data and merge via *merge_fn*.
@@ -383,7 +383,7 @@ def _load_and_merge(
             progress=bool(progress),
             geometry_crs=aoi.geometry_crs,
             all_touched=all_touched,
-            reader=reader_pool.reader if reader_pool is not None else None,
+            reader=reader_pool.reader,
             **filters,
         )
         if errors and results:
@@ -486,7 +486,7 @@ def get_collection_xarray(
     all_touched: bool = False,
     progress: bool = False,
     xr_combine: str = "combine_first",
-    reader_pool: Any = None,
+    reader_pool: Any,
     **filters: Any,
 ) -> xr.Dataset:
     """Load selected bands as an ``xarray.Dataset``.
@@ -598,7 +598,7 @@ def get_collection_gdf(
     geometry_column: str | None = None,
     all_touched: bool = False,
     progress: bool = False,
-    reader_pool: Any = None,
+    reader_pool: Any,
     **filters: Any,
 ) -> gpd.GeoDataFrame:
     """Load selected bands as a ``geopandas.GeoDataFrame``.
@@ -693,7 +693,7 @@ def get_collection_numpy(
     geometry_crs: GeometryCrsInput = AUTO_CRS,
     geometry_column: str | None = None,
     all_touched: bool = False,
-    reader_pool: Any = None,
+    reader_pool: Any,
     **filters: Any,
 ):
     """Load selected bands as NumPy arrays without xarray merge overhead.

@@ -59,8 +59,9 @@ class AsyncCOGReaderPool:
         if self._error is not None:
             try:
                 loop.close()
-            finally:
-                return
+            except Exception:
+                pass
+            return
 
         try:
             loop.run_forever()
