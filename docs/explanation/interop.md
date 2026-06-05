@@ -47,27 +47,29 @@ metadata.
 
 ## TorchGeo
 
-`Collection.to_torchgeo_dataset(...)` returns a TorchGeo `GeoDataset`.
-TorchGeo samplers, transforms, composition, and dataloaders stay standard; the
-pixel reads are served by Rasteret.
+`RasteretDataset` in `torchgeo.datasets` is a `GeoDataset` backed by a Rasteret
+`Collection`. TorchGeo samplers, transforms, composition, and dataloaders stay
+standard; pixel reads are served by Rasteret's async byte-range engine.
 
 ```python
-dataset = collection.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02"],
-    chip_size=256,
-)
+from torchgeo.datasets import RasteretDataset
+from torchgeo.samplers import RandomGeoSampler
+
+dataset = RasteretDataset(collection=collection, bands=["B04", "B03", "B02"])
+sampler = RandomGeoSampler(dataset, size=256, length=100)
 ```
 
-Rasteret-specific options for TorchGeo include:
+Key `RasteretDataset` options:
 
 | Option | Purpose |
 | --- | --- |
-| `label_field="label"` | Include a collection column as `sample["label"]`. |
-| `split="train"` | Filter the collection before dataset construction. |
-| `target_crs=...` | Read multi-zone data into a chosen CRS. |
-| `time_series=True` | Stack matching records as `[T, C, H, W]`. |
-| `allow_resample=True` | Opt into resampling bands with different native resolutions. |
+| `time_series=True` | Stack all acquisitions as `[T, C, H, W]`. |
+| `crs=...` | Override the sampling CRS (EPSG-resolvable). |
+| `res=...` | Override the output pixel resolution. |
 | `is_image=False` | Return `sample["mask"]` for mask-style datasets. |
+
+Pre-filter with `collection.subset(...)` or `collection.where(...)` before
+constructing the dataset if you need a geographic or attribute subset.
 
 For workflow examples, see [TorchGeo Integration](../how-to/torchgeo-integration.md),
 [Bring Your Own AOIs, Points, And Metadata](../how-to/enriched-collection-workflows.md), and
@@ -153,7 +155,7 @@ reads COG tiles directly from byte ranges using metadata stored in the collectio
 | Remote tiled GeoTIFFs / COGs with repeated reads | Rasteret |
 | One-off local TIFF inspection | rasterio |
 | Non-TIFF raster formats such as NetCDF, HDF5, GRIB | rasterio/xarray/TorchGeo-native paths |
-| TorchGeo training over COG collections | Rasteret `to_torchgeo_dataset(...)` |
+| TorchGeo training over COG collections | `RasteretDataset` from `torchgeo.datasets` |
 | Metadata joins, splits, labels, and filtering | Arrow-native tools plus `as_collection(...)` |
 
 ## Verification

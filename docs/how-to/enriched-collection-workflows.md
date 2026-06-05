@@ -176,7 +176,7 @@ directly to `get_gdf(...)` or `sample_points(...)`.
 | `sample_points(...)` | Keeps point columns such as `sensor_id`, `plot_id`, `lon`, and `lat`. |
 | `get_numpy(...)` | Reads the pixels, but returns only arrays. |
 | `get_xarray(...)` | Reads the pixels, but returns an xarray Dataset. |
-| `to_torchgeo_dataset(...)` | Uses collection columns such as `split` and `label_field`. |
+| `RasteretDataset` (TorchGeo) | Pre-filter the collection with `subset(...)` before passing it in. |
 
 Use `get_gdf(...)` or `sample_points(...)` when labels, IDs, folds, or audit
 columns need to stay attached to the pixel results.

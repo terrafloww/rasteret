@@ -3,19 +3,13 @@
 Use this page when you want to combine multiple Rasteret-backed TorchGeo
 datasets in one training workflow.
 
-Each collection can become a standard TorchGeo `GeoDataset`:
+Each collection becomes a standard TorchGeo `GeoDataset` via `RasteretDataset`:
 
 ```python
-s2 = s2_collection.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02"],
-    chip_size=256,
-)
+from torchgeo.datasets import RasteretDataset
 
-mask = mask_collection.to_torchgeo_dataset(
-    bands=["mask"],
-    chip_size=256,
-    is_image=False,
-)
+s2 = RasteretDataset(collection=s2_collection, bands=["B04", "B03", "B02"])
+mask = RasteretDataset(collection=mask_collection, bands=["mask"], is_image=False)
 ```
 
 TorchGeo handles dataset composition with `&` and `|`.
@@ -57,14 +51,8 @@ dataset with `is_image=False` so it returns `sample["mask"]`.
 Use `|` when a sample can come from either dataset's coverage area:
 
 ```python
-s2 = s2_collection.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02"],
-    chip_size=256,
-)
-landsat = landsat_collection.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02"],
-    chip_size=256,
-)
+s2 = RasteretDataset(collection=s2_collection, bands=["B04", "B03", "B02"])
+landsat = RasteretDataset(collection=landsat_collection, bands=["B04", "B03", "B02"])
 
 training = s2 | landsat
 ```
@@ -77,19 +65,21 @@ default collation merges the returned sample dictionaries.
 
 TorchGeo composition aligns the second dataset to the first dataset's CRS and
 resolution metadata. If your Rasteret collections span multiple raster CRS
-zones, pass `target_crs=...` when creating each dataset:
+zones, pass `crs=...` when creating each dataset:
 
 ```python
-s2 = s2_collection.to_torchgeo_dataset(
+from pyproj import CRS
+
+s2 = RasteretDataset(
+    collection=s2_collection,
     bands=["B04", "B03", "B02"],
-    chip_size=256,
-    target_crs=32610,
+    crs=CRS.from_epsg(32610),
 )
 
-aef = aef_collection.to_torchgeo_dataset(
+aef = RasteretDataset(
+    collection=aef_collection,
     bands=["A00", "A01"],
-    chip_size=256,
-    target_crs=32610,
+    crs=CRS.from_epsg(32610),
 )
 ```
 

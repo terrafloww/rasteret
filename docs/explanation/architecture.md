@@ -32,7 +32,7 @@ cost it avoids, see [Design Decisions](design-decisions.md).
                                 v
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ Rasteret IO engine (custom byte range fetches)                               │
-│ get_numpy() / get_xarray() / sample_points() / to_torchgeo_dataset()         │
+│ get_numpy() / get_xarray() / sample_points() / to_table() / read_window()    │
 │ consumes filtered rows + geometry + cached tile metadata                     │
 └───────────────────────────────┬──────────────────────────────────────────────┘
                                 │ async byte-range tile requests
@@ -63,7 +63,7 @@ Normalize Layer (build_collection_from_table)
     v
 Collection  (Arrow dataset wrapper)
     |
-    +--> to_torchgeo_dataset()  --> RasteretGeoDataset  --> DataLoader
+    +--> to_table() / read_window()  --> RasteretDataset (TorchGeo)  --> DataLoader
     |
     +--> get_xarray()           --> xr.Dataset
     |
@@ -112,7 +112,7 @@ implementation details used to keep read-time code simple and fast.
 object. It wraps a `pyarrow.dataset.Dataset` and provides:
 
 - **Filtering**: [`subset()`](../reference/core/collection.md), [`where()`](../reference/core/collection.md), `select_split()`
-- **Output adapters**: [`to_torchgeo_dataset()`](../reference/integrations/torchgeo.md), [`get_numpy()`](../reference/core/collection.md), [`get_xarray()`](../reference/core/collection.md), [`get_gdf()`](../reference/core/collection.md), [`sample_points()`](../reference/core/collection.md)
+- **Output adapters**: [`to_table()`](../reference/core/collection.md), [`read_window()`](../reference/core/collection.md), [`get_numpy()`](../reference/core/collection.md), [`get_xarray()`](../reference/core/collection.md), [`get_gdf()`](../reference/core/collection.md), [`sample_points()`](../reference/core/collection.md)
 - **Export**: [`export()`](../reference/core/collection.md)
 - **Discovery**: [`list_collections()`](../reference/core/collection.md)
 

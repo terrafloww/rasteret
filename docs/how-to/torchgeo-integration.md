@@ -1,16 +1,25 @@
 # TorchGeo Integration
 
-Use this page when you want to connect a Rasteret Collection to a downstream
-TorchGeo dataset implementation.
+`RasteretDataset` in `torchgeo.datasets` is the supported integration point for
+using Rasteret collections in TorchGeo training pipelines. Install both packages
+and pass a collection directly:
 
-Rasteret no longer ships a built-in TorchGeo `GeoDataset` class. Instead, it
-exposes the public boundary a TorchGeo dataset needs:
+```python
+from torchgeo.datasets import RasteretDataset
+from torchgeo.samplers import RandomGeoSampler
 
-- `collection.to_table(...)`
-- `collection.read_window(...)`
+dataset = RasteretDataset(collection=collection, bands=["B04", "B03", "B02"])
+sampler = RandomGeoSampler(dataset, size=256, length=100)
+```
+
+This page covers the underlying public boundary that `RasteretDataset` (and any
+custom `GeoDataset` subclass) relies on:
+
+- `collection.to_table(...)` — for building the spatial/temporal sampling index
+- `collection.read_window(...)` — for chip-level pixel reads
 
 That split keeps TorchGeo dataset semantics on the TorchGeo side while Rasteret
-continues to own collection metadata, COG planning, and byte-range pixel reads.
+owns collection metadata, COG planning, and byte-range pixel reads.
 
 ## Build A Sampling Table
 
@@ -56,7 +65,7 @@ records are mosaicked internally with fixed-grid semantics.
 You can filter the collection first:
 
 ```python
-train = collection.subset(split="train", cloud_cover_lt=20)
+train = collection.subset(cloud_cover_lt=20)
 table = train.to_table(
     columns=[
         "id",
