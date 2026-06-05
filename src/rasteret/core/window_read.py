@@ -352,23 +352,14 @@ def read_collection_window(
                     break
 
                 data = getattr(result, "data", None)
-                # An empty ndarray (size == 0) is read_cog's signal that the
-                # requested bounds don't intersect this record's pixel grid.
-                # That's benign — silently drop the record from this mosaic
-                # instead of counting it as a failure.
-                if isinstance(data, np.ndarray) and data.size == 0:
-                    record_failed = True
-                    break
-                if not isinstance(data, np.ndarray) or data.ndim != 2:
+                if not isinstance(data, np.ndarray) or data.ndim != 2 or data.size == 0:
                     skipped_ref[0] += 1
                     empty_err: BaseException = ValueError(
-                        f"COG read returned non-2D data (shape={getattr(data,'shape',None)})"
+                        f"COG read returned empty/non-2D data (shape={getattr(data,'shape',None)})"
                     )
                     if first_error_ref[0] is None:
                         first_error_ref[0] = empty_err
-                    logger.warning(
-                        "Skipping record %s after malformed COG result", row_id
-                    )
+                    logger.warning("Skipping record %s after empty COG result", row_id)
                     record_failed = True
                     break
 
@@ -495,12 +486,6 @@ def read_collection_window(
                     group_arrays.append(_mosaic_window_records(per_rec, per_nd))
 
             if not group_arrays:
-                if first_error_ref[0] is None:
-                    raise ValueError(
-                        "Requested window does not intersect any of the provided "
-                        "record_ids in any timestep. Pre-filter record_ids by "
-                        "geometry intersection before calling read_window."
-                    )
                 raise ValueError(
                     "No valid timestep data after reading."
                 ) from first_error_ref[0]
@@ -553,12 +538,6 @@ def read_collection_window(
                 stacklevel=2,
             )
         if not per_record_arrays:
-            if first_error_ref[0] is None:
-                raise ValueError(
-                    "Requested window does not intersect any of the provided "
-                    "record_ids. Pre-filter record_ids by geometry intersection "
-                    "before calling read_window."
-                )
             raise ValueError(
                 "No readable records were available for the requested window."
             ) from first_error_ref[0]
