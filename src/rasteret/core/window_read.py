@@ -448,77 +448,33 @@ def read_collection_window(
         reader = reader_pool.reader  # type: ignore[union-attr]
 
         failures = _ReadFailureLog()
+        is_time_series = group_by == "datetime" and datetime_col is not None
 
-        if group_by == "datetime" and datetime_col is not None:
-            # Time-series path: group rows by acquisition datetime, plan all
-            # requests across all timesteps, fire ONE asyncio.gather for
-            # maximum concurrency, then assemble [T, C, H, W].
+        # Build the row groups.  Time-series partitions by acquisition datetime;
+        # the default single-mosaic path is just one big group.  Either way the
+        # remainder is identical: plan → ONE asyncio.gather → per-group assemble.
+        if is_time_series:
             dt_to_rows: dict[Any, list[int]] = defaultdict(list)
             for row_idx in ordered_row_indices:
                 dt_to_rows[datetime_col[row_idx].as_py()].append(row_idx)
+            row_groups = [rows for _, rows in sorted(dt_to_rows.items())]
+        else:
+            row_groups = [ordered_row_indices]
 
-            sorted_groups = sorted(dt_to_rows.items())  # ascending datetime
+        all_requests: list[tuple[str, CogMetadata, Any]] = []
+        per_group_record_requests = [
+            _plan_rows(grp_rows, all_requests, failures) for grp_rows in row_groups
+        ]
 
-            all_requests: list[tuple[str, CogMetadata, Any]] = []
-            per_group_record_requests: list[list[RecordRequest]] = []
-            for _, grp_rows in sorted_groups:
-                per_group_record_requests.append(
-                    _plan_rows(grp_rows, all_requests, failures)
-                )
-
-            if not any(per_group_record_requests):
-                raise ValueError(
-                    "No readable records were available for any timestep."
-                ) from failures.first_error
-
-            raw_results = await asyncio.gather(
-                *[
-                    read_cog(
-                        url,
-                        meta,
-                        band_index=band_index,
-                        geom_array=patch,
-                        geom_idx=0,
-                        geometry_crs=output_crs,
-                        max_concurrent=max_concurrent,
-                        reader=reader,
-                        mode="window",
-                    )
-                    for url, meta, band_index in all_requests
-                ],
-                return_exceptions=True,
+        if not any(per_group_record_requests):
+            msg = (
+                "No readable records were available for any timestep."
+                if is_time_series
+                else "No readable records were available for the requested window."
             )
+            raise ValueError(msg) from failures.first_error
 
-            group_arrays: list[np.ndarray] = []
-            for grp_record_requests in per_group_record_requests:
-                if not grp_record_requests:
-                    continue
-                per_rec, per_nd = _assemble_mosaic(
-                    raw_results,
-                    grp_record_requests,
-                    output_crs,
-                    query_grid,
-                    failures,
-                )
-                if per_rec:
-                    group_arrays.append(_mosaic_window_records(per_rec, per_nd))
-
-            if not group_arrays:
-                raise ValueError(
-                    "No valid timestep data after reading."
-                ) from failures.first_error
-            return np.stack(group_arrays, axis=0)
-
-        # Single-mosaic path (no group_by): mosaic all records into [C, H, W].
-        all_requests_single: list[tuple[str, CogMetadata, Any]] = []
-        record_requests = _plan_rows(ordered_row_indices, all_requests_single, failures)
-
-        if not record_requests:
-            raise ValueError(
-                "No readable records were available for the requested window."
-            ) from failures.first_error
-
-        raw_results_single = await asyncio.gather(
+        raw_results = await asyncio.gather(
             *[
                 read_cog(
                     url,
@@ -531,20 +487,35 @@ def read_collection_window(
                     reader=reader,
                     mode="window",
                 )
-                for url, meta, band_index in all_requests_single
+                for url, meta, band_index in all_requests
             ],
             return_exceptions=True,
         )
 
-        per_record_arrays, per_record_nodata = _assemble_mosaic(
-            raw_results_single,
-            record_requests,
-            output_crs,
-            query_grid,
-            failures,
-        )
+        group_arrays: list[np.ndarray] = []
+        for grp_record_requests in per_group_record_requests:
+            if not grp_record_requests:
+                continue
+            per_rec, per_nd = _assemble_mosaic(
+                raw_results,
+                grp_record_requests,
+                output_crs,
+                query_grid,
+                failures,
+            )
+            if per_rec:
+                group_arrays.append(_mosaic_window_records(per_rec, per_nd))
 
-        if failures.skipped and per_record_arrays and failures.first_error is not None:
+        # Preserve original behaviour: the partial-failure warning is emitted on
+        # the single-mosaic path only.  Time-series callers want a single
+        # success-or-raise contract; mid-series partial failures would surprise
+        # them.
+        if (
+            not is_time_series
+            and failures.skipped
+            and group_arrays
+            and failures.first_error is not None
+        ):
             warnings.warn(
                 f"read_window skipped unreadable records "
                 f"({failures.skipped}/{len(ordered_row_indices)} failure(s)); "
@@ -552,11 +523,17 @@ def read_collection_window(
                 RuntimeWarning,
                 stacklevel=2,
             )
-        if not per_record_arrays:
-            raise ValueError(
-                "No readable records were available for the requested window."
-            ) from failures.first_error
 
-        return _mosaic_window_records(per_record_arrays, per_record_nodata)
+        if not group_arrays:
+            msg = (
+                "No valid timestep data after reading."
+                if is_time_series
+                else "No readable records were available for the requested window."
+            )
+            raise ValueError(msg) from failures.first_error
+
+        if is_time_series:
+            return np.stack(group_arrays, axis=0)
+        return group_arrays[0]
 
     return reader_pool.run(_read())
