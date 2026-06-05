@@ -17,7 +17,15 @@ T = TypeVar("T")
 
 
 class AsyncCOGReaderPool:
-    """Run a persistent ``COGReader`` on a background asyncio loop."""
+    """Run a persistent ``COGReader`` on a background asyncio loop.
+
+    Lifetime: call :meth:`close` (directly or via ``with``) to shut down the
+    background loop and release the reader's HTTP connection pool.  The
+    background thread is a daemon, so the interpreter can still exit cleanly
+    if :meth:`close` is never called — but the obstore session may then emit
+    "unclosed" warnings.  :class:`~rasteret.core.collection.Collection` owns
+    its pool and closes it from ``Collection._close_reader_pool``.
+    """
 
     def __init__(self, *, max_concurrent: int, backend: object | None = None) -> None:
         self.max_concurrent = max_concurrent
@@ -118,7 +126,4 @@ class AsyncCOGReaderPool:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        self.close()
-
-    def __del__(self) -> None:
         self.close()
