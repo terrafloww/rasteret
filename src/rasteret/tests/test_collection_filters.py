@@ -361,3 +361,130 @@ def test_where_preserves_collection_metadata() -> None:
     collection = _collection_with_splits()
     filtered = collection.where(ds.field("split") == "val")
     assert filtered.data_source == collection.data_source
+
+
+# ---------------------------------------------------------------------------
+# Collection.footprints()
+# ---------------------------------------------------------------------------
+
+
+def _collection_for_footprints():
+    """Two records in EPSG:32615 (UTM 15N): one tile at (0,0), one at (20,0).
+
+    Each tile is 10 cols x 10 rows at res=2.0, so each covers a 20x20 box
+    in native CRS. ``geometry`` is the WGS84 lon/lat polygon of those boxes
+    (precomputed for the test); the point is to confirm ``footprints()``
+    uses band metadata, not this column.
+    """
+    meta_a = {
+        "transform": [2.0, 0.0, -2.0, 20.0],  # sx=2, tx=0, sy=-2, ty=20
+        "image_width": 10,
+        "image_height": 10,
+        "tile_width": 10,
+        "tile_height": 10,
+        "dtype": "uint16",
+        "compress": 8,
+        "predictor": 1,
+        "tile_offsets": [0],
+        "tile_byte_counts": [1],
+        "nodata": 0.0,
+    }
+    meta_b = {**meta_a, "transform": [2.0, 20.0, -2.0, 20.0]}  # shifted +20 in x
+    table = pa.table(
+        {
+            "id": pa.array(["scene-a", "scene-b"]),
+            "datetime": pa.array(
+                [datetime(2024, 1, 15), datetime(2024, 1, 16)],
+                type=pa.timestamp("us"),
+            ),
+            "geometry": pa.array([None, None], type=pa.null()),
+            "assets": pa.array(
+                [
+                    {"B04": {"href": "https://example.com/a.tif"}},
+                    {"B04": {"href": "https://example.com/b.tif"}},
+                ]
+            ),
+            "proj:epsg": pa.array([32615, 32615], type=pa.int32()),
+            "B04_metadata": pa.array([meta_a, meta_b]),
+        }
+    )
+    return build_collection_from_table(table, name="footprints-test")
+
+
+def test_footprints_uses_band_metadata_not_geometry_column() -> None:
+    collection = _collection_for_footprints()
+    gdf = collection.footprints(crs=32615)
+    assert list(gdf.columns) == ["id", "datetime", "geometry"]
+    assert gdf.crs.to_epsg() == 32615
+    assert gdf["id"].tolist() == ["scene-a", "scene-b"]
+    # Exact bounds derived from transform + width*height, not from any
+    # WGS84-to-UTM reprojection.
+    assert gdf.geometry.iloc[0].bounds == (0.0, 0.0, 20.0, 20.0)
+    assert gdf.geometry.iloc[1].bounds == (20.0, 0.0, 40.0, 20.0)
+
+
+def test_footprints_defaults_to_first_band_when_unspecified() -> None:
+    collection = _collection_for_footprints()
+    assert collection.bands == ["B04"]
+    gdf = collection.footprints()
+    # No crs given, all records single-CRS → tagged with native.
+    assert gdf.crs.to_epsg() == 32615
+    assert len(gdf) == 2
+
+
+def test_footprints_reprojects_when_target_crs_differs() -> None:
+    collection = _collection_for_footprints()
+    gdf_native = collection.footprints(crs=32615)
+    gdf_wgs84 = collection.footprints(crs=4326)
+    assert gdf_wgs84.crs.to_epsg() == 4326
+    # Reprojection should change the bounds.
+    assert gdf_native.geometry.iloc[0].bounds != gdf_wgs84.geometry.iloc[0].bounds
+    # Sanity-check the WGS84 bounds are in a plausible range (UTM 15N x=0
+    # is west of the central meridian at -93°E, near -97.5°E at the equator).
+    minx, miny, maxx, maxy = gdf_wgs84.geometry.iloc[0].bounds
+    assert -180.0 < minx < maxx < 0.0
+    assert 0.0 <= miny < maxy < 1.0
+
+
+def test_footprints_skips_rows_with_null_metadata() -> None:
+    """Rows with null band_metadata are dropped rather than raising."""
+    meta = {
+        "transform": [2.0, 0.0, -2.0, 20.0],
+        "image_width": 10,
+        "image_height": 10,
+        "tile_width": 10,
+        "tile_height": 10,
+        "dtype": "uint16",
+        "compress": 8,
+        "predictor": 1,
+        "tile_offsets": [0],
+        "tile_byte_counts": [1],
+        "nodata": 0.0,
+    }
+    table = pa.table(
+        {
+            "id": pa.array(["good", "bad"]),
+            "datetime": pa.array(
+                [datetime(2024, 1, 15), datetime(2024, 1, 16)],
+                type=pa.timestamp("us"),
+            ),
+            "geometry": pa.array([None, None], type=pa.null()),
+            "assets": pa.array(
+                [
+                    {"B04": {"href": "https://example.com/a.tif"}},
+                    {"B04": {"href": "https://example.com/b.tif"}},
+                ]
+            ),
+            "proj:epsg": pa.array([32615, 32615], type=pa.int32()),
+            "B04_metadata": pa.array([meta, None]),
+        }
+    )
+    collection = build_collection_from_table(table, name="footprints-null-meta")
+    gdf = collection.footprints(crs=32615)
+    assert gdf["id"].tolist() == ["good"]
+
+
+def test_footprints_raises_on_unknown_band() -> None:
+    collection = _collection_for_footprints()
+    with pytest.raises(ValueError, match="Band"):
+        collection.footprints(band="B99")

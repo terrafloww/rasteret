@@ -2605,6 +2605,110 @@ class Collection:
             group_by=group_by,
         )
 
+    def footprints(
+        self,
+        *,
+        crs: int | None = None,
+        band: str | None = None,
+    ) -> gpd.GeoDataFrame:
+        """Per-record COG footprints in target CRS, from band metadata.
+
+        Returns a GeoDataFrame with columns ``['id', 'datetime', 'geometry']``
+        where each geometry is the precise pixel-grid bbox computed from the
+        band's ``transform`` + ``image_width`` + ``image_height``. This avoids
+        the bloat that comes from reprojecting the collection's WGS84
+        ``geometry`` column to a projected CRS.
+
+        Intended for framework adapters (e.g. TorchGeo ``RasteretDataset``)
+        that need an exact per-record spatial index to filter chip queries.
+
+        Parameters
+        ----------
+        crs : int, optional
+            Target EPSG code. When omitted, footprints are returned in each
+            record's native CRS; the result GDF is tagged with the shared
+            native CRS if all records agree, otherwise CRS is left unset.
+        band : str, optional
+            Band whose metadata defines the footprint. Defaults to the first
+            available band. Multi-resolution collections (e.g. S2 with 10 m
+            and 20 m bands) may need an explicit choice.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+        """
+        from shapely import box
+
+        from rasteret.core.utils import normalize_transform, transform_polygon
+
+        if band is None:
+            available = self.bands
+            if not available:
+                raise ValueError("Collection has no bands; cannot compute footprints.")
+            band = available[0]
+        else:
+            self._validate_bands([band])
+
+        meta_col = f"{band}_metadata"
+        schema_names = set(self._schema.names) if self._schema is not None else set()
+        cols = ["id", meta_col]
+        if "datetime" in schema_names:
+            cols.append("datetime")
+        if "proj:epsg" in schema_names:
+            cols.append("proj:epsg")
+        table = self.to_table(columns=cols)
+
+        ids: list[Any] = []
+        dts: list[Any] = []
+        geoms: list[Any] = []
+        native_crs_seen: set[int] = set()
+
+        for i in range(table.num_rows):
+            raw_meta = table[meta_col][i]
+            if not raw_meta.is_valid:
+                continue
+            meta = raw_meta.as_py()
+            tf = meta.get("transform")
+            w = meta.get("image_width")
+            h = meta.get("image_height")
+            if tf is None or w is None or h is None:
+                continue
+            sx, tx, sy, ty = normalize_transform(tf)
+            w, h = int(w), int(h)
+            xmin, xmax = tx, tx + sx * w
+            ymin, ymax = ty + sy * h, ty
+            geom = box(
+                min(xmin, xmax), min(ymin, ymax), max(xmin, xmax), max(ymin, ymax)
+            )
+
+            row_crs: int | None = None
+            if "proj:epsg" in table.column_names:
+                epsg_cell = table["proj:epsg"][i]
+                if epsg_cell.is_valid:
+                    row_crs = int(epsg_cell.as_py())
+                    native_crs_seen.add(row_crs)
+
+            if crs is not None and row_crs is not None and row_crs != crs:
+                geom = transform_polygon(geom, row_crs, crs)
+
+            ids.append(table["id"][i].as_py())
+            if "datetime" in table.column_names:
+                dt_cell = table["datetime"][i]
+                dts.append(dt_cell.as_py() if dt_cell.is_valid else None)
+            else:
+                dts.append(None)
+            geoms.append(geom)
+
+        if crs is not None:
+            out_crs: str | None = f"EPSG:{crs}"
+        elif len(native_crs_seen) == 1:
+            out_crs = f"EPSG:{next(iter(native_crs_seen))}"
+        else:
+            out_crs = None  # mixed CRSs, caller must specify crs= to unify
+        return gpd.GeoDataFrame(
+            {"id": ids, "datetime": dts}, geometry=geoms, crs=out_crs
+        )
+
     def _auto_backend(
         self,
         cloud_config: Any = None,
