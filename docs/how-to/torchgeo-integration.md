@@ -60,9 +60,19 @@ window = collection.read_window(
 `read_window(...)` returns a NumPy array on the exact query grid. Overlapping
 records are mosaicked internally with fixed-grid semantics.
 
-## Filter Before Indexing
+## Filtering
 
-You can filter the collection first:
+Metadata and attribute filtering (cloud cover, date range, custom columns)
+belongs on the collection before construction. Spatial ROI is a sampler
+concern — pass `roi=` to `RandomGeoSampler`. `dataset.index` is a public
+GeoDataFrame and can be sliced after construction if needed.
+
+`subset(...)` covers the common cases. For anything more complex — joins,
+custom expressions, multi-step transforms — the collection is Arrow-native,
+so you can work with it in DuckDB, Polars, or pandas and wrap the result back
+with `rasteret.as_collection(table, data_source=collection.data_source)`.
+
+Use `collection.subset(...)` for common filters:
 
 ```python
 train = collection.subset(cloud_cover_lt=20)
