@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
+from affine import Affine
 
 from rasteret.ingest.normalize import build_collection_from_table
 
@@ -121,6 +124,45 @@ def _collection_with_torchgeo_filters():
     return build_collection_from_table(table, name="torchgeo-filter-demo")
 
 
+def _collection_with_sampling_metadata():
+    meta1 = {
+        "transform": [10.0, 500000.0, -10.0, 1000000.0],
+        "image_width": 128,
+        "image_height": 128,
+        "tile_width": 64,
+        "tile_height": 64,
+        "dtype": "uint16",
+        "compress": 8,
+        "predictor": 1,
+        "tile_offsets": [0],
+        "tile_byte_counts": [1],
+    }
+    meta2 = {
+        **meta1,
+        "transform": [10.0, 600000.0, -10.0, 1000000.0],
+    }
+    table = pa.table(
+        {
+            "id": pa.array(["scene-1", "scene-2"]),
+            "datetime": pa.array(
+                [datetime(2024, 1, 15), datetime(2024, 1, 16)],
+                type=pa.timestamp("us"),
+            ),
+            "geometry": pa.array([None, None], type=pa.null()),
+            "assets": pa.array(
+                [
+                    {"B04": {"href": "https://example.com/s1.tif"}},
+                    {"B04": {"href": "https://example.com/s2.tif"}},
+                ]
+            ),
+            "proj:epsg": pa.array([32615, 32615], type=pa.int32()),
+            "label": pa.array([10, 20], type=pa.int64()),
+            "B04_metadata": pa.array([meta1, meta2]),
+        }
+    )
+    return build_collection_from_table(table, name="sampling-demo")
+
+
 def test_subset_single_split() -> None:
     collection = _collection_with_splits()
     filtered = collection.subset(split="train")
@@ -198,146 +240,111 @@ def test_subset_bbox_uses_bbox_struct() -> None:
     assert ids == ["scene-1"]
 
 
-def test_to_torchgeo_dataset_applies_split(monkeypatch) -> None:
-    pytest.importorskip("torchgeo")
-    import rasteret.integrations.torchgeo as torchgeo_adapter
-
-    collection = _collection_with_splits()
-    captured: dict[str, list[str]] = {}
-
-    class DummyGeoDataset:
-        def __init__(self, *, collection, **kwargs):
-            _ = kwargs
-            captured["ids"] = (
-                collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
-            )
-
-    monkeypatch.setattr(torchgeo_adapter, "RasteretGeoDataset", DummyGeoDataset)
-    _ = collection.to_torchgeo_dataset(bands=["B04"], split="val")
-    assert captured["ids"] == ["scene-2"]
-
-
-def test_to_torchgeo_dataset_forwards_label_field(monkeypatch) -> None:
-    pytest.importorskip("torchgeo")
-    import rasteret.integrations.torchgeo as torchgeo_adapter
-
-    collection = _collection_with_splits()
-    captured: dict[str, object] = {}
-
-    class DummyGeoDataset:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(torchgeo_adapter, "RasteretGeoDataset", DummyGeoDataset)
-    _ = collection.to_torchgeo_dataset(
-        bands=["B04"], split="train", label_field="label"
+def _collection_for_window_ordering():
+    """2x2 COG metadata aligned with query bounds (0,0,2,2) at res=1, nodata=0."""
+    meta = {
+        "transform": [1.0, 0.0, -1.0, 2.0],
+        "image_width": 2,
+        "image_height": 2,
+        "tile_width": 2,
+        "tile_height": 2,
+        "dtype": "uint16",
+        "compress": 8,
+        "predictor": 1,
+        "tile_offsets": [0],
+        "tile_byte_counts": [1],
+        "nodata": 0.0,
+    }
+    table = pa.table(
+        {
+            "id": pa.array(["scene-1", "scene-2"]),
+            "datetime": pa.array(
+                [datetime(2024, 1, 15), datetime(2024, 1, 16)],
+                type=pa.timestamp("us"),
+            ),
+            "geometry": pa.array([None, None], type=pa.null()),
+            "assets": pa.array(
+                [
+                    {"B04": {"href": "https://example.com/scene-1.tif"}},
+                    {"B04": {"href": "https://example.com/scene-2.tif"}},
+                ]
+            ),
+            "proj:epsg": pa.array([32615, 32615], type=pa.int32()),
+            "B04_metadata": pa.array([meta, meta]),
+        }
     )
-    assert captured["label_field"] == "label"
+    return build_collection_from_table(table, name="window-ordering-test")
 
 
-def test_to_torchgeo_dataset_prefilters_by_geometries_bbox(monkeypatch) -> None:
-    pytest.importorskip("torchgeo")
-    import rasteret.integrations.torchgeo as torchgeo_adapter
+def test_read_window_respects_requested_record_order(monkeypatch) -> None:
+    """record_ids order controls mosaic priority: first ID wins at overlapping pixels."""
+    collection = _collection_for_window_ordering()
+    query_transform = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 2.0)
 
-    collection = _collection_with_bboxes()
-    captured: dict[str, list[str]] = {}
+    async def fake_read_cog(*args, **kwargs):
+        url = args[0]
+        if "scene-1" in url:
+            data = np.array([[1, 0], [0, 0]], dtype=np.uint16)
+        else:
+            data = np.array([[2, 2], [2, 2]], dtype=np.uint16)
+        return type("Result", (), {"data": data, "transform": query_transform})()
 
-    class DummyGeoDataset:
-        def __init__(self, *, collection, **kwargs):
-            _ = kwargs
-            captured["ids"] = (
-                collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
-            )
-
-    monkeypatch.setattr(torchgeo_adapter, "RasteretGeoDataset", DummyGeoDataset)
-    _ = collection.to_torchgeo_dataset(
+    monkeypatch.setattr("rasteret.core.window_read.read_cog", fake_read_cog)
+    arr = collection.read_window(
+        record_ids=["scene-1", "scene-2"],
+        bounds=(0.0, 0.0, 2.0, 2.0),
+        res=(1.0, 1.0),
         bands=["B04"],
-        geometries=(0.5, 0.5, 2.0, 2.0),
     )
-    assert captured["ids"] == ["scene-1"]
+
+    assert arr.shape == (1, 2, 2)
+    assert arr[0].tolist() == [[1, 2], [2, 2]]
 
 
-def test_to_torchgeo_dataset_applies_bbox_filter(monkeypatch) -> None:
-    pytest.importorskip("torchgeo")
-    import rasteret.integrations.torchgeo as torchgeo_adapter
+def test_read_window_reuses_reader_pool_across_calls(monkeypatch) -> None:
+    """The reader pool is created once and reused across read_window calls."""
+    collection = _collection_with_sampling_metadata()
+    query_transform = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 2.0)
+    created_pools: list[tuple[int, object | None]] = []
+    seen_readers: list[int] = []
 
-    collection = _collection_with_torchgeo_filters()
-    captured: dict[str, list[str]] = {}
+    class FakePool:
+        def __init__(self, *, max_concurrent: int, backend=None) -> None:
+            created_pools.append((max_concurrent, backend))
+            self.reader = object()
 
-    class DummyGeoDataset:
-        def __init__(self, *, collection, **kwargs):
-            _ = kwargs
-            captured["ids"] = (
-                collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
-            )
+        def run(self, coro):
+            return asyncio.run(coro)
 
-    monkeypatch.setattr(torchgeo_adapter, "RasteretGeoDataset", DummyGeoDataset)
-    _ = collection.to_torchgeo_dataset(bands=["B04"], bbox=(9.0, 9.0, 12.0, 12.0))
-    assert captured["ids"] == ["scene-2"]
+        def close(self) -> None:
+            return None
 
+    async def fake_read_cog(*args, **kwargs):
+        seen_readers.append(id(kwargs["reader"]))
+        return type(
+            "Result",
+            (),
+            {
+                "data": np.array([[1, 1], [1, 1]], dtype=np.uint16),
+                "transform": query_transform,
+            },
+        )()
 
-def test_to_torchgeo_dataset_applies_date_range_filter(monkeypatch) -> None:
-    pytest.importorskip("torchgeo")
-    import rasteret.integrations.torchgeo as torchgeo_adapter
+    monkeypatch.setattr("rasteret.core.collection.AsyncCOGReaderPool", FakePool)
+    monkeypatch.setattr("rasteret.core.window_read.read_cog", fake_read_cog)
 
-    collection = _collection_with_torchgeo_filters()
-    captured: dict[str, list[str]] = {}
+    for _ in range(2):
+        arr = collection.read_window(
+            record_ids=["scene-1"],
+            bounds=(0.0, 0.0, 2.0, 2.0),
+            res=(1.0, 1.0),
+            bands=["B04"],
+        )
+        assert arr.shape == (1, 2, 2)
 
-    class DummyGeoDataset:
-        def __init__(self, *, collection, **kwargs):
-            _ = kwargs
-            captured["ids"] = (
-                collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
-            )
-
-    monkeypatch.setattr(torchgeo_adapter, "RasteretGeoDataset", DummyGeoDataset)
-    _ = collection.to_torchgeo_dataset(
-        bands=["B04"],
-        date_range=("2024-02-01", "2024-02-28"),
-    )
-    assert captured["ids"] == ["scene-2"]
-
-
-def test_to_torchgeo_dataset_applies_cloud_cover_filter(monkeypatch) -> None:
-    pytest.importorskip("torchgeo")
-    import rasteret.integrations.torchgeo as torchgeo_adapter
-
-    collection = _collection_with_torchgeo_filters()
-    captured: dict[str, list[str]] = {}
-
-    class DummyGeoDataset:
-        def __init__(self, *, collection, **kwargs):
-            _ = kwargs
-            captured["ids"] = (
-                collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
-            )
-
-    monkeypatch.setattr(torchgeo_adapter, "RasteretGeoDataset", DummyGeoDataset)
-    _ = collection.to_torchgeo_dataset(bands=["B04"], cloud_cover_lt=50)
-    assert captured["ids"] == ["scene-1", "scene-2"]
-
-
-def test_to_torchgeo_dataset_intersects_bbox_with_geometries(monkeypatch) -> None:
-    pytest.importorskip("torchgeo")
-    import rasteret.integrations.torchgeo as torchgeo_adapter
-
-    collection = _collection_with_torchgeo_filters()
-    captured: dict[str, list[str]] = {}
-
-    class DummyGeoDataset:
-        def __init__(self, *, collection, **kwargs):
-            _ = kwargs
-            captured["ids"] = (
-                collection.dataset.to_table(columns=["id"]).column("id").to_pylist()
-            )
-
-    monkeypatch.setattr(torchgeo_adapter, "RasteretGeoDataset", DummyGeoDataset)
-    _ = collection.to_torchgeo_dataset(
-        bands=["B04"],
-        bbox=(0.0, 0.0, 15.0, 15.0),
-        geometries=(9.0, 9.0, 12.0, 12.0),
-    )
-    assert captured["ids"] == ["scene-2"]
+    assert len(created_pools) == 1
+    assert len(seen_readers) == 2
+    assert seen_readers[0] == seen_readers[1]
 
 
 def test_subset_preserves_collection_metadata() -> None:

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -151,6 +152,45 @@ def _write_static_catalog_with_asset_sequence(
 
     catalog.normalize_hrefs(str(root))
     catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    return root / "catalog.json"
+
+
+def _write_static_catalog_with_datetime_strings(
+    tmp_path,
+    datetimes: list[str],
+    *,
+    collection_id: str = "datetime_catalog",
+) -> Path:
+    root = tmp_path / "catalog"
+    root.mkdir()
+    catalog = pystac.Catalog(id=collection_id, description="datetime static")
+
+    for idx, dt_text in enumerate(datetimes):
+        item_dir = root / f"tile-{idx}"
+        item_dir.mkdir()
+        item = pystac.Item(
+            id=f"scene-{idx}",
+            geometry={
+                "type": "Polygon",
+                "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+            },
+            bbox=[0, 0, 1, 1],
+            datetime=datetime(2024, 1, 1, 0, 0, 0),
+            properties={},
+            collection=collection_id,
+        )
+        item.add_asset("B01", pystac.Asset(href="B01.tif"))
+        item.set_self_href(str(item_dir / f"scene-{idx}.json"))
+        item.save_object()
+        catalog.add_item(item)
+
+    catalog.normalize_hrefs(str(root))
+    catalog.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    for idx, dt_text in enumerate(datetimes):
+        item_path = root / f"scene-{idx}" / f"scene-{idx}.json"
+        payload = json.loads(item_path.read_text())
+        payload.setdefault("properties", {})["datetime"] = dt_text
+        item_path.write_text(json.dumps(payload))
     return root / "catalog.json"
 
 
@@ -421,6 +461,25 @@ class TestStacCollectionBuilder:
             )
 
         assert [item["id"] for item in items] == ["inside"]
+
+    def test_static_catalog_date_filter_uses_utc_instant_semantics(self, tmp_path):
+        catalog_path = _write_static_catalog_with_datetime_strings(
+            tmp_path,
+            [
+                "2024-01-02T00:30:00+02:00",
+                "2024-01-01T23:30:00-02:00",
+            ],
+        )
+        builder = StacCollectionBuilder(
+            data_source="datetime_catalog",
+            stac_api=str(catalog_path),
+            band_map={"B01": "B01"},
+            static_catalog=True,
+        )
+
+        items = builder._crawl_static_catalog(None, ("2024-01-02", "2024-01-02"))
+
+        assert [item["id"] for item in items] == ["scene-1"]
 
     def test_sentinel2_registry_common_name_map_is_preserved(self):
         builder = StacCollectionBuilder(

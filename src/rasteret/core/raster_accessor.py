@@ -1107,6 +1107,7 @@ class RasterAccessor:
         for_numpy: bool = False,
         progress: bool = False,
         backend: object | None = None,
+        reader: object | None = None,
         target_crs: int | None = None,
         geometry_crs: int | None = 4326,
         all_touched: bool = False,
@@ -1128,6 +1129,9 @@ class RasterAccessor:
             without constructing GeoPandas objects.
         backend : object, optional
             Pluggable I/O backend.
+        reader : object, optional
+            Shared active COG reader for connection/session reuse across
+            records. When omitted, this method creates and owns a reader.
         target_crs : int, optional
             Reproject results to this CRS.
         geometry_crs : int, optional
@@ -1158,8 +1162,7 @@ class RasterAccessor:
         if progress:
             geom_progress = tqdm(total=n_geoms, desc=f"Record {self.id}")
 
-        async with COGReader(max_concurrent=max_concurrent, backend=backend) as reader:
-
+        async def _load_with_reader(reader: COGReader):
             async def process_geometry(geom_idx: int, geom_id: int):
                 band_progress = None
                 if progress:
@@ -1169,16 +1172,17 @@ class RasterAccessor:
 
                 band_tasks = []
                 for band_code in band_codes:
-                    task = self._load_single_band(
-                        geometries,
-                        geom_idx,
-                        band_code,
-                        max_concurrent,
-                        reader=reader,
-                        geometry_crs=geometry_crs,
-                        all_touched=all_touched,
+                    band_tasks.append(
+                        self._load_single_band(
+                            geometries,
+                            geom_idx,
+                            band_code,
+                            max_concurrent,
+                            reader=reader,
+                            geometry_crs=geometry_crs,
+                            all_touched=all_touched,
+                        )
                     )
-                    band_tasks.append(task)
 
                 raw_results = await asyncio.gather(*band_tasks, return_exceptions=True)
                 results = []
@@ -1244,7 +1248,15 @@ class RasterAccessor:
                     return await process_geometry(geom_idx, geom_id)
 
             tasks = [bounded_process(idx, idx + 1) for idx in range(n_geoms)]
-            raw_geom_results = await asyncio.gather(*tasks, return_exceptions=True)
+            return await asyncio.gather(*tasks, return_exceptions=True)
+
+        if reader is not None:
+            raw_geom_results = await _load_with_reader(reader)
+        else:
+            async with COGReader(
+                max_concurrent=max_concurrent, backend=backend
+            ) as owned:
+                raw_geom_results = await _load_with_reader(owned)
 
         results: list[tuple[list[dict], int]] = []
         first_error: BaseException | None = None

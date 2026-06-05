@@ -43,8 +43,8 @@ cube = sub.get_xarray(
 
 `get_xarray(...)` is convenient for small windows, plotting, and local analysis.
 For many points or training chips, prefer `sample_points(...)` or
-`to_torchgeo_dataset(...)` so you do not materialize a large 64-band area at
-once.
+`RasteretDataset` from TorchGeo so you do not materialize a large 64-band area
+at once.
 
 ## Pick The Right API
 
@@ -52,7 +52,7 @@ once.
 | --- | --- |
 | Inspect or plot a small area | `get_xarray(...)` |
 | Read embedding vectors at points | `sample_points(...)` |
-| Scan or train over many chips | `to_torchgeo_dataset(...)` |
+| Scan or train over many chips | `RasteretDataset` (TorchGeo) |
 
 Point sampling:
 
@@ -82,9 +82,11 @@ beside the sampled embedding values.
 TorchGeo handoff:
 
 ```python
-dataset = sub.to_torchgeo_dataset(
+from torchgeo.datasets import RasteretDataset
+
+dataset = RasteretDataset(
+    collection=sub,
     bands=[f"A{i:02d}" for i in range(64)],
-    chip_size=256,
 )
 ```
 

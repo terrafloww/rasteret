@@ -178,7 +178,7 @@ For `get_numpy()`, `get_xarray()`, `get_gdf()`, and `sample_points()`:
 - `proj:epsg` or enough COG header CRS metadata to backfill it during enrichment
 - `{band}_metadata` for each requested band
 
-For `to_torchgeo_dataset(...)`:
+For `RasteretDataset` in TorchGeo (`to_table()` + `read_window()` path):
 
 - required record columns
 - `proj:epsg`

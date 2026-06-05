@@ -93,9 +93,6 @@ src/rasteret/
 │   ├── parquet_record_table.py  [RecordTableBuilder](reference/ingest/parquet_record_table.md): Parquet/GeoParquet ingestion with column mapping
 │   ├── enrich.py            COG enrichment: parse headers, add {band}_metadata struct columns
 │
-├── integrations/
-│   └── torchgeo.py          [RasteretGeoDataset](reference/integrations/torchgeo.md): standard TorchGeo GeoDataset adapter
-│
 └── tests/                   Test suite (see Testing section below)
 ```
 
@@ -119,7 +116,6 @@ src/rasteret/
 | `test_geoparquet_conformance.py` | GeoParquet schema and metadata conformance | None (unit) |
 | `test_public_api_surface.py` | Top-level `rasteret.*` exports | None (unit) |
 | `test_local_tiff_support.py` | Local tiled GeoTIFF reads via COGReader | None (unit) |
-| `test_torchgeo_adapter.py` | RasteretGeoDataset | `torchgeo` extra |
 | `test_stac_indexer.py` | StacCollectionBuilder | Network (mocked in CI) |
 | `test_public_network_smoke.py` | Public no-auth endpoints (S3/GCS/AEF) | Internet access (no creds) |
 | `test_network_smoke.py` | Catalog builds (Earth Search, PC, Landsat) | Network + optional deps/creds (auto-skips) |
@@ -140,10 +136,6 @@ uv run pytest -m network -v
 
 # Specific test file
 uv run pytest src/rasteret/tests/test_ingest.py -v
-
-# TorchGeo adapter tests (requires extra)
-uv sync --extra dev --extra torchgeo
-uv run pytest src/rasteret/tests/test_torchgeo_adapter.py -v
 
 # With coverage
 uv run pytest --cov=rasteret --cov-report=term-missing

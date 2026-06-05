@@ -6,10 +6,10 @@ Full API documentation auto-generated from source code docstrings using
 Start with **[Entry Points](rasteret.md)** (`rasteret` module) for the
 top-level functions most users need. **[Core](core/collection.md)** covers
 the `Collection` class and execution layer (`get_numpy()`, `get_xarray()`,
-`get_gdf()`, `sample_points()`, `to_torchgeo_dataset()`). **[Ingest](ingest/index.md)**
+`get_gdf()`, `sample_points()`, `to_table()`, `read_window()`). **[Ingest](ingest/index.md)**
 has the builders for STAC and Parquet sources. **[Fetch](fetch/cog.md)**
 has the COG reader and obstore backend internals. **[Integrations](integrations/torchgeo.md)**
-covers TorchGeo. **Configuration** covers [cloud/storage](cloud.md),
+covers the `to_table()` / `read_window()` boundary used by `RasteretDataset` in TorchGeo. **Configuration** covers [cloud/storage](cloud.md),
 [types](types.md), and the [CLI](cli.md).
 
 Browse by navigating the module tree in the sidebar, or use the search box.

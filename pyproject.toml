@@ -8,7 +8,7 @@ license = { text = "Apache-2.0" }
 authors = [
     { name = "Sidharth Subramaniam", email = "sid@terrafloww.com" }
 ]
-keywords = ["geotiff", "cog", "raster", "satellite", "imagery", "geospatial", "cloud-optimized", "torchgeo"]
+keywords = ["geotiff", "cog", "raster", "satellite", "imagery", "geospatial", "cloud-optimized"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -64,9 +64,6 @@ dev = [
     "ruff==0.8.6",
     "pre-commit>=3.7.0",
 ]
-torchgeo = [
-    "torchgeo>=0.9.0; python_version >= '3.12'",
-]
 docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
@@ -85,7 +82,7 @@ examples = [
     "folium>=0.18.0",
 ]
 all = [
-    "rasteret[xarray,aws,azure,earthdata,torchgeo,dev,docs,examples]",
+    "rasteret[xarray,aws,azure,earthdata,dev,docs,examples]",
 ]
 
 [project.urls]

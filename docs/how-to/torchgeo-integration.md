@@ -1,82 +1,95 @@
 # TorchGeo Integration
 
-Use this page when you want a Rasteret Collection to behave like a standard
-TorchGeo `GeoDataset`.
+`RasteretDataset` in `torchgeo.datasets` is the supported integration point for
+using Rasteret collections in TorchGeo training pipelines. Install both packages
+and pass a collection directly:
 
-Rasteret does not replace TorchGeo samplers, transforms, collation, or training
-loops. It provides the dataset reader: Rasteret uses its collection metadata and
-COG byte-range reader, then returns samples through TorchGeo's expected dataset
-contract.
+```python
+from torchgeo.datasets import RasteretDataset
+from torchgeo.samplers import RandomGeoSampler
 
-## Create A GeoDataset
+dataset = RasteretDataset(collection=collection, bands=["B04", "B03", "B02"])
+sampler = RandomGeoSampler(dataset, size=256, length=100)
+```
+
+This page covers the underlying public boundary that `RasteretDataset` (and any
+custom `GeoDataset` subclass) relies on:
+
+- `collection.to_table(...)` — for building the spatial/temporal sampling index
+- `collection.read_window(...)` — for chip-level pixel reads
+
+That split keeps TorchGeo dataset semantics on the TorchGeo side while Rasteret
+owns collection metadata, COG planning, and byte-range pixel reads.
+
+## Build A Sampling Table
 
 ```python
 import rasteret
 
 collection = rasteret.load("my_experiment")
 
-dataset = collection.to_torchgeo_dataset(
+table = collection.to_table(
+    columns=[
+        "id",
+        "datetime",
+        "geometry",
+        "proj:epsg",
+        "label",
+        "B08_metadata",
+        "B04_metadata",
+        "B03_metadata",
+    ],
+)
+```
+
+TorchGeo can turn this Arrow-native collection metadata into its own GeoPandas
+index, choose a sampling CRS/resolution, and keep Rasteret focused on pixel
+reads.
+
+## Read A Fixed Grid Window
+
+```python
+window = collection.read_window(
+    record_ids=table.column("id").to_pylist()[:1],
+    bounds=(500000.0, 999000.0, 501280.0, 1000000.0),
+    res=(10.0, 10.0),
     bands=["B08", "B04", "B03"],
-    chip_size=256,
 )
 ```
 
-The returned object is a TorchGeo `GeoDataset`, so standard TorchGeo samplers and
-PyTorch dataloaders can use it:
+`read_window(...)` returns a NumPy array on the exact query grid. Overlapping
+records are mosaicked internally with fixed-grid semantics.
+
+## Filtering
+
+Metadata and attribute filtering (cloud cover, date range, custom columns)
+belongs on the collection before construction. Spatial ROI is a sampler
+concern — pass `roi=` to `RandomGeoSampler`. `dataset.index` is a public
+GeoDataFrame and can be sliced after construction if needed.
+
+`subset(...)` covers the common cases. For anything more complex — joins,
+custom expressions, multi-step transforms — the collection is Arrow-native,
+so you can work with it in DuckDB, Polars, or pandas and wrap the result back
+with `rasteret.as_collection(table, data_source=collection.data_source)`.
+
+Use `collection.subset(...)` for common filters:
 
 ```python
-from torch.utils.data import DataLoader
-from torchgeo.datasets.utils import stack_samples
-from torchgeo.samplers import RandomGeoSampler
-
-sampler = RandomGeoSampler(dataset, size=256, length=128)
-loader = DataLoader(
-    dataset,
-    sampler=sampler,
-    batch_size=8,
-    num_workers=4,
-    collate_fn=stack_samples,
+train = collection.subset(cloud_cover_lt=20)
+table = train.to_table(
+    columns=[
+        "id",
+        "datetime",
+        "geometry",
+        "proj:epsg",
+        "biomass_value",
+        "B04_metadata",
+        "B03_metadata",
+        "B02_metadata",
+        "B08_metadata",
+    ],
 )
 ```
-
-## Filter Before Creating The Dataset
-
-You can filter the collection first:
-
-```python
-train = collection.subset(split="train", cloud_cover_lt=20)
-
-dataset = train.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02", "B08"],
-    chip_size=256,
-)
-```
-
-Or pass common filters directly:
-
-```python
-dataset = collection.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02", "B08"],
-    chip_size=256,
-    split="train",
-    cloud_cover_lt=20,
-    date_range=("2024-01-01", "2024-06-30"),
-)
-```
-
-## Include Labels
-
-If your collection table has a label column, pass it with `label_field`:
-
-```python
-dataset = collection.to_torchgeo_dataset(
-    bands=["B04"],
-    label_field="biomass_value",
-    chip_size=256,
-)
-```
-
-Samples include the label under `sample["label"]`.
 
 For adding split and label columns before this step, see
 [Bring Your Own AOIs, Points, And Metadata](enriched-collection-workflows.md).

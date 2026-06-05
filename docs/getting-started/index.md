@@ -19,10 +19,9 @@ The base install covers NumPy, xarray, GeoPandas, DuckDB, and point sampling.
 Install extras only when you need optional integrations:
 
 ```bash
-uv pip install "rasteret[torchgeo]"  # Collection.to_torchgeo_dataset()
-uv pip install "rasteret[aws]"       # AWS helper dependencies
-uv pip install "rasteret[azure]"     # Planetary Computer helpers
-uv pip install "rasteret[all]"       # all optional integrations for exploration
+uv pip install "rasteret[aws]"    # AWS helper dependencies
+uv pip install "rasteret[azure]"  # Planetary Computer helpers
+uv pip install "rasteret[all]"    # all optional integrations for exploration
 ```
 
 ## 1. Build A Collection
@@ -144,17 +143,17 @@ gdf = filtered.get_gdf(
 )
 ```
 
-For TorchGeo pipelines:
+For TorchGeo pipelines, use `RasteretDataset` from `torchgeo.datasets`:
 
 ```python
-dataset = filtered.to_torchgeo_dataset(
-    bands=["B04", "B03", "B02", "B08"],
-    chip_size=256,
-)
+from torchgeo.datasets import RasteretDataset
+from torchgeo.samplers import RandomGeoSampler
+
+dataset = RasteretDataset(collection=filtered, bands=["B04", "B03", "B02", "B08"])
+sampler = RandomGeoSampler(dataset, size=256, length=100)
 ```
 
-Everything after `to_torchgeo_dataset()` is standard TorchGeo sampler and
-DataLoader code.
+Everything after this is standard TorchGeo sampler and DataLoader code.
 
 ## 5. Sample Point Values
 

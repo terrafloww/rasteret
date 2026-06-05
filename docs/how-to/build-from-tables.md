@@ -194,7 +194,7 @@ COG header unless you ask it to.
 | Add labels/splits and export a metadata table | No |
 | `get_numpy()` / `get_xarray()` / `get_gdf()` pixel reads | Yes |
 | `sample_points()` pixel reads | Yes |
-| `to_torchgeo_dataset()` | Yes |
+| `RasteretDataset` (TorchGeo) | Yes |
 
 If you built from a STAC API with `build()` or `build_from_stac()`, COG header
 enrichment already happens during build.

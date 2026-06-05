@@ -24,7 +24,7 @@ metadata.
 **The pixels** stay where they already are: in the original cloud or local COGs.
 Rasteret only reads pixel byte ranges when you call methods such as
 `get_numpy()`, `get_xarray()`, `get_gdf()`, `sample_points()`, or
-`to_torchgeo_dataset()`.
+`read_window()` (used internally by `RasteretDataset` in TorchGeo).
 
 That split is why Rasteret can be fast without copying a raster archive into a
 new format.
@@ -104,7 +104,7 @@ stacking logic yourself.
    COG headers.
 2. **Inspect and filter**: Use the collection as a table of raster records.
 3. **Read**: Choose `get_numpy()`, `get_xarray()`, `get_gdf()`,
-   `sample_points()`, or `to_torchgeo_dataset()`.
+   `sample_points()`, or `RasteretDataset` from TorchGeo.
 4. **Export and reload**: Save the collection so future runs skip the build
    work.
 

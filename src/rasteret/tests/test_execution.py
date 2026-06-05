@@ -32,6 +32,18 @@ from rasteret.core.utils import infer_data_source, run_sync
 from rasteret.types import POINT_SAMPLES_NEIGHBORHOOD_SCHEMA
 
 
+class _FakeReaderPool:
+    """Minimal pool for tests that call get_collection_* directly."""
+
+    reader = object()
+
+    def run(self, coro):
+        return asyncio.run(coro)
+
+    def close(self):
+        pass
+
+
 class TestRunSync:
     def test_outside_event_loop(self):
         async def coro():
@@ -117,6 +129,7 @@ class TestXarrayMerge:
                 geometries=[],
                 bands=["B04"],
                 data_source="sentinel-2-l2a",
+                reader_pool=_FakeReaderPool(),
             )
         assert isinstance(merged, xr.Dataset)
 
@@ -148,6 +161,7 @@ class TestXarrayMerge:
                 geometries=[],
                 bands=["B04"],
                 data_source="sentinel-2-l2a",
+                reader_pool=_FakeReaderPool(),
             )
 
         assert np.all(merged.y.values[:-1] >= merged.y.values[1:])
@@ -178,6 +192,7 @@ class TestXarrayMerge:
                 geometries=[],
                 bands=["B04"],
                 data_source="sentinel-2-l2a",
+                reader_pool=_FakeReaderPool(),
             )
 
         assert np.all(merged.y.values[:-1] <= merged.y.values[1:])
@@ -203,6 +218,7 @@ class TestXarrayMerge:
                     geometries=[],
                     bands=["B04"],
                     data_source="sentinel-2-l2a",
+                    reader_pool=_FakeReaderPool(),
                 )
         assert excinfo.value.__cause__ is first
 
@@ -225,6 +241,7 @@ class TestXarrayMerge:
                 geometries=plots,
                 bands=["B04"],
                 data_source="test-source",
+                reader_pool=_FakeReaderPool(),
             )
 
         assert isinstance(out, xr.Dataset)
@@ -306,6 +323,7 @@ class TestQueryNarrowing:
                 bands=["B04", "B08"],
                 data_source="sentinel-2-l2a",
                 xr_combine="merge",
+                reader_pool=_FakeReaderPool(),
             )
 
         assert set(merged.data_vars) == {"B04", "B08"}
@@ -342,6 +360,7 @@ class TestQueryNarrowing:
                 bands=["B04"],
                 data_source="sentinel-2-l2a",
                 xr_combine="merge_override",
+                reader_pool=_FakeReaderPool(),
             )
 
         np.testing.assert_array_equal(
@@ -366,6 +385,7 @@ class TestQueryNarrowing:
                     bands=["B04"],
                     data_source="sentinel-2-l2a",
                     xr_combine="not-a-strategy",
+                    reader_pool=_FakeReaderPool(),
                 )
 
 
@@ -402,6 +422,7 @@ class TestGdfCrs:
                 geometries=(0.0, 0.0, 1.0, 1.0),
                 bands=["B04"],
                 data_source="sentinel-2-l2a",
+                reader_pool=_FakeReaderPool(),
             )
         assert str(out.crs) == "EPSG:3857"
 
@@ -446,6 +467,7 @@ class TestGdfCrs:
                 geometry_crs=4326,
                 bands=["B04"],
                 data_source="test-source",
+                reader_pool=_FakeReaderPool(),
             )
 
         assert len(captured["geometries"]) == 2
@@ -462,6 +484,7 @@ class TestGdfCrs:
                 geometry_column="plot_geometry",
                 bands=["B04"],
                 data_source="test-source",
+                reader_pool=_FakeReaderPool(),
             )
 
     def test_gdf_table_aoi_missing_crs_requires_geometry_crs(self):
@@ -476,6 +499,7 @@ class TestGdfCrs:
                 geometry_column="plot_geometry",
                 bands=["B04"],
                 data_source="test-source",
+                reader_pool=_FakeReaderPool(),
             )
 
     def test_gdf_geoarrow_aoi_infers_crs_and_preserves_metadata(self):
@@ -512,6 +536,7 @@ class TestGdfCrs:
                 geometries=plots,
                 bands=["B04"],
                 data_source="test-source",
+                reader_pool=_FakeReaderPool(),
             )
 
         assert captured["geometry_crs"] == 3857
@@ -550,6 +575,7 @@ class TestGdfCrs:
                     geometry_crs=4326,
                     bands=["B04"],
                     data_source="test-source",
+                    reader_pool=_FakeReaderPool(),
                 )
 
 
@@ -1904,6 +1930,7 @@ class TestNumpyOutput:
                 geometries=[],
                 bands=["B02", "B08"],
                 data_source="sentinel-2-l2a",
+                reader_pool=_FakeReaderPool(),
             )
 
         assert out.shape == (2, 2, 2, 2)
@@ -1939,6 +1966,7 @@ class TestNumpyOutput:
                     geometries=[],
                     bands=["B02"],
                     data_source="sentinel-2-l2a",
+                    reader_pool=_FakeReaderPool(),
                 )
 
 
