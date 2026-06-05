@@ -4,6 +4,56 @@
 
 ### Added
 
+- **`core/reader_pool.py` — `AsyncCOGReaderPool`**: new internal module that
+  owns the background event loop and thread for all async COG reads.
+  Previously the adapter had its own private async machinery and the other
+  read surfaces recreated a new `COGReader` per call via `run_sync`. Now there
+  is one place.
+- **`core/window_read.py` — `read_collection_window()`**: new internal module
+  for chip-level pixel reads. Reads band metadata, asset URLs, and CRS
+  directly from Arrow columns instead of materialising full Python objects per
+  row via `iterate_rasters()`. `BandRegistry` alias resolution happens once
+  per call, not once per row × band.
+- **`Collection.read_window(group_by="datetime")`**: all byte-range requests
+  across every timestep are planned upfront and dispatched in a single
+  `asyncio.gather`. A 15-scene time-series is one round of concurrent fetches,
+  not 15 serial ones.
+
+### Changed
+
+- **All sync read surfaces share one `AsyncCOGReaderPool`**: `get_numpy`,
+  `get_xarray`, `get_gdf`, and `read_window` previously used two different
+  concurrency models — `run_sync` (create/destroy a `COGReader` per call) for
+  the former three, and a persistent pool only for `read_window`. All four now
+  go through the same shared pool on the `Collection`. `run_sync` is removed
+  from `execution.py`.
+
+### Removed
+
+- **Built-in TorchGeo adapter**: `Collection.to_torchgeo_dataset()` and
+  `RasteretGeoDataset` are removed (~1 250 lines of adapter code, ~1 060 lines
+  of tests). The adapter duplicated TorchGeo's own `GeoDataset` contract and
+  kept a private async read path that is now properly centralised in `core/`.
+  The TorchGeo integration lives in TorchGeo itself as `RasteretDataset` in
+  `torchgeo.datasets` (TorchGeo 0.10+). Rasteret's side of the boundary is
+  `to_table()` + `read_window()`. Migrate with:
+  ```python
+  # before
+  dataset = collection.to_torchgeo_dataset(bands=["B04"], time_series=True)
+  # after (requires torchgeo>=0.10)
+  from torchgeo.datasets import RasteretDataset
+  dataset = RasteretDataset(collection=collection, bands=["B04"], time_series=True)
+  ```
+
+### Fixed
+
+- **`SyntaxWarning` in `reader_pool.py`**: `return` inside a `finally` block
+  is a `SyntaxWarning` in Python 3.11+; replaced with try/except and return
+  outside the finally.
+- **`reader_pool` now a required parameter in `execution.py`**: was typed
+  `Optional` but called unconditionally, turning a missing pool into an
+  `AttributeError` on `None` instead of a clear `TypeError`.
+
 - **Tabular AOIs for polygon reads**: `get_numpy(...)`, `get_xarray(...)`,
   and `get_gdf(...)` now accept `geometry_column=...` when `geometries` is an
   Arrow/GeoArrow AOI table or Arrow C stream producer.
