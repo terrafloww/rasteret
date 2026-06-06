@@ -104,6 +104,28 @@ workspace with the given name as the folder name.
 
 Pass `force=True` when you want to rebuild an existing cache.
 
+### Filter At Build Time
+
+Both `rasteret.build(...)` and `rasteret.build_from_stac(...)` accept a
+`query=` dict that gets forwarded to the STAC API's search endpoint. Use this
+when you know upfront which scenes to keep — it's cheaper to filter at the
+STAC level than to build a wide index and subset it later.
+
+```python
+collection = rasteret.build(
+    "earthsearch/sentinel-2-l2a",
+    name="bangalore-clear",
+    bbox=(77.55, 13.01, 77.58, 13.08),
+    date_range=("2024-01-01", "2024-06-30"),
+    query={"eo:cloud_cover": {"lt": 20}},
+)
+```
+
+The `query` keys are STAC item properties; the values use the STAC API query
+extension's operators (`lt`, `lte`, `gt`, `gte`, `eq`, `neq`, `in`). For
+post-build filtering on an already-indexed collection, see
+[Filter Metadata Before Reading](#filter-metadata-before-reading) below.
+
 ## Inspect A Collection
 
 Use `describe()` for a human-readable summary:
