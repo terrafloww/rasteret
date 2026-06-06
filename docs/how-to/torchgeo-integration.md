@@ -15,8 +15,14 @@ sampler = RandomGeoSampler(dataset, size=256, length=100)
 This page covers the underlying public boundary that `RasteretDataset` (and any
 custom `GeoDataset` subclass) relies on:
 
-- `collection.to_table(...)` — for building the spatial/temporal sampling index
-- `collection.read_window(...)` — for chip-level pixel reads
+- `collection.footprints(crs=..., band=...)` — per-record COG pixel-grid bbox
+  as a `GeoDataFrame` in the target CRS, derived from band metadata.  Use this
+  to build a precise spatial index without reprojecting the WGS84 `geometry`
+  column (reprojection inflates edge bounds by projection curvature).
+- `collection.to_table(...)` — Arrow/GeoArrow access to the rest of the
+  collection metadata (datetimes, custom columns, raster CRS sidecars).
+- `collection.read_window(...)` — fixed-grid window read for chip-level pixel
+  data.
 
 That split keeps TorchGeo dataset semantics on the TorchGeo side while Rasteret
 owns collection metadata, COG planning, and byte-range pixel reads.

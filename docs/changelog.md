@@ -18,6 +18,13 @@
   across every timestep are planned upfront and dispatched in a single
   `asyncio.gather`. A 15-scene time-series is one round of concurrent fetches,
   not 15 serial ones.
+- **`Collection.footprints(crs, band)`**: returns a `GeoDataFrame` with each
+  record's exact pixel-grid bbox in the target CRS, derived from band
+  metadata (`transform` + `image_width` + `image_height`).  Avoids the bbox
+  bloat that comes from reprojecting the WGS84 `geometry` column to a
+  projected CRS, which would inflate edge bounds by projection curvature.
+  Intended for framework adapters (e.g. TorchGeo `RasteretDataset`) that need
+  a precise per-record spatial index to filter chip queries.
 
 ### Changed
 
