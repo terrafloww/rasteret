@@ -2579,12 +2579,52 @@ class Collection:
     ) -> np.ndarray:
         """Read selected records onto a fixed output grid and mosaic overlaps.
 
+        All bands for all requested records are fetched concurrently in a
+        single ``asyncio.gather`` submission.  Overlapping records are
+        mosaicked with a first-valid-pixel strategy (no averaging).
+
         Parameters
         ----------
+        record_ids : sequence of str or pyarrow.Array
+            IDs of the records to read.  Order is used as mosaic priority —
+            the first ID's pixels win where records overlap.
+        bounds : tuple of float
+            ``(xmin, ymin, xmax, ymax)`` of the output chip in *target_crs*
+            units.
+        res : tuple of float
+            ``(x_res, y_res)`` output pixel size in *target_crs* units.
+        bands : list of str
+            Band codes to load (e.g. ``["B04", "B03", "B02"]``).  Must
+            appear in the collection schema.
+        target_crs : int, optional
+            EPSG code for the output grid.  Defaults to the CRS of the first
+            matched record.  Supply this explicitly when the collection has
+            mixed CRS or when you want to reproject on read.
+        max_concurrent : int
+            Per-call cap on concurrent HTTP byte-range requests.  Increase for
+            large chips across many records; decrease to avoid rate limits.
+            Defaults to ``50``.
+        backend : StorageBackend, optional
+            Pluggable I/O backend for authenticated or requester-pays buckets.
+            ``None`` uses the collection's default backend.
         group_by : str, optional
-            When ``"datetime"``, records are grouped by acquisition datetime and
-            each group is mosaicked independently.  All groups fire concurrently,
-            returning ``[T, C, H, W]`` instead of ``[C, H, W]``.
+            When ``"datetime"``, records are grouped by acquisition datetime
+            and each group is mosaicked independently.  All groups are fetched
+            in one concurrent submission; the result has shape
+            ``[T, C, H, W]`` instead of ``[C, H, W]``.  Use this for
+            time-series chip reads.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``[C, H, W]`` for a single mosaic, ``[T, C, H, W]`` when
+            ``group_by="datetime"``.
+
+        Raises
+        ------
+        ValueError
+            If *record_ids* is empty, no collection rows match the IDs, or
+            every record fails to read.
         """
         self._validate_bands(bands)
         reader_backend = backend if backend is not None else self._auto_backend()
@@ -2611,27 +2651,28 @@ class Collection:
         crs: int | None = None,
         band: str | None = None,
     ) -> gpd.GeoDataFrame:
-        """Per-record COG footprints in target CRS, from band metadata.
+        """Per-record COG footprints derived from band metadata.
 
-        Returns a GeoDataFrame with columns ``['id', 'datetime', 'geometry']``
+        Returns a ``GeoDataFrame`` with columns ``['id', 'datetime', 'geometry']``
         where each geometry is the precise pixel-grid bbox computed from the
-        band's ``transform`` + ``image_width`` + ``image_height``. This avoids
-        the bloat that comes from reprojecting the collection's WGS84
-        ``geometry`` column to a projected CRS.
+        band's ``transform`` + ``image_width`` × ``image_height``.
 
-        Intended for framework adapters (e.g. TorchGeo ``RasteretDataset``)
-        that need an exact per-record spatial index to filter chip queries.
+        Prefer this over reprojecting the collection's WGS84 ``geometry``
+        column: reprojecting an axis-aligned WGS84 bbox to a projected CRS
+        inflates the bounding box by projection curvature (tens to hundreds of
+        metres on UTM tile edges), which causes spatial index false-positives
+        at chip query time.
 
         Parameters
         ----------
         crs : int, optional
-            Target EPSG code. When omitted, footprints are returned in each
-            record's native CRS; the result GDF is tagged with the shared
-            native CRS if all records agree, otherwise CRS is left unset.
+            Target EPSG code.  When omitted, footprints are returned in each
+            record's native CRS; the GDF is tagged with the shared native CRS
+            when all records agree, otherwise CRS is left unset.
         band : str, optional
-            Band whose metadata defines the footprint. Defaults to the first
-            available band. Multi-resolution collections (e.g. S2 with 10 m
-            and 20 m bands) may need an explicit choice.
+            Band whose metadata defines the footprint.  Defaults to the first
+            available band.  Multi-resolution collections (e.g. Sentinel-2
+            with 10 m and 20 m bands) may need an explicit choice here.
 
         Returns
         -------
