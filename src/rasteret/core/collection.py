@@ -428,15 +428,40 @@ class Collection:
 
     def _close_reader_pool(self) -> None:
         pool = self._reader_pool
+        # Only the process that created the pool may close it. After a fork,
+        # the child inherits the pool object but not its background thread, so
+        # calling close() would deadlock on a lock the absent thread still holds.
+        # os may also be None during interpreter shutdown, so we guard that too.
+        try:
+            current_pid = os.getpid()
+        except Exception:
+            current_pid = None
+        owned = (
+            pool is not None
+            and current_pid is not None
+            and self._reader_pool_pid == current_pid
+        )
         self._reader_pool = None
         self._reader_pool_pid = None
         self._reader_pool_backend_id = None
         self._reader_pool_max_concurrent = None
-        if pool is not None:
+        if owned:
             pool.close()
 
     def __del__(self) -> None:
         self._close_reader_pool()
+
+    def __getstate__(self) -> dict[str, Any]:
+        # The reader pool owns a background thread and an asyncio loop, neither
+        # of which can be pickled. Drop it so a Collection stays picklable after
+        # a read has happened (e.g. DataLoader with num_workers > 0). Each
+        # worker process lazily recreates its own pool on first read.
+        state = self.__dict__.copy()
+        state["_reader_pool"] = None
+        state["_reader_pool_pid"] = None
+        state["_reader_pool_backend_id"] = None
+        state["_reader_pool_max_concurrent"] = None
+        return state
 
     def _view(
         self,
