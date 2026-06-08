@@ -112,7 +112,7 @@ class AsyncCOGReaderPool:
         self._closed = True
         self._ready.wait()
         loop = self._loop
-        if loop is None:
+        if loop is None or loop.is_closed():
             return
         loop.call_soon_threadsafe(loop.stop)
         if self._thread is not None and self._thread.is_alive():

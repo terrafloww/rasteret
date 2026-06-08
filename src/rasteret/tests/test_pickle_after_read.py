@@ -12,6 +12,7 @@ it in ``__getstate__`` and each worker rebuilds its own on first read.
 
 from __future__ import annotations
 
+import os
 import pickle
 from datetime import datetime
 from pathlib import Path
@@ -103,3 +104,31 @@ def test_collection_picklable_after_real_pool_created(monkeypatch, tmp_path) -> 
         collection._close_reader_pool()
         if restored is not None:
             restored._close_reader_pool()
+
+
+def test_fork_path_does_not_close_inherited_pool(monkeypatch, tmp_path) -> None:
+    """_close_reader_pool must not call pool.close() when called from a child process.
+
+    After fork() the background thread is dead, so calling pool.close() would
+    deadlock waiting on a loop lock the absent thread still holds. The pid-check
+    in _close_reader_pool guards against this by only closing pools the current
+    process created.
+    """
+    collection = _file_backed_collection(tmp_path)
+
+    close_calls: list[str] = []
+
+    class _TrackingPool:
+        """Minimal stand-in that records whether close() was called."""
+
+        def close(self) -> None:
+            close_calls.append("close")
+
+    pool = _TrackingPool()
+    collection._reader_pool = pool  # type: ignore[assignment]
+    collection._reader_pool_pid = os.getpid() + 1  # simulate a different (parent) PID
+
+    collection._close_reader_pool()
+
+    assert not close_calls, "pool.close() must not be called for an inherited pool"
+    assert collection._reader_pool is None
