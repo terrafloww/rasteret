@@ -1,6 +1,9 @@
 # Changelog
 
-## v0.3.13
+## v0.4.0
+
+> **Breaking:** the built-in TorchGeo adapter (`Collection.to_torchgeo_dataset()`)
+> is removed. See **Removed** below for how to migrate.
 
 ### Added
 
@@ -18,6 +21,16 @@
   across every timestep are planned upfront and dispatched in a single
   `asyncio.gather`. A 15-scene time-series is one round of concurrent fetches,
   not 15 serial ones.
+- **`Collection.footprints(crs, band)`**: returns a `GeoDataFrame` with each
+  record's exact pixel-grid bbox in the target CRS, derived from band
+  metadata (`transform` + `image_width` + `image_height`).  Avoids the bbox
+  bloat that comes from reprojecting the WGS84 `geometry` column to a
+  projected CRS, which would inflate edge bounds by projection curvature.
+  Intended for framework adapters (e.g. TorchGeo `RasteretDataset`) that need
+  a precise per-record spatial index to filter chip queries.
+- **`Collection.native_res(band)`**: returns a band's native pixel size
+  `(x_res, y_res)` read from stored COG metadata, without opening a raster.
+  Lets framework adapters pick a sampling resolution from the index alone.
 
 ### Changed
 
@@ -36,7 +49,7 @@
   kept a private async read path that is now properly centralised in `core/`.
   The TorchGeo integration lives in TorchGeo itself as `RasteretDataset` in
   `torchgeo.datasets` (TorchGeo 0.10+). Rasteret's side of the boundary is
-  `to_table()` + `read_window()`. Migrate with:
+  `footprints()`, `native_res()`, `to_table()`, and `read_window()`. Migrate with:
   ```python
   # before
   dataset = collection.to_torchgeo_dataset(bands=["B04"], time_series=True)

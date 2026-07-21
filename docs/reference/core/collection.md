@@ -10,5 +10,8 @@ Most-used read APIs on `Collection`:
 - `sample_points(...)` -> `pyarrow.Table` (point-value table)
 - `to_table(...)` -> Arrow/GeoArrow collection metadata
 - `read_window(...)` -> fixed-grid window read for selected records
+- `footprints(...)` -> per-record COG pixel-grid bbox as a `GeoDataFrame` in
+  the target CRS, computed from band metadata (no bbox bloat from
+  reprojection)
 
 ::: rasteret.core.collection

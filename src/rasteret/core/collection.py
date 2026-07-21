@@ -428,15 +428,40 @@ class Collection:
 
     def _close_reader_pool(self) -> None:
         pool = self._reader_pool
+        # Only the process that created the pool may close it. After a fork,
+        # the child inherits the pool object but not its background thread, so
+        # calling close() would deadlock on a lock the absent thread still holds.
+        # os may also be None during interpreter shutdown, so we guard that too.
+        try:
+            current_pid = os.getpid()
+        except Exception:
+            current_pid = None
+        owned = (
+            pool is not None
+            and current_pid is not None
+            and self._reader_pool_pid == current_pid
+        )
         self._reader_pool = None
         self._reader_pool_pid = None
         self._reader_pool_backend_id = None
         self._reader_pool_max_concurrent = None
-        if pool is not None:
+        if owned:
             pool.close()
 
     def __del__(self) -> None:
         self._close_reader_pool()
+
+    def __getstate__(self) -> dict[str, Any]:
+        # The reader pool owns a background thread and an asyncio loop, neither
+        # of which can be pickled. Drop it so a Collection stays picklable after
+        # a read has happened (e.g. DataLoader with num_workers > 0). Each
+        # worker process lazily recreates its own pool on first read.
+        state = self.__dict__.copy()
+        state["_reader_pool"] = None
+        state["_reader_pool_pid"] = None
+        state["_reader_pool_backend_id"] = None
+        state["_reader_pool_max_concurrent"] = None
+        return state
 
     def _view(
         self,
@@ -2579,12 +2604,52 @@ class Collection:
     ) -> np.ndarray:
         """Read selected records onto a fixed output grid and mosaic overlaps.
 
+        All bands for all requested records are fetched concurrently in a
+        single ``asyncio.gather`` submission.  Overlapping records are
+        mosaicked with a first-valid-pixel strategy (no averaging).
+
         Parameters
         ----------
+        record_ids : sequence of str or pyarrow.Array
+            IDs of the records to read.  Order is used as mosaic priority —
+            the first ID's pixels win where records overlap.
+        bounds : tuple of float
+            ``(xmin, ymin, xmax, ymax)`` of the output chip in *target_crs*
+            units.
+        res : tuple of float
+            ``(x_res, y_res)`` output pixel size in *target_crs* units.
+        bands : list of str
+            Band codes to load (e.g. ``["B04", "B03", "B02"]``).  Must
+            appear in the collection schema.
+        target_crs : int, optional
+            EPSG code for the output grid.  Defaults to the CRS of the first
+            matched record.  Supply this explicitly when the collection has
+            mixed CRS or when you want to reproject on read.
+        max_concurrent : int
+            Per-call cap on concurrent HTTP byte-range requests.  Increase for
+            large chips across many records; decrease to avoid rate limits.
+            Defaults to ``50``.
+        backend : StorageBackend, optional
+            Pluggable I/O backend for authenticated or requester-pays buckets.
+            ``None`` uses the collection's default backend.
         group_by : str, optional
-            When ``"datetime"``, records are grouped by acquisition datetime and
-            each group is mosaicked independently.  All groups fire concurrently,
-            returning ``[T, C, H, W]`` instead of ``[C, H, W]``.
+            When ``"datetime"``, records are grouped by acquisition datetime
+            and each group is mosaicked independently.  All groups are fetched
+            in one concurrent submission; the result has shape
+            ``[T, C, H, W]`` instead of ``[C, H, W]``.  Use this for
+            time-series chip reads.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``[C, H, W]`` for a single mosaic, ``[T, C, H, W]`` when
+            ``group_by="datetime"``.
+
+        Raises
+        ------
+        ValueError
+            If *record_ids* is empty, no collection rows match the IDs, or
+            every record fails to read.
         """
         self._validate_bands(bands)
         reader_backend = backend if backend is not None else self._auto_backend()
@@ -2603,6 +2668,162 @@ class Collection:
             backend=reader_backend,
             reader_pool=reader_pool,
             group_by=group_by,
+        )
+
+    def footprints(
+        self,
+        *,
+        crs: int | None = None,
+        band: str | None = None,
+    ) -> gpd.GeoDataFrame:
+        """Per-record COG footprints derived from band metadata.
+
+        Returns a ``GeoDataFrame`` with columns ``['id', 'datetime', 'geometry']``
+        where each geometry is the precise pixel-grid bbox computed from the
+        band's ``transform`` + ``image_width`` × ``image_height``.
+
+        Prefer this over reprojecting the collection's WGS84 ``geometry``
+        column: reprojecting an axis-aligned WGS84 bbox to a projected CRS
+        inflates the bounding box by projection curvature (tens to hundreds of
+        metres on UTM tile edges), which causes spatial index false-positives
+        at chip query time.
+
+        Parameters
+        ----------
+        crs : int, optional
+            Target EPSG code.  When omitted, footprints are returned in each
+            record's native CRS; the GDF is tagged with the shared native CRS
+            when all records agree, otherwise CRS is left unset.
+        band : str, optional
+            Band whose metadata defines the footprint.  Defaults to the first
+            available band.  Multi-resolution collections (e.g. Sentinel-2
+            with 10 m and 20 m bands) may need an explicit choice here.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+        """
+        from shapely import box
+
+        from rasteret.core.utils import normalize_transform, transform_polygon
+
+        if band is None:
+            available = self.bands
+            if not available:
+                raise ValueError("Collection has no bands; cannot compute footprints.")
+            band = available[0]
+        else:
+            self._validate_bands([band])
+
+        meta_col = f"{band}_metadata"
+        schema_names = set(self._schema.names) if self._schema is not None else set()
+        cols = ["id", meta_col]
+        if "datetime" in schema_names:
+            cols.append("datetime")
+        if "proj:epsg" in schema_names:
+            cols.append("proj:epsg")
+        table = self.to_table(columns=cols)
+
+        ids: list[Any] = []
+        dts: list[Any] = []
+        geoms: list[Any] = []
+        native_crs_seen: set[int] = set()
+
+        for i in range(table.num_rows):
+            raw_meta = table[meta_col][i]
+            if not raw_meta.is_valid:
+                continue
+            meta = raw_meta.as_py()
+            tf = meta.get("transform")
+            w = meta.get("image_width")
+            h = meta.get("image_height")
+            if tf is None or w is None or h is None:
+                continue
+            sx, tx, sy, ty = normalize_transform(tf)
+            w, h = int(w), int(h)
+            xmin, xmax = tx, tx + sx * w
+            ymin, ymax = ty + sy * h, ty
+            geom = box(
+                min(xmin, xmax), min(ymin, ymax), max(xmin, xmax), max(ymin, ymax)
+            )
+
+            row_crs: int | None = None
+            if "proj:epsg" in table.column_names:
+                epsg_cell = table["proj:epsg"][i]
+                if epsg_cell.is_valid:
+                    row_crs = int(epsg_cell.as_py())
+                    native_crs_seen.add(row_crs)
+
+            if crs is not None and row_crs is not None and row_crs != crs:
+                geom = transform_polygon(geom, row_crs, crs)
+
+            ids.append(table["id"][i].as_py())
+            if "datetime" in table.column_names:
+                dt_cell = table["datetime"][i]
+                dts.append(dt_cell.as_py() if dt_cell.is_valid else None)
+            else:
+                dts.append(None)
+            geoms.append(geom)
+
+        if crs is not None:
+            out_crs: str | None = f"EPSG:{crs}"
+        elif len(native_crs_seen) == 1:
+            out_crs = f"EPSG:{next(iter(native_crs_seen))}"
+        else:
+            out_crs = None  # mixed CRSs, caller must specify crs= to unify
+        return gpd.GeoDataFrame(
+            {"id": ids, "datetime": dts}, geometry=geoms, crs=out_crs
+        )
+
+    def native_res(self, band: str | None = None) -> tuple[float, float]:
+        """Native pixel resolution ``(x_res, y_res)`` for a band.
+
+        Read from the band's stored COG metadata, so no raster is opened.
+
+        Parameters
+        ----------
+        band : str, optional
+            Band whose metadata defines the resolution.  Defaults to the first
+            available band.  Multi-resolution collections (e.g. Sentinel-2 with
+            10 m and 20 m bands) should pass an explicit band.
+
+        Returns
+        -------
+        tuple of float
+            ``(x_res, y_res)`` as positive magnitudes in the band's native CRS
+            units.
+
+        Raises
+        ------
+        ValueError
+            If the collection has no bands, or no record carries a usable
+            transform for *band*.
+        """
+        from rasteret.core.utils import normalize_transform
+
+        if band is None:
+            available = self.bands
+            if not available:
+                raise ValueError("Collection has no bands; cannot derive native_res.")
+            band = available[0]
+        else:
+            self._validate_bands([band])
+
+        meta_col = f"{band}_metadata"
+        table = self.to_table(columns=["id", meta_col])
+        for i in range(table.num_rows):
+            cell = table[meta_col][i]
+            if not cell.is_valid:
+                continue
+            tf = cell.as_py().get("transform")
+            if not tf:
+                continue
+            sx, _tx, sy, _ty = normalize_transform(tf)
+            return (abs(float(sx)), abs(float(sy)))
+
+        raise ValueError(
+            f"No usable transform in '{meta_col}'; cannot derive native_res "
+            f"for band {band!r}."
         )
 
     def _auto_backend(
