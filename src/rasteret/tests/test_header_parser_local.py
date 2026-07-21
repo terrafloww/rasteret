@@ -279,3 +279,20 @@ async def test_header_parser_raises_on_jpeg_compression(tmp_path: Path) -> None:
 
     with pytest.raises(NotImplementedError, match=r"JPEG compression"):
         await parser.parse_cog_header(str(fixture))
+
+
+def test_resolve_dtype_rounds_nonstandard_bits() -> None:
+    """Non-standard integer bit depths round up to the storage type (as GDAL does)."""
+    p = AsyncCOGHeaderParser(backend=object())
+    # standard depths unchanged
+    assert p._resolve_dtype(1, 8) == "uint8"
+    assert p._resolve_dtype(1, 16) == "uint16"
+    assert p._resolve_dtype(2, 16) == "int16"
+    # non-standard integer depths (e.g. Sentinel-2 COGs tag 15) round up
+    assert p._resolve_dtype(1, 15) == "uint16"
+    assert p._resolve_dtype(1, 12) == "uint16"
+    assert p._resolve_dtype(1, 20) == "uint32"
+    assert p._resolve_dtype(2, 12) == "int16"
+    # floats are not rounded; genuinely unsupported still raises
+    with pytest.raises(NotImplementedError):
+        p._resolve_dtype(3, 15)

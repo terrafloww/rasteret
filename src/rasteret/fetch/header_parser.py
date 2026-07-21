@@ -236,6 +236,25 @@ class AsyncCOGHeaderParser:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    def _resolve_dtype(self, sample_format: int, bits_per_sample: int) -> str:
+        """Map a TIFF (SampleFormat, BitsPerSample) pair to a numpy dtype name.
+
+        Non-standard integer bit depths (e.g. Sentinel-2 COGs tag 15) are stored
+        in the next-larger standard type, exactly as GDAL/rasterio report them.
+        """
+        dtype = self.dtype_map.get((sample_format, bits_per_sample))
+        if dtype is None and sample_format in (1, 2):
+            for standard_bits in (8, 16, 32, 64):
+                if bits_per_sample <= standard_bits:
+                    dtype = self.dtype_map.get((sample_format, standard_bits))
+                    break
+        if dtype is None:
+            raise NotImplementedError(
+                "Unsupported TIFF dtype: "
+                f"SampleFormat={sample_format}, BitsPerSample={bits_per_sample}"
+            )
+        return dtype
+
     async def process_cog_headers_batch(
         self,
         urls: list[str],
@@ -372,13 +391,7 @@ class AsyncCOGHeaderParser:
             # Data type
             sample_format = tags.get(TAG_SAMPLE_FORMAT, (1,))[0]
             bits_per_sample = tags.get(TAG_BITS_PER_SAMPLE, (8,))[0]
-            dtype_key = (sample_format, bits_per_sample)
-            dtype = self.dtype_map.get(dtype_key)
-            if dtype is None:
-                raise NotImplementedError(
-                    "Unsupported TIFF dtype: "
-                    f"SampleFormat={sample_format}, BitsPerSample={bits_per_sample}"
-                )
+            dtype = self._resolve_dtype(sample_format, bits_per_sample)
 
             # Band/sample layout
             samples_per_pixel = tags.get(TAG_SAMPLES_PER_PIXEL, (1,))[0]
