@@ -919,7 +919,21 @@ class COGReader:
                 tile = tile.reshape(tile_shape)
             tile = np.ascontiguousarray(tile)
         else:
-            tile = np.frombuffer(data, dtype=dtype).reshape(tile_shape).copy()
+            n_samples = int(np.prod(tile_shape))
+            if (
+                len(data) < n_samples * dtype.itemsize
+                and (len(data) * 8) % n_samples == 0
+            ):
+                # Samples packed at a non-byte-aligned depth (e.g. Sentinel-2
+                # COGs stored at 15 bits/sample). Unpack with the same routine
+                # GDAL/tifffile use; the payload size fixes the bit depth.
+                bits = (len(data) * 8) // n_samples
+                unpacked = imagecodecs.packints_decode(
+                    bytes(data), dtype, bits, runlen=metadata.tile_width
+                )
+                tile = np.asarray(unpacked)[:n_samples].reshape(tile_shape).copy()
+            else:
+                tile = np.frombuffer(data, dtype=dtype).reshape(tile_shape).copy()
 
         if predictor == 2:
             # Horizontal differencing (works for integer dtypes).
