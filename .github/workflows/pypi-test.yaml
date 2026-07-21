@@ -11,8 +11,6 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # full history + tags so hatch-vcs derives the version
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v5
