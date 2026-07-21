@@ -2775,6 +2775,57 @@ class Collection:
             {"id": ids, "datetime": dts}, geometry=geoms, crs=out_crs
         )
 
+    def native_res(self, band: str | None = None) -> tuple[float, float]:
+        """Native pixel resolution ``(x_res, y_res)`` for a band.
+
+        Read from the band's stored COG metadata, so no raster is opened.
+
+        Parameters
+        ----------
+        band : str, optional
+            Band whose metadata defines the resolution.  Defaults to the first
+            available band.  Multi-resolution collections (e.g. Sentinel-2 with
+            10 m and 20 m bands) should pass an explicit band.
+
+        Returns
+        -------
+        tuple of float
+            ``(x_res, y_res)`` as positive magnitudes in the band's native CRS
+            units.
+
+        Raises
+        ------
+        ValueError
+            If the collection has no bands, or no record carries a usable
+            transform for *band*.
+        """
+        from rasteret.core.utils import normalize_transform
+
+        if band is None:
+            available = self.bands
+            if not available:
+                raise ValueError("Collection has no bands; cannot derive native_res.")
+            band = available[0]
+        else:
+            self._validate_bands([band])
+
+        meta_col = f"{band}_metadata"
+        table = self.to_table(columns=["id", meta_col])
+        for i in range(table.num_rows):
+            cell = table[meta_col][i]
+            if not cell.is_valid:
+                continue
+            tf = cell.as_py().get("transform")
+            if not tf:
+                continue
+            sx, _tx, sy, _ty = normalize_transform(tf)
+            return (abs(float(sx)), abs(float(sy)))
+
+        raise ValueError(
+            f"No usable transform in '{meta_col}'; cannot derive native_res "
+            f"for band {band!r}."
+        )
+
     def _auto_backend(
         self,
         cloud_config: Any = None,
