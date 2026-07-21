@@ -78,3 +78,6 @@ AGENTS.md
 # Local smoke-test artifacts
 tmp_*.parquet
 aef_filtered.parquet
+
+# jupyter/local notebook cache
+notebooks/.cache/
