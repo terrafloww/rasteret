@@ -167,7 +167,8 @@ def test_matrix_public_stac_https_build_wires_enrichment(
 def test_matrix_planetary_computer_presigned_https_does_not_require_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Planetary Computer: SAS-signed HTTPS hrefs should work without backend."""
+    """Planetary Computer: build auto-creates a credential-provider backend from
+    the descriptor's azure_asset_url, so the user does not pass backend=."""
     pytest.importorskip("planetary_computer")
     import rasteret
 
@@ -196,7 +197,9 @@ def test_matrix_planetary_computer_presigned_https_does_not_require_backend(
     )
 
     assert collection.dataset is not None
-    assert captured["init_kwargs"].get("backend") is None
+    # PC auto-creates a credential-provider backend from azure_asset_url; the user
+    # need not pass backend= (unsigned hrefs stored, signed fresh at read time).
+    assert captured["init_kwargs"].get("backend") is not None
     # Only assets present in the STAC item are parsed.
     assert captured["urls"] == [
         "https://pc.example.com/B04.tif?sig=abc",

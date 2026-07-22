@@ -218,6 +218,10 @@ class DatasetDescriptor:
 
     # --- Auth / Cloud configuration ---
     s3_credentials_url: str | None = None
+    # Azure blob container URL for Planetary Computer assets, e.g.
+    # "https://<account>.blob.core.windows.net/<container>". Used to auto-create
+    # a PlanetaryComputerCredentialProvider backend (unsigned hrefs, signed at read).
+    azure_asset_url: str | None = None
     cloud_config: dict[str, str] | None = None
     example_bbox: tuple[float, float, float, float] | None = None
     example_date_range: tuple[str, str] | None = None
@@ -736,6 +740,7 @@ DatasetRegistry.register(
         description="Multi-spectral optical imagery, 10-60m, global (Azure mirror)",
         stac_api="https://planetarycomputer.microsoft.com/api/stac/v1",
         stac_collection="sentinel-2-l2a",
+        azure_asset_url="https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2",
         band_map={
             "B01": "B01",
             "B02": "B02",

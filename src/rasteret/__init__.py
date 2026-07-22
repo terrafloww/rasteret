@@ -208,6 +208,26 @@ def _auto_backend_for_descriptor(descriptor: "DatasetDescriptor") -> Any:
     provider.  Returns ``None`` when no
     auto-detection is possible so the caller can fall back gracefully.
     """
+    # Planetary Computer: store unsigned Azure hrefs; obstore signs at read time.
+    if descriptor.azure_asset_url:
+        try:
+            from obstore.auth.planetary_computer import (
+                PlanetaryComputerCredentialProvider,
+            )
+
+            return create_backend(
+                credential_provider=PlanetaryComputerCredentialProvider(
+                    descriptor.azure_asset_url
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not auto-create Planetary Computer backend for %s: %s",
+                descriptor.id,
+                exc,
+            )
+            return None
+
     if not descriptor.s3_credentials_url:
         return None
 
@@ -336,7 +356,9 @@ def build(
     # provider. We only fail fast when the descriptor provides a concrete hint
     # that build-time enrichment needs a backend (currently `s3_credentials_url`).
     resolved_backend = backend
-    if resolved_backend is None and descriptor.s3_credentials_url:
+    if resolved_backend is None and (
+        descriptor.s3_credentials_url or descriptor.azure_asset_url
+    ):
         resolved_backend = _auto_backend_for_descriptor(descriptor)
         if resolved_backend is None and descriptor.requires_auth:
             extra_hint = ""

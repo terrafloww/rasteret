@@ -2835,9 +2835,25 @@ class Collection:
         from rasteret.cloud import CloudConfig, backend_config_from_cloud_config
         from rasteret.fetch.cog import _create_obstore_backend
 
-        resolved_config = cloud_config or CloudConfig.get_config(
-            data_source or self.data_source or ""
-        )
+        source = data_source or self.data_source or ""
+        # Planetary Computer: hrefs are stored unsigned; sign at read via obstore.
+        try:
+            from rasteret.catalog import DatasetRegistry
+
+            descriptor = DatasetRegistry.get(source)
+            azure_url = getattr(descriptor, "azure_asset_url", None)
+            if azure_url:
+                from obstore.auth.planetary_computer import (
+                    PlanetaryComputerCredentialProvider,
+                )
+
+                return _create_obstore_backend(
+                    credential_provider=PlanetaryComputerCredentialProvider(azure_url)
+                )
+        except Exception:
+            pass
+
+        resolved_config = cloud_config or CloudConfig.get_config(source)
         if resolved_config:
             cfg = backend_config_from_cloud_config(resolved_config)
             if cfg:
