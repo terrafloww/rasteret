@@ -141,11 +141,12 @@ def read_collection_window(
     Parameters
     ----------
     group_by : str, optional
-        When ``"datetime"``, records are grouped by acquisition date and each
-        group is mosaicked independently.  All groups are read concurrently in
-        a single pool submission, returning ``[T, C, H, W]`` instead of
-        ``[C, H, W]``.  This is the correct mode for time-series chip reads
-        (e.g. TorchGeo ``time_series=True``).
+        Controls time-series stacking.  ``"datetime"`` groups records by
+        acquisition date and mosaics each group (one timestep per date).
+        ``"id"`` gives one timestep per record with no mosaicking, matching
+        TorchGeo ``RasterDataset`` ``time_series=True`` (one T per file).
+        Either returns ``[T, C, H, W]``; ``None`` returns a single ``[C, H, W]``
+        mosaic.  All groups are read concurrently in a single pool submission.
     """
     if reader_pool is None:
         raise ValueError("read_collection_window requires a reader_pool")
@@ -448,18 +449,28 @@ def read_collection_window(
         reader = reader_pool.reader  # type: ignore[union-attr]
 
         failures = _ReadFailureLog()
-        is_time_series = group_by == "datetime" and datetime_col is not None
 
-        # Build the row groups.  Time-series partitions by acquisition datetime;
-        # the default single-mosaic path is just one big group.  Either way the
-        # remainder is identical: plan → ONE asyncio.gather → per-group assemble.
-        if is_time_series:
+        # Build the row groups, each mosaicked independently then stacked:
+        #   "datetime" — partition by acquisition datetime (same-date records
+        #                mosaicked into one timestep);
+        #   "id"       — one group per record, i.e. one timestep per scene with
+        #                no mosaicking (matches TorchGeo RasterDataset
+        #                time_series=True, which stacks one T per file);
+        #   None       — a single mosaic of all records ([C, H, W]).
+        # Either stacked path is identical downstream: plan → ONE asyncio.gather
+        # → per-group assemble → np.stack.
+        if group_by == "datetime" and datetime_col is not None:
             dt_to_rows: dict[Any, list[int]] = defaultdict(list)
             for row_idx in ordered_row_indices:
                 dt_to_rows[datetime_col[row_idx].as_py()].append(row_idx)
             row_groups = [rows for _, rows in sorted(dt_to_rows.items())]
+            is_time_series = True
+        elif group_by == "id":
+            row_groups = [[row_idx] for row_idx in ordered_row_indices]
+            is_time_series = True
         else:
             row_groups = [ordered_row_indices]
+            is_time_series = False
 
         all_requests: list[tuple[str, CogMetadata, Any]] = []
         per_group_record_requests = [

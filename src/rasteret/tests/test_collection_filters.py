@@ -301,6 +301,91 @@ def test_read_window_respects_requested_record_order(monkeypatch) -> None:
     assert arr[0].tolist() == [[1, 2], [2, 2]]
 
 
+def _fake_scene_reader(query_transform):
+    async def fake_read_cog(*args, **kwargs):
+        url = args[0]
+        fill = 1 if "scene-1" in url or url.endswith("a.tif") else 2
+        data = np.full((2, 2), fill, dtype=np.uint16)
+        return type("Result", (), {"data": data, "transform": query_transform})()
+
+    return fake_read_cog
+
+
+def test_read_window_group_by_id_stacks_one_timestep_per_record(monkeypatch) -> None:
+    """group_by='id' returns one timestep per record with no mosaicking, matching
+    TorchGeo RasterDataset time_series=True (one T per file)."""
+    collection = _collection_for_window_ordering()
+    query_transform = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 2.0)
+    monkeypatch.setattr(
+        "rasteret.core.window_read.read_cog", _fake_scene_reader(query_transform)
+    )
+
+    arr = collection.read_window(
+        record_ids=["scene-1", "scene-2"],
+        bounds=(0.0, 0.0, 2.0, 2.0),
+        res=(1.0, 1.0),
+        bands=["B04"],
+        group_by="id",
+    )
+
+    assert arr.shape == (2, 1, 2, 2)  # [T, C, H, W], one T per record
+    assert arr[0, 0].tolist() == [[1, 1], [1, 1]]
+    assert arr[1, 0].tolist() == [[2, 2], [2, 2]]
+
+
+def test_read_window_group_by_id_keeps_same_date_records_separate(monkeypatch) -> None:
+    """Two records sharing a datetime: 'datetime' mosaics them into one timestep,
+    'id' keeps them as separate timesteps (the TorchGeo-compatible behavior)."""
+    meta = {
+        "transform": [1.0, 0.0, -1.0, 2.0],
+        "image_width": 2,
+        "image_height": 2,
+        "tile_width": 2,
+        "tile_height": 2,
+        "dtype": "uint16",
+        "compress": 8,
+        "predictor": 1,
+        "tile_offsets": [0],
+        "tile_byte_counts": [1],
+        "nodata": 0.0,
+    }
+    table = pa.table(
+        {
+            "id": pa.array(["a", "b"]),
+            "datetime": pa.array(
+                [datetime(2024, 1, 15), datetime(2024, 1, 15)],
+                type=pa.timestamp("us"),
+            ),
+            "geometry": pa.array([None, None], type=pa.null()),
+            "assets": pa.array(
+                [
+                    {"B04": {"href": "https://example.com/a.tif"}},
+                    {"B04": {"href": "https://example.com/b.tif"}},
+                ]
+            ),
+            "proj:epsg": pa.array([32615, 32615], type=pa.int32()),
+            "B04_metadata": pa.array([meta, meta]),
+        }
+    )
+    collection = build_collection_from_table(table, name="same-date-test")
+    query_transform = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 2.0)
+    monkeypatch.setattr(
+        "rasteret.core.window_read.read_cog", _fake_scene_reader(query_transform)
+    )
+    kwargs = dict(
+        record_ids=["a", "b"],
+        bounds=(0.0, 0.0, 2.0, 2.0),
+        res=(1.0, 1.0),
+        bands=["B04"],
+    )
+
+    by_datetime = collection.read_window(**kwargs, group_by="datetime")
+    by_id = collection.read_window(**kwargs, group_by="id")
+
+    assert by_datetime.shape == (1, 1, 2, 2)  # same date -> one mosaicked timestep
+    assert by_id.shape == (2, 1, 2, 2)  # one timestep per record
+
+
 def test_read_window_reuses_reader_pool_across_calls(monkeypatch) -> None:
     """The reader pool is created once and reused across read_window calls."""
     collection = _collection_with_sampling_metadata()

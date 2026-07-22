@@ -2633,17 +2633,19 @@ class Collection:
             Pluggable I/O backend for authenticated or requester-pays buckets.
             ``None`` uses the collection's default backend.
         group_by : str, optional
-            When ``"datetime"``, records are grouped by acquisition datetime
-            and each group is mosaicked independently.  All groups are fetched
-            in one concurrent submission; the result has shape
-            ``[T, C, H, W]`` instead of ``[C, H, W]``.  Use this for
-            time-series chip reads.
+            Time-series stacking mode.  ``"datetime"`` groups records by
+            acquisition datetime and mosaics each group (one timestep per
+            date).  ``"id"`` yields one timestep per record with no
+            mosaicking, matching TorchGeo ``RasterDataset`` with
+            ``time_series=True`` (one T per file).  Both fetch all groups in
+            one concurrent submission and return ``[T, C, H, W]``; ``None``
+            returns a single ``[C, H, W]`` mosaic.
 
         Returns
         -------
         numpy.ndarray
             Shape ``[C, H, W]`` for a single mosaic, ``[T, C, H, W]`` when
-            ``group_by="datetime"``.
+            ``group_by`` is ``"datetime"`` or ``"id"``.
 
         Raises
         ------
