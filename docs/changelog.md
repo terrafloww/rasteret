@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.4.1
+
+Planetary Computer (Azure) Sentinel-2 support and TorchGeo time-series parity.
+
+### Added
+
+- **`Collection.read_window(group_by="id")`**: returns one timestep per record
+  with no mosaicking, i.e. `[T, C, H, W]` with `T == len(record_ids)`. This
+  matches TorchGeo `RasterDataset(time_series=True)`, which stacks one timestep
+  per file. Complements `group_by="datetime"` (which mosaics same-date records
+  into a single timestep). The TorchGeo `RasteretDataset` uses this mode so its
+  time-series output is shape-identical to native `RasterDataset`.
+- **Planetary Computer backend auto-creation**: `rasteret.build("pc/sentinel-2-l2a", …)`
+  now auto-creates a `PlanetaryComputerCredentialProvider` obstore backend from
+  the dataset descriptor's `azure_asset_url`, at both build and read time.
+  Collections store **unsigned** hrefs and are signed fresh at read via obstore —
+  no manual `backend=` argument, and no short-lived SAS token baked into the
+  persisted collection.
+
+### Fixed
+
+- **Non-standard TIFF bit depths**: the COG header parser now accepts
+  non-standard integer `BitsPerSample` (e.g. 15-bit) by rounding up to the
+  storage dtype (15 → `uint16`) instead of raising `NotImplementedError`.
+- **Non-byte-aligned tile samples**: the COG reader now unpacks bit-packed tiles
+  (e.g. 15-bit-packed DEFLATE) via `imagecodecs.packints_decode`, fixing
+  `cannot reshape array` errors on Planetary Computer Sentinel-2 L2A scenes.
+  Verified byte-exact against `rasterio`.
+
 ## v0.4.0
 
 > **Breaking:** the built-in TorchGeo adapter (`Collection.to_torchgeo_dataset()`)
